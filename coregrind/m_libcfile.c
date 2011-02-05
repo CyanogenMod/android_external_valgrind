@@ -612,10 +612,18 @@ Int VG_(mkstemp) ( HChar* part_of_name, /*OUT*/HChar* fullname )
 
    tries = 0;
    while (True) {
-      if (tries > 10) 
+      if (++tries > 10)
          return -1;
+#ifdef ANDROID
+      // FIXME: It's lame to create these temporary files in a persistent store
+      // let alone the root of /sdcard.  We are a little stuck though unless we
+      // mount tmpfs somewhere or implement some new syscall wrappers (like mkdir).
+      VG_(sprintf)( buf, "/sdcard/valgrind_%s_%08x",
+                         part_of_name, VG_(random)( &seed ));
+#else
       VG_(sprintf)( buf, "/tmp/valgrind_%s_%08x", 
                          part_of_name, VG_(random)( &seed ));
+#endif
       if (0)
          VG_(printf)("VG_(mkstemp): trying: %s\n", buf);
 

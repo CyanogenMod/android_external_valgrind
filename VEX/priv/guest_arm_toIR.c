@@ -11942,11 +11942,25 @@ static Bool decode_NV_instruction ( /*MOD*/DisResult* dres,
          stmt( IRStmt_MBE(Imbe_Fence) );
          DIP("ISB\n");
          return True;
-      case 0xF57FF04F: /* DSB */
+      case 0xF57FF04F: /* DSB sy */
+      case 0xF57FF04E: /* DSB st */
+      case 0xF57FF04B: /* DSB ish */
+      case 0xF57FF04A: /* DSB ishst */
+      case 0xF57FF047: /* DSB nsh */
+      case 0xF57FF046: /* DSB nshst */
+      case 0xF57FF043: /* DSB osh */
+      case 0xF57FF042: /* DSB oshst */
          stmt( IRStmt_MBE(Imbe_Fence) );
          DIP("DSB\n");
          return True;
-      case 0xF57FF05F: /* DMB */
+      case 0xF57FF05F: /* DMB sy */
+      case 0xF57FF05E: /* DMB st */
+      case 0xF57FF05B: /* DMB ish */
+      case 0xF57FF05A: /* DMB ishst */
+      case 0xF57FF057: /* DMB nsh */
+      case 0xF57FF056: /* DMB nshst */
+      case 0xF57FF053: /* DMB osh */
+      case 0xF57FF052: /* DMB oshst */
          stmt( IRStmt_MBE(Imbe_Fence) );
          DIP("DMB\n");
          return True;
@@ -17718,6 +17732,24 @@ DisResult disInstr_THUMB_WRK (
 
          putIRegT(rD, mkexpr(resSC32), IRTemp_INVALID);
          DIP("strex r%u, r%u, [r%u, #+%u]\n", rD, rT, rN, imm8 * 4);
+         goto decode_success;
+      }
+   }
+
+   /* -------------- read CP15 TPIDRURO register ------------- */
+   /* mrc     p15, 0, r0, c13, c0, 3  up to
+      mrc     p15, 0, r14, c13, c0, 3
+   */
+   /* I don't know whether this is really v7-only.  But anyway, we
+      have to support it since arm-linux uses TPIDRURO as a thread
+      state register. */
+   if (INSN0(15,0) == 0xEE1D && INSN1(11,0) == 0xF70) {
+      UInt rD = INSN1(15,12);
+      if (rD <= 14) {
+         /* skip r15, that's too stupid to handle */
+         putIRegT(rD, IRExpr_Get(OFFB_TPIDRURO, Ity_I32),
+                      condT);
+         DIP("mrc p15,0, r%u, c13, c0, 3\n", rD);
          goto decode_success;
       }
    }

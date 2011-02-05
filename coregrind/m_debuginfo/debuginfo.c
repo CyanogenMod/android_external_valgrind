@@ -652,6 +652,9 @@ ULong VG_(di_notify_mmap)( Addr a, Bool allow_SkFileV )
    if (sr_isError(statres)) {
       DebugInfo fake_di;
       Bool quiet = VG_(strstr)(filename, "/var/run/nscd/") != NULL;
+#ifdef ANDROID
+      quiet |= VG_(strstr)(filename, "/dev/__properties__") != NULL;
+#endif
       if (!quiet && VG_(clo_verbosity) > 1) {
          VG_(memset)(&fake_di, 0, sizeof(fake_di));
          fake_di.filename = filename;

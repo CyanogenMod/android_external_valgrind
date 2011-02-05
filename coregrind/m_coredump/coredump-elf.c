@@ -53,7 +53,12 @@
   Generate a standard ELF core file corresponding to the client state
   at the time of a crash.
  */
+#ifdef ANDROID
+#include <linux/elf.h>
+#define NT_FPREGSET 2
+#else
 #include <elf.h>
+#endif
 #ifndef NT_PRXFPREG
 #define NT_PRXFPREG     0x46e62b7f      /* copied from gdb5.1/include/elf/common.h */
 #endif /* NT_PRXFPREG */

@@ -57,7 +57,7 @@ void VG_NOTIFY_ON_LOAD(freeres)( void );
 void VG_NOTIFY_ON_LOAD(freeres)( void )
 {
    int res;
-#if !defined(__UCLIBC__) && !defined(VGO_aix5)
+#if !defined(__UCLIBC__) && !defined(VGO_aix5) && !defined(ANDROID)
    extern void __libc_freeres(void);
    __libc_freeres();
 #endif

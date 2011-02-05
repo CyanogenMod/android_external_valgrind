@@ -2155,6 +2155,9 @@ QT4_FUNC(void*, _ZN6QMutexC2ENS_13RecursionModeE,
          long  recmode)
 {
    assert(0);
+#ifdef ANDROID // error: control reaches end of non-void function
+   return 0;
+#endif
 }
 
 
@@ -2163,6 +2166,9 @@ QT4_FUNC(void*, _ZN6QMutexC2ENS_13RecursionModeE,
 QT4_FUNC(void*, _ZN6QMutexD2Ev, void* mutex)
 {
    assert(0);
+#ifdef ANDROID // error: control reaches end of non-void function
+   return 0;
+#endif
 }
 
 

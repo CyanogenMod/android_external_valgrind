@@ -56,7 +56,12 @@
 #define _GNU_SOURCE
 #define _FILE_OFFSET_BITS 64
 /* This is for ELF types etc, and also the AT_ constants. */
+#ifdef ANDROID
+#include <linux/elf.h>
+#define AT_FPUCW 18
+#else
 #include <elf.h>
+#endif
 /* --- !!! --- EXTERNAL HEADERS end --- !!! --- */
 
 

@@ -50,7 +50,11 @@
 
 /* --- !!! --- EXTERNAL HEADERS start --- !!! --- */
 #if defined(VGO_linux)
+#ifdef ANDROID
+#  include <linux/a.out.h>
+#else
 #  include <a.out.h> /* stabs defns */
+#endif
 #elif defined(VGO_darwin)
 #  include <mach-o/nlist.h>
 #  define n_other n_sect

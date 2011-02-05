@@ -587,7 +587,7 @@ ZONEMEMALIGN(VG_Z_LIBC_SONAME, malloc_zone_memalign);
 /*---------------------- valloc ----------------------*/
 
 static int local__getpagesize ( void ) {
-#  if defined(VGP_ppc32_aix5) || defined(VGP_ppc64_aix5)
+#  if defined(VGP_ppc32_aix5) || defined(VGP_ppc64_aix5) || defined(ANDROID)
    return 4096; /* kludge - toc problems prevent calling getpagesize() */
 #  else
    extern int getpagesize (void);
@@ -613,9 +613,8 @@ static int local__getpagesize ( void ) {
    void* VG_REPLACE_FUNCTION_ZU(soname,fnname) ( void *zone, SizeT size )  \
    { \
       static int pszB = 0; \
-      extern int getpagesize (void); \
       if (pszB == 0) \
-         pszB = getpagesize(); \
+         pszB = local__getpagesize(); \
       return VG_REPLACE_FUNCTION_ZU(VG_Z_LIBC_SONAME,memalign) \
                 ((SizeT)pszB, size); \
    }

@@ -52,7 +52,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#ifdef ANDROID
+#include <linux/user.h>
+#else
 #include <sys/user.h>
+#endif
 #include <unistd.h>
 
 
@@ -62,6 +66,9 @@
 
 #ifndef EM_X86_64
 #define EM_X86_64 62    // elf.h doesn't define this on some older systems
+#endif
+#ifndef EM_PPC64
+#define EM_PPC64 21     // elf.h doesn't define this on Android
 #endif
 
 /* Report fatal errors */
