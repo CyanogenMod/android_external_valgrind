@@ -13957,6 +13957,69 @@ DisResult disInstr_ARM_WRK (
          break;
    }
 
+   // LDREXD
+   if (0x01B00F9F == (insn & 0x0FF00FFF)) {
+      UInt rT = INSN(15,12);
+      UInt rN = INSN(19,16);
+      if ((rT & 1) == 1 || rT == BITS4(1,1,1,0) || rN == 15) {
+         /* undecodable; fall through */
+      } else {
+         IRTemp res;
+         /* make unconditional */
+         if (condT != IRTemp_INVALID) {
+            mk_skip_over_A32_if_cond_is_false( condT );
+            condT = IRTemp_INVALID;
+         }
+         /* Ok, now we're unconditional.  Do the load. */
+         res = newTemp(Ity_I64);
+         stmt( IRStmt_LLSC(Iend_LE, res, getIRegA(rN),
+                           NULL/*this is a load*/) );
+         putIRegA(rT+0, unop(Iop_64HIto32, mkexpr(res)), IRTemp_INVALID, Ijk_Boring);
+         putIRegA(rT+1, unop(Iop_64to32, mkexpr(res)), IRTemp_INVALID, Ijk_Boring);
+
+         DIP("ldrexd%s r%u, r%u, [r%u]\n", nCC(INSN_COND), rT+0, rT+1, rN);
+         goto decode_success;
+      }
+      /* fall through */
+   }
+
+   // STREXD
+   if (0x01A00F90 == (insn & 0xFF00FF0)) {
+      UInt rT = INSN(3,0);
+      UInt rD = INSN(15,12);
+      UInt rN = INSN(19,16);
+      if (rD == 15 || (rT & 1) == 1 || rT == BITS4(1,1,1,0) || rN == 15
+          || rD == rN || rD == rT || rD == rT+1) {
+         /* undecodable; fall through */
+      } else {
+         IRTemp data;
+         IRTemp resSC1, resSC32;
+
+         if (condT != IRTemp_INVALID) {
+            mk_skip_over_A32_if_cond_is_false( condT );
+            condT = IRTemp_INVALID;
+         }
+
+         /* Ok, now we're unconditional. Do the store. */
+         data = newTemp(Ity_I64);
+         assign( data, binop(Iop_32HLto64, getIRegA(rT+0), getIRegA(rT+1)) );
+         resSC1 = newTemp(Ity_I1);
+         stmt( IRStmt_LLSC(Iend_LE, resSC1, getIRegA(rN), mkexpr(data)) );
+
+         /* Set rD to 1 on failure, 0 on success.  Currently we have
+            resSC1 == 0 on failure, 1 on success. */
+         resSC32 = newTemp(Ity_I32);
+         assign(resSC32,
+                unop(Iop_1Uto32, unop(Iop_Not1, mkexpr(resSC1))));
+
+         putIRegA(rD, mkexpr(resSC32),
+                      IRTemp_INVALID, Ijk_Boring);
+         DIP("strexd%s r%u, r%u, r%u, [r%u]\n", nCC(INSN_COND), rD, rT+0, rT+1, rN);
+         goto decode_success;
+      }
+      /* fall through */
+   }
+
    /* ----------------------------------------------------------- */
    /* -- VFP (CP 10, CP 11) instructions (in ARM mode)         -- */
    /* ----------------------------------------------------------- */

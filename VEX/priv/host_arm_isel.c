@@ -5829,9 +5829,18 @@ static void iselStmt ( ISelEnv* env, IRStmt* stmt )
                case Ity_I32: szB = 4; break;
                default:      vassert(0);
             }
-            addInstr(env, mk_iMOVds_RR(hregARM_R1(), raddr));
+            addInstr(env, mk_iMOVds_RR(hregARM_R0(), raddr));
             addInstr(env, ARMInstr_LdrEX(szB));
-            addInstr(env, mk_iMOVds_RR(r_dst, hregARM_R0()));
+            addInstr(env, mk_iMOVds_RR(r_dst, hregARM_R2()));
+            return;
+         } else if (ty == Ity_I64) {
+            HReg raddr = iselIntExpr_R(env, stmt->Ist.LLSC.addr);
+            HReg dstHi, dstLo;
+            addInstr(env, mk_iMOVds_RR(hregARM_R0(), raddr));
+            addInstr(env, ARMInstr_LdrEX(8 /* 64-bit */));
+            lookupIRTemp64(&dstHi, &dstLo, env, res);
+            addInstr(env, mk_iMOVds_RR(dstHi, hregARM_R2()) );
+            addInstr(env, mk_iMOVds_RR(dstLo, hregARM_R3()) );
             return;
          }
          /* else fall thru; is unhandled */
@@ -5852,16 +5861,33 @@ static void iselStmt ( ISelEnv* env, IRStmt* stmt )
                case Ity_I32: szB = 4; break;
                default:      vassert(0);
             }
-            addInstr(env, mk_iMOVds_RR(hregARM_R1(), rD));
-            addInstr(env, mk_iMOVds_RR(hregARM_R2(), rA));
+            addInstr(env, mk_iMOVds_RR(hregARM_R0(), rA));
+            addInstr(env, mk_iMOVds_RR(hregARM_R2(), rD));
             addInstr(env, ARMInstr_StrEX(szB));
-            /* now r0 is 1 if failed, 0 if success.  Change to IR
+            /* now r1 is 1 if failed, 0 if success.  Change to IR
                conventions (0 is fail, 1 is success).  Also transfer
                result to r_res. */
-            addInstr(env, ARMInstr_Alu(ARMalu_XOR, r_res, hregARM_R0(), one));
+            addInstr(env, ARMInstr_Alu(ARMalu_XOR, r_res, hregARM_R1(), one));
             /* And be conservative -- mask off all but the lowest bit */
             addInstr(env, ARMInstr_Alu(ARMalu_AND, r_res, r_res, one));
             return;
+         } else if (tyd == Ity_I64) {
+             HReg r_res   = lookupIRTemp(env, res);
+             HReg rA      = iselIntExpr_R(env, stmt->Ist.LLSC.addr);
+             ARMRI84* one = ARMRI84_I84(1,0);
+             HReg rDHi, rDLo;
+             iselInt64Expr(&rDHi, &rDLo, env, stmt->Ist.LLSC.storedata);
+             addInstr(env, mk_iMOVds_RR(hregARM_R0(), rA));
+             addInstr(env, mk_iMOVds_RR(hregARM_R2(), rDHi));
+             addInstr(env, mk_iMOVds_RR(hregARM_R3(), rDLo));
+             addInstr(env, ARMInstr_StrEX(8 /* 64-bit */));
+             /* now r1 is 1 if failed, 0 if success.  Change to IR
+                conventions (0 is fail, 1 is success).  Also transfer
+                result to r_res. */
+             addInstr(env, ARMInstr_Alu(ARMalu_XOR, r_res, hregARM_R1(), one));
+             /* And be conservative -- mask off all but the lowest bit */
+             addInstr(env, ARMInstr_Alu(ARMalu_AND, r_res, r_res, one));
+             return;
          }
          /* else fall thru; is unhandled */
       }
