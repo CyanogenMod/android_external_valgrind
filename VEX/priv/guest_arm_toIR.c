@@ -16022,6 +16022,33 @@ DisResult disInstr_THUMB_WRK (
       }
    }
 
+   /* ---------------- (T4) ADDW Rd, Rn, #imm12 -------------- */
+   if (INSN0(15,11) == BITS5(1,1,1,1,0)
+       && INSN0(9,4) == BITS6(1,0,0,0,0,0)
+       && INSN1(15,15) == 0) {
+      UInt rN = INSN0(3,0);
+      UInt rD = INSN1(11,8);
+      Bool valid = !isBadRegT(rN) && !isBadRegT(rD);
+      /* but allow "addw reg, sp, #imm12" */
+      if (!valid && rN == 13)
+         valid = True;
+      if (valid) {
+         IRTemp argL = newTemp(Ity_I32);
+         IRTemp argR = newTemp(Ity_I32);
+         IRTemp res  = newTemp(Ity_I32);
+         UInt imm1   = INSN0(10,10);
+         UInt imm3   = INSN1(14,12);
+         UInt imm8   = INSN1(7,0);
+         UInt imm12  = (imm1 << 11) | (imm3 << 8) | imm8;
+         assign(argL, getIRegT(rN));
+         assign(argR, mkU32(imm12));
+         assign(res,  binop(Iop_Add32, mkexpr(argL), mkexpr(argR)));
+         putIRegT(rD, mkexpr(res), condT);
+         DIP("addw r%u, r%u, #%u\n", rD, rN, imm12);
+         goto decode_success;
+      }
+   }
+
    /* ---------------- (T2) CMP.W Rn, #constT ---------------- */
    /* ---------------- (T2) CMN.W Rn, #constT ---------------- */
    if (INSN0(15,11) == BITS5(1,1,1,1,0)
