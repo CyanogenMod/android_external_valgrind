@@ -238,6 +238,8 @@ DECL_TEMPLATE(linux, sys_lseek);
 // Darwin (and probably other OSes) don't have the old_sigset_t type.
 DECL_TEMPLATE(linux, sys_sigpending);
 DECL_TEMPLATE(linux, sys_sigprocmask);
+DECL_TEMPLATE(linux, sys_sigaction);
+DECL_TEMPLATE(linux, sys_sigsuspend);
 
 // I think these are Linux-specific?
 DECL_TEMPLATE(linux, sys_rt_sigaction);
