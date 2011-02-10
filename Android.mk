@@ -39,7 +39,11 @@ common_includes := \
 
 vex_ldflags := -nodefaultlibs
 
+ifeq ($(TARGET_ARCH),arm)
 tool_ldflags := -static -Wl,--build-id=none,-Ttext=0x38000000 -nodefaultlibs -nostartfiles -u _start -e_start
+else
+tool_ldflags := -static -Wl,-Ttext=0x38000000 -nodefaultlibs -nostartfiles -u _start -e_start
+endif
 
 preload_ldflags := -nodefaultlibs -Wl,-z,interpose,-z,initfirst
 
@@ -623,4 +627,3 @@ LOCAL_SRC_FILES := bionic.supp
 include $(BUILD_PREBUILT)
 
 endif
-
