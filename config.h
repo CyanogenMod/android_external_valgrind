@@ -314,6 +314,9 @@
 /* Version number of package */
 #define VERSION "3.6.0"
 
+/* Temporary files directory */
+#define VG_TMPDIR "/sdcard"
+
 /* Define to `int' if <sys/types.h> doesn't define. */
 /* #undef gid_t */
 

@@ -631,6 +631,15 @@ fi
 
 
 #----------------------------------------------------------------------------
+# Extra fine-tuning of installation directories
+#----------------------------------------------------------------------------
+AC_ARG_WITH(tmpdir,
+   [  --with-tmpdir=PATH      Specify path for temporary files],
+   tmpdir="$withval",
+   tmpdir="/tmp")
+AC_DEFINE_UNQUOTED(VG_TMPDIR, "$tmpdir", [Temporary files directory])
+
+#----------------------------------------------------------------------------
 # Libc and suppressions
 #----------------------------------------------------------------------------
 # This variable will collect the suppression files to be used.
