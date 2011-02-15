@@ -1364,7 +1364,8 @@ Bool ML_(read_elf_debug_info) ( struct _DebugInfo* di )
             if (rx_svma_limit == 0
                 && phdr->p_offset >= di->rx_map_foff
                 && phdr->p_offset < di->rx_map_foff + di->rx_map_size
-                && phdr->p_offset + phdr->p_filesz <= di->rx_map_foff + di->rx_map_size) {
+                && phdr->p_offset + phdr->p_filesz <= di->rx_map_foff + di->rx_map_size
+                && (phdr->p_flags&(PF_R|PF_W|PF_X)) == (PF_R|PF_X)) {
                rx_svma_base = phdr->p_vaddr;
                rx_svma_limit = phdr->p_vaddr + phdr->p_memsz;
                rx_bias = di->rx_map_avma - di->rx_map_foff + phdr->p_offset - phdr->p_vaddr;
@@ -1372,7 +1373,8 @@ Bool ML_(read_elf_debug_info) ( struct _DebugInfo* di )
             else if (rw_svma_limit == 0
                      && phdr->p_offset >= di->rw_map_foff
                      && phdr->p_offset < di->rw_map_foff + di->rw_map_size
-                     && phdr->p_offset + phdr->p_filesz <= di->rw_map_foff + di->rw_map_size) {
+                     && phdr->p_offset + phdr->p_filesz <= di->rw_map_foff + di->rw_map_size
+                     && (phdr->p_flags&(PF_R|PF_W|PF_X)) == (PF_R|PF_W)) {
                rw_svma_base = phdr->p_vaddr;
                rw_svma_limit = phdr->p_vaddr + phdr->p_memsz;
                rw_bias = di->rw_map_avma - di->rw_map_foff + phdr->p_offset - phdr->p_vaddr;
