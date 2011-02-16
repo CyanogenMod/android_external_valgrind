@@ -4947,6 +4947,27 @@ PRE(sys_ioctl)
       }
       break;
 
+#ifdef ANDROID
+      /* ashmem */
+   case VKI_ASHMEM_GET_SIZE:
+   case VKI_ASHMEM_SET_SIZE:
+   case VKI_ASHMEM_GET_PROT_MASK:
+   case VKI_ASHMEM_SET_PROT_MASK:
+   case VKI_ASHMEM_GET_PIN_STATUS:
+   case VKI_ASHMEM_PURGE_ALL_CACHES:
+       break;
+   case VKI_ASHMEM_GET_NAME:
+       PRE_MEM_WRITE( "ioctl(ASHMEM_SET_NAME)", ARG3, VKI_ASHMEM_NAME_LEN );
+       break;
+   case VKI_ASHMEM_SET_NAME:
+       PRE_MEM_RASCIIZ( "ioctl(ASHMEM_SET_NAME)", ARG3);
+       break;
+   case VKI_ASHMEM_PIN:
+   case VKI_ASHMEM_UNPIN:
+       PRE_MEM_READ( "ioctl(ASHMEM_PIN|ASHMEM_UNPIN)", ARG3, sizeof(struct vki_ashmem_pin) );
+       break;
+#endif
+
    default:
       /* EVIOC* are variable length and return size written on success */
       switch (ARG2 & ~(_VKI_IOC_SIZEMASK << _VKI_IOC_SIZESHIFT)) {
@@ -5758,6 +5779,23 @@ POST(sys_ioctl)
                         sizeof(struct vki_sockaddr));
       }
       break;
+
+#ifdef ANDROID
+      /* ashmem */
+   case VKI_ASHMEM_GET_SIZE:
+   case VKI_ASHMEM_SET_SIZE:
+   case VKI_ASHMEM_GET_PROT_MASK:
+   case VKI_ASHMEM_SET_PROT_MASK:
+   case VKI_ASHMEM_GET_PIN_STATUS:
+   case VKI_ASHMEM_PURGE_ALL_CACHES:
+   case VKI_ASHMEM_SET_NAME:
+   case VKI_ASHMEM_PIN:
+   case VKI_ASHMEM_UNPIN:
+       break;
+   case VKI_ASHMEM_GET_NAME:
+       POST_MEM_WRITE( ARG3, VKI_ASHMEM_NAME_LEN );
+       break;
+#endif
 
    default:
       /* EVIOC* are variable length and return size written on success */

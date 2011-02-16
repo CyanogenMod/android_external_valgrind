@@ -2717,6 +2717,41 @@ struct vki_getcpu_cache {
 #define VKI_EV_MAX		0x1f
 #define VKI_EV_CNT		(VKI_EV_MAX+1)
 
+#ifdef ANDROID
+//----------------------------------------------------------------------
+// From kernel/common/include/linux/ashmem.h
+//----------------------------------------------------------------------
+
+#define VKI_ASHMEM_NAME_LEN 256
+
+#define VKI_ASHMEM_NAME_DEF "dev/ashmem"
+
+#define VKI_ASHMEM_NOT_PURGED 0
+#define VKI_ASHMEM_WAS_PURGED 1
+
+#define VKI_ASHMEM_IS_UNPINNED 0
+#define VKI_ASHMEM_IS_PINNED 1
+
+struct vki_ashmem_pin {
+   vki_uint32_t offset;
+   vki_uint32_t len;
+};
+
+#define __VKI_ASHMEMIOC 0x77
+
+#define VKI_ASHMEM_SET_NAME _VKI_IOW(__VKI_ASHMEMIOC, 1, char[VKI_ASHMEM_NAME_LEN])
+#define VKI_ASHMEM_GET_NAME _VKI_IOR(__VKI_ASHMEMIOC, 2, char[VKI_ASHMEM_NAME_LEN])
+#define VKI_ASHMEM_SET_SIZE _VKI_IOW(__VKI_ASHMEMIOC, 3, vki_size_t)
+#define VKI_ASHMEM_GET_SIZE _VKI_IO(__VKI_ASHMEMIOC, 4)
+#define VKI_ASHMEM_SET_PROT_MASK _VKI_IOW(__VKI_ASHMEMIOC, 5, unsigned long)
+#define VKI_ASHMEM_GET_PROT_MASK _VKI_IO(__VKI_ASHMEMIOC, 6)
+#define VKI_ASHMEM_PIN _VKI_IOW(__VKI_ASHMEMIOC, 7, struct vki_ashmem_pin)
+#define VKI_ASHMEM_UNPIN _VKI_IOW(__VKI_ASHMEMIOC, 8, struct vki_ashmem_pin)
+#define VKI_ASHMEM_GET_PIN_STATUS _VKI_IO(__VKI_ASHMEMIOC, 9)
+#define VKI_ASHMEM_PURGE_ALL_CACHES _VKI_IO(__VKI_ASHMEMIOC, 10)
+
+#endif // ANDROID
+
 #endif // __VKI_LINUX_H
 
 /*--------------------------------------------------------------------*/
