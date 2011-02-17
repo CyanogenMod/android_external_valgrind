@@ -1237,11 +1237,23 @@ Bool ML_(read_elf_debug_info) ( struct _DebugInfo* di )
       line number info out of it.  It will be munmapped immediately
       thereafter; it is only aboard transiently. */
 
+#ifdef ANDROID
+#define ANDROID_SYMBOLS_DIR "/data/local/debug"
+   const SizeT symbolsDirLen = VG_(strlen)(ANDROID_SYMBOLS_DIR);
+   UChar* debugFilename[symbolsDirLen + VG_(strlen)(di->filename) + 1];
+   VG_(strcpy)(debugFilename, ANDROID_SYMBOLS_DIR);
+   VG_(strcpy)(debugFilename+symbolsDirLen, di->filename);
+   fd = VG_(open)(debugFilename, VKI_O_RDONLY, 0);
+   if (sr_isError(fd)) {
+#endif
    fd = VG_(open)(di->filename, VKI_O_RDONLY, 0);
    if (sr_isError(fd)) {
       ML_(symerr)(di, True, "Can't open .so/.exe to read symbols?!");
       return False;
    }
+#ifdef ANDROID
+   }
+#endif
 
    { Long n_oimageLL = VG_(fsize)(sr_Res(fd));
      if (n_oimageLL <= 0) {
