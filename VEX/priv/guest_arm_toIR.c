@@ -10985,7 +10985,7 @@ static Bool decode_CP10_CP11_instruction (
       UInt rT   = INSN(15,12);
       UInt Q    = INSN(21,21);
       UInt size = (INSN(22,22) << 1) | INSN(5,5);
-      if (rT == 15 || (isT && rT == 13) || size == 3i || (Q && (rD & 1))) {
+      if (rT == 15 || (isT && rT == 13) || size == 3 || (Q && (rD & 1))) {
          /* fall through */
       } else {
          IRExpr* e = isT ? getIRegT(rT) : getIRegA(rT);
@@ -17902,6 +17902,24 @@ DisResult disInstr_THUMB_WRK (
          default:
             break;
       }
+   }
+
+   /* -------------- read CP15 TPIDRURO register ------------- */
+   /* mrc     p15, 0,  r0, c13, c0, 3  up to
+      mrc     p15, 0, r14, c13, c0, 3
+   */
+   /* I don't know whether this is really v7-only.  But anyway, we
+      have to support it since arm-linux uses TPIDRURO as a thread
+      state register. */
+   
+   if ((INSN0(15,0) == 0xEE1D) && (INSN1(11,0) == 0x0F70)) {
+      UInt rD = INSN1(15,12);
+      if (!isBadRegT(rD)) {
+         putIRegT(rD, IRExpr_Get(OFFB_TPIDRURO, Ity_I32), IRTemp_INVALID);
+         DIP("mrc p15,0, r%u, c13, c0, 3\n", rD);
+         goto decode_success;
+      }
+      /* fall through */
    }
 
    /* ------------------- NOP ------------------ */

@@ -360,7 +360,11 @@ an "interior-pointer", i.e. a pointer to the middle of the block.  There are
 three ways we know of that an interior-pointer can occur:</p>
 <div class="itemizedlist"><ul class="itemizedlist" type="disc">
 <li class="listitem"><p>The pointer might have originally been a start-pointer and have been
-    moved along deliberately (or not deliberately) by the program.</p></li>
+    moved along deliberately (or not deliberately) by the program.  In
+    particular, this can happen if your program uses tagged pointers, i.e.
+    if it uses the bottom one, two or three bits of a pointer, which are
+    normally always zero due to alignment, in order to store extra
+    information.</p></li>
 <li class="listitem"><p>It might be a random junk value in memory, entirely unrelated, just
     a coincidence.</p></li>
 <li class="listitem"><p>It might be a pointer to an array of C++ objects (which possess
@@ -1037,25 +1041,10 @@ arguments.</p>
     <code class="varname">VALGRIND_MAKE_MEM_DEFINED</code>.
     These mark address ranges as completely inaccessible,
     accessible but containing undefined data, and accessible and
-    containing defined data, respectively.  Subsequent errors may
-    have their faulting addresses described in terms of these
-    blocks.  Returns a "block handle".  Returns zero when not run
-    on Valgrind.</p></li>
+    containing defined data, respectively.</p></li>
 <li class="listitem"><p><code class="varname">VALGRIND_MAKE_MEM_DEFINED_IF_ADDRESSABLE</code>.
     This is just like <code class="varname">VALGRIND_MAKE_MEM_DEFINED</code> but only
     affects those bytes that are already addressable.</p></li>
-<li class="listitem"><p><code class="varname">VALGRIND_DISCARD</code>: At some point you may
-    want Valgrind to stop reporting errors in terms of the blocks
-    defined by the previous three macros.  To do this, the above macros
-    return a small-integer "block handle".  You can pass this block
-    handle to <code class="varname">VALGRIND_DISCARD</code>.  After doing so,
-    Valgrind will no longer be able to relate addressing errors to the
-    user-defined block associated with the handle.  The permissions
-    settings associated with the handle remain in place; this just
-    affects how errors are reported, not whether they are reported.
-    Returns 1 for an invalid handle and 0 for a valid handle (although
-    passing invalid handles is harmless).  Always returns 0 when not run
-    on Valgrind.</p></li>
 <li class="listitem"><p><code class="varname">VALGRIND_CHECK_MEM_IS_ADDRESSABLE</code> and
     <code class="varname">VALGRIND_CHECK_MEM_IS_DEFINED</code>: check immediately
     whether or not the given address range has the relevant property,
@@ -1092,6 +1081,28 @@ arguments.</p>
     set V bits that you have got with
     <code class="varname">VALGRIND_GET_VBITS</code>.  Only for those who really
     know what they are doing.</p></li>
+<li class="listitem">
+<p><code class="varname">VALGRIND_CREATE_BLOCK</code> and 
+    <code class="varname">VALGRIND_DISCARD</code>.  <code class="varname">VALGRIND_CREATE_BLOCK</code>
+    takes an address, a number of bytes and a character string.  The
+    specified address range is then associated with that string.  When
+    Memcheck reports an invalid access to an address in the range, it
+    will describe it in terms of this block rather than in terms of
+    any other block it knows about.  Note that the use of this macro
+    does not actually change the state of memory in any way -- it
+    merely gives a name for the range.
+    </p>
+<p>At some point you may want Memcheck to stop reporting errors
+    in terms of the block named
+    by <code class="varname">VALGRIND_CREATE_BLOCK</code>.  To make this
+    possible, <code class="varname">VALGRIND_CREATE_BLOCK</code> returns a
+    "block handle", which is a C <code class="varname">int</code> value.  You
+    can pass this block handle to <code class="varname">VALGRIND_DISCARD</code>.
+    After doing so, Valgrind will no longer relate addressing errors
+    in the specified range to the block.  Passing invalid handles to
+    <code class="varname">VALGRIND_DISCARD</code> is harmless.
+   </p>
+</li>
 </ul></div>
 </div>
 <div class="sect1" title="4.7. Memory Pools: describing and working with custom allocators">

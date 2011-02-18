@@ -51,6 +51,7 @@
 #include "pub_tool_replacemalloc.h"
 #include "pub_tool_threadstate.h" // VG_(get_running_tid)()
 #include "pub_tool_tooliface.h"
+#include "pub_tool_aspacemgr.h"   // VG_(am_is_valid_for_client)
 
 
 /* Local variables. */
@@ -258,6 +259,13 @@ static void drd_pre_mem_read_asciiz(const CorePart part,
 {
    const char* p = (void*)a;
    SizeT size = 0;
+
+   // Don't segfault if the string starts in an obviously stupid
+   // place.  Actually we should check the whole string, not just
+   // the start address, but that's too much trouble.  At least
+   // checking the first byte is better than nothing.  See #255009.
+   if (!VG_(am_is_valid_for_client) (a, 1, VKI_PROT_READ))
+      return;
 
    /* Note: the expression '*p' reads client memory and may crash if the */
    /* client provided an invalid pointer !                               */
@@ -625,6 +633,18 @@ static void drd_thread_finished(ThreadId vg_tid)
    DRD_(thread_finished)(drd_tid);
 }
 
+/*
+ * Called immediately after fork for the child process only. 'tid' is the
+ * only surviving thread in the child process. Cleans up thread state.
+ * See also http://pubs.opengroup.org/onlinepubs/9699919799/functions/pthread_atfork.html for a detailed discussion of using fork() in combination with mutexes.
+ */
+static
+void drd__atfork_child(ThreadId tid)
+{
+   DRD_(drd_thread_atfork_child)(tid);
+}
+
+
 //
 // Implementation of the tool interface.
 //
@@ -754,6 +774,8 @@ void drd_pre_clo_init(void)
    VG_(track_pre_thread_ll_create) (drd_pre_thread_create);
    VG_(track_pre_thread_first_insn)(drd_post_thread_create);
    VG_(track_pre_thread_ll_exit)   (drd_thread_finished);
+   VG_(atfork)                     (NULL/*pre*/, NULL/*parent*/,
+				    drd__atfork_child/*child*/);
 
    // Other stuff.
    DRD_(register_malloc_wrappers)(drd_start_using_mem_w_ecu,

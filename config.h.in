@@ -33,6 +33,9 @@
 /* Define to 1 if you're using glibc 2.12.x */
 #undef GLIBC_2_12
 
+/* Define to 1 if you're using glibc 2.13.x */
+#undef GLIBC_2_13
+
 /* Define to 1 if you're using glibc 2.2.x */
 #undef GLIBC_2_2
 

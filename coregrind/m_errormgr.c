@@ -376,10 +376,14 @@ static void gen_suppression(Error* err)
       VG_(xaprintf)(text, "   %s\n", xtra);
 
    // Print stack trace elements
+   UInt n_ips = VG_(get_ExeContext_n_ips)(ec);
+   tl_assert(n_ips > 0);
+   if (n_ips > VG_MAX_SUPP_CALLERS)
+      n_ips = VG_MAX_SUPP_CALLERS;
    VG_(apply_StackTrace)(printSuppForIp_nonXML,
                          text,
                          VG_(get_ExeContext_StackTrace)(ec),
-                         VG_(get_ExeContext_n_ips)(ec));
+                         n_ips);
 
    VG_(xaprintf)(text, "}\n");
    // zero terminate
@@ -1114,7 +1118,7 @@ static void load_one_suppressions_file ( Char* filename )
    // Check it's not a directory.
    if (VG_(is_dir)( filename )) {
       if (VG_(clo_xml))
-         VG_(umsg)("</valgrindoutput>\n");
+         VG_(printf_xml)("</valgrindoutput>\n");
       VG_(umsg)("FATAL: suppressions file \"%s\" is a directory\n", filename );
       VG_(exit)(1);
    }
@@ -1123,7 +1127,7 @@ static void load_one_suppressions_file ( Char* filename )
    sres = VG_(open)( filename, VKI_O_RDONLY, 0 );
    if (sr_isError(sres)) {
       if (VG_(clo_xml))
-         VG_(umsg)("</valgrindoutput>\n");
+         VG_(printf_xml)("</valgrindoutput>\n");
       VG_(umsg)("FATAL: can't open suppressions file \"%s\"\n", filename );
       VG_(exit)(1);
    }
@@ -1275,7 +1279,7 @@ static void load_one_suppressions_file ( Char* filename )
 
   syntax_error:
    if (VG_(clo_xml))
-      VG_(umsg)("</valgrindoutput>\n");
+      VG_(printf_xml)("</valgrindoutput>\n");
    VG_(umsg)("FATAL: in suppressions file \"%s\" near line %d:\n",
            filename, lineno );
    VG_(umsg)("   %s\n", err_str );
