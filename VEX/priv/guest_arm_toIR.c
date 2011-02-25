@@ -16162,6 +16162,33 @@ DisResult disInstr_THUMB_WRK (
       }
    }
 
+   /* -------------- (T2) SUB{S}.W Rd, SP, #constT ------------------- */
+   if (INSN0(15,11) == BITS5(1,1,1,1,0)
+       && INSN0(9,5) == BITS5(0,1,1,0,1)
+       && INSN0(3,0) == BITS4(1,1,0,1)
+       && INSN1(15,15) == 0) {
+      UInt rN = 13; // SP
+      UInt rD = INSN1(11,8);
+      UInt bS    = INSN0(4,4);
+      Bool valid = !isBadRegT(rD);
+      if (valid) {
+         IRTemp argL  = newTemp(Ity_I32);
+         IRTemp argR  = newTemp(Ity_I32);
+         IRTemp res   = newTemp(Ity_I32);
+         UInt imm12   = (INSN0(10,10) << 11) | (INSN1(14,12) << 8) | INSN1(7,0);
+         assign(argL, getIRegT(rN));
+         assign(argR, mkU32(imm12));
+         assign(res,  binop(Iop_Sub32, mkexpr(argL), mkexpr(argR)));
+         putIRegT(rD, mkexpr(res), condT);
+         if (bS == 1) {
+               setFlags_D1_D2( ARMG_CC_OP_SUB, argL, argR, condT );
+         }
+         DIP("sub%s.w r%u, sp, #%u\n",
+             bS == 1 ? "s" : "", rD, imm12);
+         goto decode_success;
+      }
+   }
+
    /* -------------- (T1) ADC{S}.W Rd, Rn, #constT -------------- */
    /* -------------- (T1) SBC{S}.W Rd, Rn, #constT -------------- */
    if (INSN0(15,11) == BITS5(1,1,1,1,0)
