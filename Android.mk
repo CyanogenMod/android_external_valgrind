@@ -46,7 +46,11 @@ else
 tool_ldflags := -static -Wl,-Ttext=0x38000000 -nodefaultlibs -nostartfiles -u _start -e_start
 endif
 
-preload_ldflags := -nodefaultlibs -Wl,-z,interpose,-z,initfirst -Wl,--icf=none
+preload_ldflags := -nodefaultlibs -Wl,-z,interpose,-z,initfirst
+# Remove this when the all toolchains are GCC 4.4
+ifeq ($(TARGET_ARCH),arm)
+  preload_ldflags += -Wl,--icf=none
+endif
 
 # Build libvex-($arch)-linux.a
 include $(CLEAR_VARS)
