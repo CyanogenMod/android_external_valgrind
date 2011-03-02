@@ -46,7 +46,7 @@ else
 tool_ldflags := -static -Wl,-Ttext=0x38000000 -nodefaultlibs -nostartfiles -u _start -e_start
 endif
 
-preload_ldflags := -nodefaultlibs -Wl,-z,interpose,-z,initfirst
+preload_ldflags := -nodefaultlibs -Wl,-z,interpose,-z,initfirst -Wl,--icf=none
 
 # Build libvex-($arch)-linux.a
 include $(CLEAR_VARS)
