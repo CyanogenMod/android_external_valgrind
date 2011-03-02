@@ -30,7 +30,7 @@ common_cflags := \
 	-DVGP_$(arch)_linux=1 \
 	-DVG_PLATFORM=\"$(arch)-linux\" \
 	-DVG_LIBDIR=\"/system/lib/valgrind\" \
-	-DANDROID_SYMBOLS_DIR="/data/local/symbols"
+	-DANDROID_SYMBOLS_DIR=\"/data/local/symbols\"
 
 common_includes := \
 	external/valgrind \

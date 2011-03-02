@@ -1238,9 +1238,8 @@ Bool ML_(read_elf_debug_info) ( struct _DebugInfo* di )
       thereafter; it is only aboard transiently. */
 
 #ifdef ANDROID
-#define ANDROID_SYMBOLS_DIR "/data/local/debug"
    const SizeT symbolsDirLen = VG_(strlen)(ANDROID_SYMBOLS_DIR);
-   UChar* debugFilename[symbolsDirLen + VG_(strlen)(di->filename) + 1];
+   UChar debugFilename[symbolsDirLen + VG_(strlen)(di->filename) + 1];
    VG_(strcpy)(debugFilename, ANDROID_SYMBOLS_DIR);
    VG_(strcpy)(debugFilename+symbolsDirLen, di->filename);
    fd = VG_(open)(debugFilename, VKI_O_RDONLY, 0);
