@@ -159,6 +159,8 @@ static void notify_core_of_mmap(Addr a, SizeT len, UInt prot,
 
 static void notify_tool_of_mmap(Addr a, SizeT len, UInt prot, ULong di_handle)
 {
+   SizeT fourgig = (1ULL << 32);
+   SizeT guardpage = 10 * fourgig;
    Bool rr, ww, xx;
 
    /* 'a' is the return value from a real kernel mmap, hence: */
@@ -170,6 +172,12 @@ static void notify_tool_of_mmap(Addr a, SizeT len, UInt prot, ULong di_handle)
    ww = toBool(prot & VKI_PROT_WRITE);
    xx = toBool(prot & VKI_PROT_EXEC);
 
+#ifdef VGA_amd64
+   if (len >= fourgig + 2 * guardpage) {
+     VG_(printf)("Valgrind: ignoring NaCl's mmap(84G)\n");
+     return;
+   }
+#endif  // VGA_amd64
    VG_TRACK( new_mem_mmap, a, len, rr, ww, xx, di_handle );
 }
 
@@ -2601,6 +2609,11 @@ PRE(sys_execve)
 
    } else {
       path = (Char*)ARG1;
+      if (VG_(clo_xml)) {
+        VG_(printf_xml)("\n<execv/>\n\n</valgrindoutput>\n\n");
+      } else {
+        VG_(umsg)("execv called - the tool will now quit\n");
+      }
    }
 
    // Set up the child's environment.
@@ -4141,4 +4154,3 @@ POST(sys_sigaltstack)
 /*--------------------------------------------------------------------*/
 /*--- end                                                          ---*/
 /*--------------------------------------------------------------------*/
-

@@ -869,7 +869,7 @@ PRE(sys_execve)
    }
 
    // Decide whether or not we want to follow along
-   trace_this_child = VG_(should_we_trace_this_child)( (HChar*)ARG1 );
+   trace_this_child = VG_(should_we_trace_this_child)( (HChar**)ARG2 );
 
    // Do the important checks:  it is a file, is executable, permissions are
    // ok, etc.

@@ -53,6 +53,11 @@ typedef
       /* Add a target for an indirect function redirection. */
       VG_USERREQ__ADD_IFUNC_TARGET  = 0x3104,
 
+      /* NaCl mem_start */
+      VG_USERREQ__NACL_MEM_START = 0x3105,
+      /* NaCl nacl_file */
+      VG_USERREQ__NACL_FILE = 0x3106,
+
    } Vg_InternalClientRequest;
 
 // Function for printing from code within Valgrind, but which runs on the

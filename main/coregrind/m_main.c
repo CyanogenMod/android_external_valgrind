@@ -326,6 +326,64 @@ static void early_process_cmd_line_options ( /*OUT*/Int* need_help,
    }
 }
 
+Int reopen_output_fd(Bool xml) {
+  // Returns FD
+  Char *filename = NULL;
+  Char *fsname_unexpanded = xml ? VG_(clo_xml_fname_unexpanded) :
+                                 VG_(clo_log_fname_unexpanded);
+  const Char *output_type = xml ? "xml" : "log";
+  Int ret = -1;
+  SysRes sres;
+
+  vg_assert(fsname_unexpanded != NULL);
+  vg_assert(VG_(strlen)(fsname_unexpanded) <= 900); /* paranoia */
+
+  // Nb: we overwrite an existing file of this name without asking
+  // any questions.
+  filename = VG_(expand_file_name)(xml ? "--xml-file" : "--log-file",
+                                   fsname_unexpanded);
+  sres = VG_(open)(filename,
+                   VKI_O_CREAT|VKI_O_WRONLY|VKI_O_TRUNC,
+                   VKI_S_IRUSR|VKI_S_IWUSR);
+  if (!sr_isError(sres)) {
+    ret = sr_Res(sres);
+    if (xml)
+      VG_(clo_xml_fname_expanded) = filename;
+    else
+      VG_(clo_log_fname_expanded) = filename;
+
+    /* strdup here is probably paranoid overkill, but ... */
+    // TODO: do we need to do anything with it?
+    /* *fsname_unexpanded = VG_(strdup)( "main.mpclo.2",
+                                         xml_fsname_unexpanded ); */
+  } else {
+    VG_(message)(Vg_UserMsg,
+                 "Can't create %s file '%s' (%s); giving up!\n",
+                 output_type, filename, VG_(strerror)(sr_Err(sres)));
+    VG_(fmsg_bad_option)("--[xml|log]-file=<file>",
+        "--[xml|log]-file=<file> (didn't work out for some reason.)");
+    /*NOTREACHED*/
+  }
+
+  return ret;
+}
+
+static Int move_fd_into_safe_range(Int fd, Bool xml) {
+   OutputSink *sink = xml ? &(VG_(xml_output_sink)) : &(VG_(log_output_sink));
+   // Move fd into the safe range, so it doesn't conflict with any app fds.
+   fd = VG_(fcntl)(fd, VKI_F_DUPFD, VG_(fd_hard_limit));
+   if (fd < 0) {
+      VG_(printf)("valgrind: failed to move %s file fd "
+                  "into safe range, using stderr\n", xml ? "XML" : "log");
+      sink->fd = 2;   // stderr
+      sink->is_socket = False;
+   } else {
+      sink->fd = fd;
+      VG_(fcntl)(fd, VKI_F_SETFD, VKI_FD_CLOEXEC);
+   }
+   return fd;
+}
+
 /* The main processing for command line options.  See comments above
    on early_process_cmd_line_options.
 
@@ -352,13 +410,11 @@ static void early_process_cmd_line_options ( /*OUT*/Int* need_help,
 */
 static
 void main_process_cmd_line_options ( /*OUT*/Bool* logging_to_fd,
-                                     /*OUT*/Char** xml_fname_unexpanded,
                                      const HChar* toolname )
 {
    // VG_(clo_log_fd) is used by all the messaging.  It starts as 2 (stderr)
    // and we cannot change it until we know what we are changing it to is
    // ok.  So we have tmp_log_fd to hold the tmp fd prior to that point.
-   SysRes sres;
    Int    i, tmp_log_fd, tmp_xml_fd;
    Int    toolname_len = VG_(strlen)(toolname);
    Char*  tmp_str;         // Used in a couple of places.
@@ -499,6 +555,8 @@ void main_process_cmd_line_options ( /*OUT*/Bool* logging_to_fd,
       else if VG_XACT_CLO(arg, "--smc-check=all",   VG_(clo_smc_check),
                                                     Vg_SmcAll);
 
+      else if VG_STR_CLO (arg, "--memfs-malloc-path",  VG_(clo_memfs_malloc_path)) {}
+      else if VG_INT_CLO (arg, "--memfs-page-size",   VG_(clo_memfs_page_size))   {}
       else if VG_STR_CLO (arg, "--kernel-variant",  VG_(clo_kernel_variant)) {}
 
       else if VG_BOOL_CLO(arg, "--dsymutil",        VG_(clo_dsymutil)) {}
@@ -531,9 +589,13 @@ void main_process_cmd_line_options ( /*OUT*/Bool* logging_to_fd,
 
       else if VG_STR_CLO(arg, "--log-file", log_fsname_unexpanded) {
          log_to = VgLogTo_File;
+         VG_(clo_log_fname_unexpanded) =
+             VG_(strdup)("", log_fsname_unexpanded);
       }
       else if VG_STR_CLO(arg, "--xml-file", xml_fsname_unexpanded) {
          xml_to = VgLogTo_File;
+         VG_(clo_xml_fname_unexpanded) =
+             VG_(strdup)("", xml_fsname_unexpanded);
       }
  
       else if VG_STR_CLO(arg, "--log-socket", log_fsname_unexpanded) {
@@ -664,19 +726,13 @@ void main_process_cmd_line_options ( /*OUT*/Bool* logging_to_fd,
    if (VG_(clo_verbosity) < 0)
       VG_(clo_verbosity) = 0;
 
-   if (VG_(clo_gen_suppressions) > 0 && 
-       !VG_(needs).core_errors && !VG_(needs).tool_errors) {
-      VG_(fmsg_bad_option)("--gen-suppressions=yes",
-         "Can't use --gen-suppressions= with %s\n"
-         "because it doesn't generate errors.\n", VG_(details).name);
-   }
-
    /* If XML output is requested, check that the tool actually
       supports it. */
    if (VG_(clo_xml) && !VG_(needs).xml_output) {
       VG_(clo_xml) = False;
-      VG_(fmsg_bad_option)("--xml=yes",
+      VG_(message)(Vg_UserMsg, 
          "%s does not support XML output.\n", VG_(details).name); 
+      VG_(fmsg_bad_option)("--xml=yes", "\n");
       /*NOTREACHED*/
    }
 
@@ -760,27 +816,7 @@ void main_process_cmd_line_options ( /*OUT*/Bool* logging_to_fd,
          break;
 
       case VgLogTo_File: {
-         Char* logfilename;
-
-         vg_assert(log_fsname_unexpanded != NULL);
-         vg_assert(VG_(strlen)(log_fsname_unexpanded) <= 900); /* paranoia */
-
-         // Nb: we overwrite an existing file of this name without asking
-         // any questions.
-         logfilename = VG_(expand_file_name)("--log-file",
-                                             log_fsname_unexpanded);
-         sres = VG_(open)(logfilename, 
-                          VKI_O_CREAT|VKI_O_WRONLY|VKI_O_TRUNC, 
-                          VKI_S_IRUSR|VKI_S_IWUSR);
-         if (!sr_isError(sres)) {
-            tmp_log_fd = sr_Res(sres);
-            VG_(clo_log_fname_expanded) = logfilename;
-         } else {
-            VG_(fmsg)("can't create log file '%s': %s\n", 
-                      logfilename, VG_(strerror)(sr_Err(sres)));
-            VG_(exit)(1);
-            /*NOTREACHED*/
-         }
+         tmp_log_fd = reopen_output_fd(False);
          break;
       }
 
@@ -819,30 +855,7 @@ void main_process_cmd_line_options ( /*OUT*/Bool* logging_to_fd,
          break;
 
       case VgLogTo_File: {
-         Char* xmlfilename;
-
-         vg_assert(xml_fsname_unexpanded != NULL);
-         vg_assert(VG_(strlen)(xml_fsname_unexpanded) <= 900); /* paranoia */
-
-         // Nb: we overwrite an existing file of this name without asking
-         // any questions.
-         xmlfilename = VG_(expand_file_name)("--xml-file",
-                                             xml_fsname_unexpanded);
-         sres = VG_(open)(xmlfilename, 
-                          VKI_O_CREAT|VKI_O_WRONLY|VKI_O_TRUNC, 
-                          VKI_S_IRUSR|VKI_S_IWUSR);
-         if (!sr_isError(sres)) {
-            tmp_xml_fd = sr_Res(sres);
-            VG_(clo_xml_fname_expanded) = xmlfilename;
-            /* strdup here is probably paranoid overkill, but ... */
-            *xml_fname_unexpanded = VG_(strdup)( "main.mpclo.2",
-                                                 xml_fsname_unexpanded );
-         } else {
-            VG_(fmsg)("can't create XML file '%s': %s\n", 
-                      xmlfilename, VG_(strerror)(sr_Err(sres)));
-            VG_(exit)(1);
-            /*NOTREACHED*/
-         }
+         tmp_xml_fd = reopen_output_fd(True);
          break;
       }
 
@@ -888,18 +901,7 @@ void main_process_cmd_line_options ( /*OUT*/Bool* logging_to_fd,
    // Finalise the output fds: the log fd ..
 
    if (tmp_log_fd >= 0) {
-      // Move log_fd into the safe range, so it doesn't conflict with
-      // any app fds.
-      tmp_log_fd = VG_(fcntl)(tmp_log_fd, VKI_F_DUPFD, VG_(fd_hard_limit));
-      if (tmp_log_fd < 0) {
-         VG_(message)(Vg_UserMsg, "valgrind: failed to move logfile fd "
-                                  "into safe range, using stderr\n");
-         VG_(log_output_sink).fd = 2;   // stderr
-         VG_(log_output_sink).is_socket = False;
-      } else {
-         VG_(log_output_sink).fd = tmp_log_fd;
-         VG_(fcntl)(VG_(log_output_sink).fd, VKI_F_SETFD, VKI_FD_CLOEXEC);
-      }
+      tmp_log_fd = move_fd_into_safe_range(tmp_log_fd, False);
    } else {
       // If they said --log-fd=-1, don't print anything.  Plausible for use in
       // regression testing suites that use client requests to count errors.
@@ -910,18 +912,7 @@ void main_process_cmd_line_options ( /*OUT*/Bool* logging_to_fd,
    // Finalise the output fds: and the XML fd ..
 
    if (tmp_xml_fd >= 0) {
-      // Move xml_fd into the safe range, so it doesn't conflict with
-      // any app fds.
-      tmp_xml_fd = VG_(fcntl)(tmp_xml_fd, VKI_F_DUPFD, VG_(fd_hard_limit));
-      if (tmp_xml_fd < 0) {
-         VG_(message)(Vg_UserMsg, "valgrind: failed to move XML file fd "
-                                  "into safe range, using stderr\n");
-         VG_(xml_output_sink).fd = 2;   // stderr
-         VG_(xml_output_sink).is_socket = False;
-      } else {
-         VG_(xml_output_sink).fd = tmp_xml_fd;
-         VG_(fcntl)(VG_(xml_output_sink).fd, VKI_F_SETFD, VKI_FD_CLOEXEC);
-      }
+      tmp_xml_fd = move_fd_into_safe_range(tmp_xml_fd, True);
    } else {
       // If they said --xml-fd=-1, don't print anything.  Plausible for use in
       // regression testing suites that use client requests to count errors.
@@ -1013,9 +1004,14 @@ static void umsg_or_xml_arg(const Char* arg,
    If logging to file or a socket, write details of parent PID and
    command line args, to help people trying to interpret the
    results of a run which encompasses multiple processes. */
-static void print_preamble ( Bool logging_to_fd, 
-                             Char* xml_fname_unexpanded,
-                             const HChar* toolname )
+// TODO(timurrrr): we add a non-static declaration of this function since
+// we need it in coregrind/m_libcproc.c
+// NOTE: Keep this definition in sync with coregrind/m_libcproc.c
+//       in case of merge conflict.
+// Should we move it to some header file?
+void print_preamble ( Bool logging_to_fd, const HChar* toolname );
+
+void print_preamble ( Bool logging_to_fd, const HChar* toolname )
 {
    Int    i;
    HChar* xpre  = VG_(clo_xml) ? "  <line>" : "";
@@ -1023,9 +1019,15 @@ static void print_preamble ( Bool logging_to_fd,
    UInt (*umsg_or_xml)( const HChar*, ... )
       = VG_(clo_xml) ? VG_(printf_xml) : VG_(umsg);
 
+   static const char* last_toolname = NULL;
    vg_assert( VG_(args_for_client) );
    vg_assert( VG_(args_for_valgrind) );
+
+   // This way you may pass toolname == NULL provided the first invocation
+   // with toolname != NULL takes place in valgrind_main().
+   toolname = (toolname == NULL ? last_toolname : toolname);
    vg_assert( toolname );
+   last_toolname = toolname;
 
    if (VG_(clo_xml)) {
       VG_(printf_xml)("<?xml version=\"1.0\"?>\n");
@@ -1037,7 +1039,7 @@ static void print_preamble ( Bool logging_to_fd,
       VG_(printf_xml)("\n");
    }
 
-   if (VG_(clo_xml) || VG_(clo_verbosity > 0)) {
+   if (VG_(clo_xml) || VG_(clo_verbosity) > 0) {
 
       if (VG_(clo_xml))
          VG_(printf_xml)("<preamble>\n");
@@ -1092,6 +1094,7 @@ static void print_preamble ( Bool logging_to_fd,
    }
    else
    if (VG_(clo_xml)) {
+      Char *xml_fname_unexpanded = VG_(clo_xml_fname_unexpanded);
       VG_(printf_xml)("\n");
       VG_(printf_xml)("<pid>%d</pid>\n", VG_(getpid)());
       VG_(printf_xml)("<ppid>%d</ppid>\n", VG_(getppid)());
@@ -1399,7 +1402,6 @@ Int valgrind_main ( Int argc, HChar **argv, HChar **envp )
    Int     need_help          = 0; // 0 = no, 1 = --help, 2 = --help-debug
    ThreadId tid_main          = VG_INVALID_THREADID;
    Bool    logging_to_fd      = False;
-   Char* xml_fname_unexpanded = NULL;
    Int     loglevel, i;
    struct vki_rlimit zero = { 0, 0 };
    XArray* addr2dihandle = NULL;
@@ -1854,8 +1856,7 @@ Int valgrind_main ( Int argc, HChar **argv, HChar **envp )
    VG_(debugLog)(1, "main",
                     "(main_) Process Valgrind's command line options, "
                     "setup logging\n");
-   main_process_cmd_line_options ( &logging_to_fd, &xml_fname_unexpanded,
-                                   toolname );
+   main_process_cmd_line_options ( &logging_to_fd, toolname );
 
    //--------------------------------------------------------------
    // Zeroise the millisecond counter by doing a first read of it.
@@ -1868,10 +1869,10 @@ Int valgrind_main ( Int argc, HChar **argv, HChar **envp )
    //   p: tl_pre_clo_init            [for 'VG_(details).name' and friends]
    //   p: main_process_cmd_line_options()
    //         [for VG_(clo_verbosity), VG_(clo_xml),
-   //          logging_to_fd, xml_fname_unexpanded]
+   //          logging_to_fd]
    //--------------------------------------------------------------
    VG_(debugLog)(1, "main", "Print the preamble...\n");
-   print_preamble(logging_to_fd, xml_fname_unexpanded, toolname);
+   print_preamble(logging_to_fd, toolname);
    VG_(debugLog)(1, "main", "...finished the preamble\n");
 
    //--------------------------------------------------------------

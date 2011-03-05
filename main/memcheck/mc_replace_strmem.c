@@ -788,8 +788,8 @@ MEMMOVE(VG_Z_DYLD,        memmove)
       } \
    }
 
-#if defined(VGO_darwin)
 BCOPY(VG_Z_LIBC_SONAME, bcopy)
+#if defined(VGO_darwin)
 BCOPY(VG_Z_DYLD,        bcopy)
 #endif
 

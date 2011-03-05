@@ -2736,6 +2736,9 @@ Int emit_AMD64Instr ( UChar* buf, Int nbuf, AMD64Instr* i,
          case Ijk_Yield: 
             *p++ = 0xBD;
             p = emit32(p, VEX_TRC_JMP_YIELD); break;
+         case Ijk_YieldNoRedir: 
+            *p++ = 0xBD;
+            p = emit32(p, VEX_TRC_JMP_YIELD_NOREDIR); break;
          case Ijk_EmWarn:
             *p++ = 0xBD;
             p = emit32(p, VEX_TRC_JMP_EMWARN); break;

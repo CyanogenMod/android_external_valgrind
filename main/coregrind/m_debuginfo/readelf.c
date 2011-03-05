@@ -1567,7 +1567,7 @@ Bool ML_(read_elf_debug_info) ( struct _DebugInfo* di )
 
       /* Accept .rodata where mapped as rx (data), even if zero-sized */
       if (0 == VG_(strcmp)(name, ".rodata")) {
-         if (inrx && size >= 0 && !di->rodata_present) {
+         if (/*inrx && */size >= 0 && !di->rodata_present) {
             di->rodata_present = True;
             di->rodata_svma = svma;
             di->rodata_avma = svma + rx_bias;
@@ -1746,7 +1746,12 @@ Bool ML_(read_elf_debug_info) ( struct _DebugInfo* di )
             di->gotplt_size = size;
             TRACE_SYMTAB("acquiring .got.plt avma = %#lx\n", di->gotplt_avma);
          } else if (size != 0) {
-            BAD(".got.plt");
+           if (!di->gotplt_present) {
+             VG_(printf)("WARNING: ignoring non-empty .got.plt outside of RW segment!\n");
+             VG_(printf)("Filename %s, section size %d\n", di->filename, size);
+           } else {
+             BAD(".got.plt");
+           }
          }
       }
 
@@ -1816,7 +1821,7 @@ Bool ML_(read_elf_debug_info) ( struct _DebugInfo* di )
          the common case.  However, if that doesn't pan out, try for
          rw (data) instead. */
       if (0 == VG_(strcmp)(name, ".eh_frame")) {
-         if (inrx && size > 0 && !di->ehframe_present) {
+         if (/*inrx && */size > 0 && !di->ehframe_present) {
             di->ehframe_present = True;
             di->ehframe_avma = svma + rx_bias;
             di->ehframe_size = size;

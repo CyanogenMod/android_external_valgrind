@@ -35,6 +35,7 @@
 #include "pub_core_libcbase.h"
 #include "pub_core_aspacemgr.h"
 #include "pub_core_libcassert.h"
+#include "pub_core_libcfile.h"
 #include "pub_core_libcprint.h"
 #include "pub_core_mallocfree.h"
 #include "pub_core_options.h"
@@ -653,6 +654,68 @@ void* align_upwards ( void* p, SizeT align )
    return (void*)(a - (a % align) + align);
 }
 
+// Support for memfs (tmpfs or hugetlbfs) allocation.
+// The code is tcmalloc memfs allocator does a similar thing:
+// http://code.google.com/p/google-perftools/source/browse/trunk/src/memfs_malloc.cc
+
+static int memfs_fd = -1;
+static SizeT memfs_base = 0;
+static SizeT memfs_page_size = 0;
+
+static void MemfsOpen(void) {
+   if (VG_(clo_memfs_malloc_path) && memfs_fd == -1) {
+      VG_(printf)("MemfsOpen: attempting to open memfs mount: %s; "
+                  "memfs page size=%d ", VG_(clo_memfs_malloc_path),
+                  VG_(clo_memfs_page_size));
+      SysRes sres = VG_(open)(VG_(clo_memfs_malloc_path),
+                              VKI_O_RDWR | VKI_O_CREAT | VKI_O_TRUNC, 0666);
+      if (!sr_isError(sres)) {
+         memfs_fd = sr_Res(sres);
+         tl_assert(memfs_fd >= 0);
+         VG_(printf)("... ok\n");
+         memfs_page_size = VG_(clo_memfs_page_size) * 1024;
+      } else {
+         VG_(clo_memfs_malloc_path) = NULL;
+         VG_(printf)("... failed\n");
+      }
+   }
+}
+
+static SizeT MemfsRoundUp(SizeT size) {
+  SizeT new_size = size;
+  if (memfs_page_size != 0) {
+     new_size = ((size + memfs_page_size - 1) / memfs_page_size) 
+         * memfs_page_size;
+  }
+  return new_size;
+}
+
+static SysRes MemfsAlloc(SizeT size) {
+  VG_(printf)("MemfsAlloc: size=%ld base=%ld ", size, memfs_base);
+
+  /* Make sure the file is large enough.
+     Not needed for hugetlbfs, but needed for tmpfs and regular files. */
+  VG_(ftruncate)(memfs_fd, memfs_base + size);
+
+  SysRes sres = VG_(am_mmap_file_float_valgrind_with_flags)
+     (size, VKI_PROT_WRITE|VKI_PROT_READ, VKI_MAP_SHARED, memfs_fd, memfs_base);
+
+  memfs_base += size;
+
+  // try to access mem to fail early if something is wrong.
+  char *mem = (char*)sr_Res(sres);
+  mem[0] = 0;
+  mem[size / 2] = 0;
+  mem[size - 1] = 0;
+
+  if (sr_isError(sres)) {
+    VG_(printf)("... failed\n");
+  } else {
+    VG_(printf)("... ok; res=%p\n", (void*)sr_Res(sres));
+  }
+  return sres;
+}
+
 // If not enough memory available, either aborts (for non-client memory)
 // or returns 0 (for client memory).
 static
@@ -667,10 +730,17 @@ Superblock* newSuperblock ( Arena* a, SizeT cszB )
    if (cszB < a->min_sblock_szB) cszB = a->min_sblock_szB;
    cszB = VG_PGROUNDUP(cszB);
 
+   MemfsOpen();
+   cszB = MemfsRoundUp(cszB);
+
    if (a->clientmem) {
       // client allocation -- return 0 to client if it fails
-      sres = VG_(am_sbrk_anon_float_client)
-                ( cszB, VKI_PROT_READ|VKI_PROT_WRITE|VKI_PROT_EXEC );
+      if (memfs_fd >= 0) {
+         sres = MemfsAlloc(cszB);
+      } else {
+         sres = VG_(am_sbrk_anon_float_client)
+           ( cszB, VKI_PROT_READ|VKI_PROT_WRITE|VKI_PROT_EXEC );
+      }
       if (sr_isError(sres))
          return 0;
       sb = (Superblock*)(AddrH)sr_Res(sres);
@@ -682,7 +752,11 @@ Superblock* newSuperblock ( Arena* a, SizeT cszB )
       );
    } else {
       // non-client allocation -- abort if it fails
-      sres = VG_(am_sbrk_anon_float_valgrind)( cszB );
+      if (memfs_fd >= 0) {
+        sres = MemfsAlloc(cszB);
+      } else {
+        sres = VG_(am_sbrk_anon_float_valgrind)( cszB );
+      }
       if (sr_isError(sres)) {
          VG_(out_of_memory_NORETURN)("newSuperblock", cszB);
          /* NOTREACHED */

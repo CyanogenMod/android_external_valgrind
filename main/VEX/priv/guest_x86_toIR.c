@@ -7693,12 +7693,16 @@ static IRExpr* dis_PALIGNR_XMM_helper ( IRTemp hi64,
    if effective_addr is not 16-aligned.  This is required behaviour
    for some SSE3 instructions and all 128-bit SSSE3 instructions.
    This assumes that guest_RIP_curr_instr is set correctly! */
+/* TODO(glider): we've replaced the 0xF mask with 0x0, effectively disabling
+ * the check. Need to enable it once TSan stops generating unaligned
+ * accesses in the wrappers.
+ * See http://code.google.com/p/data-race-test/issues/detail?id=49 */
 static void gen_SEGV_if_not_16_aligned ( IRTemp effective_addr )
 {
    stmt(
       IRStmt_Exit(
          binop(Iop_CmpNE32,
-               binop(Iop_And32,mkexpr(effective_addr),mkU32(0xF)),
+               binop(Iop_And32,mkexpr(effective_addr),mkU32(0x0)),
                mkU32(0)),
          Ijk_SigSEGV,
          IRConst_U32(guest_EIP_curr_instr)

@@ -41,6 +41,7 @@
 
 /* Move an fd into the Valgrind-safe range */
 extern Int VG_(safe_fd) ( Int oldfd );
+extern Int reopen_output_fd(Bool xml);
 extern Int VG_(fcntl)   ( Int fd, Int cmd, Addr arg );
 
 /* Convert an fd into a filename */

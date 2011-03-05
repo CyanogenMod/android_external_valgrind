@@ -165,10 +165,10 @@ static void ocache_sarp_Clear_Origins ( Addr, UWord ); /* fwds */
 
 #else
 
-/* Just handle the first 32G fast and the rest via auxiliary
+/* Just handle the first 256G fast and the rest via auxiliary
    primaries.  If you change this, Memcheck will assert at startup.
    See the definition of UNALIGNED_OR_HIGH for extensive comments. */
-#  define N_PRIMARY_BITS  19
+#  define N_PRIMARY_BITS  22
 
 #endif
 
@@ -4749,6 +4749,8 @@ Bool          MC_(clo_workaround_gcc296_bugs) = False;
 Int           MC_(clo_malloc_fill)            = -1;
 Int           MC_(clo_free_fill)              = -1;
 Int           MC_(clo_mc_level)               = 2;
+const char*   MC_(clo_summary_file)           = NULL;
+
 
 static Bool mc_process_cmd_line_options(Char* arg)
 {
@@ -4818,6 +4820,9 @@ static Bool mc_process_cmd_line_options(Char* arg)
    else if VG_XACT_CLO(arg, "--leak-resolution=high",
                             MC_(clo_leak_resolution), Vg_HighRes) {}
 
+   else if VG_STR_CLO(arg, "--summary-file", tmp_str) {
+      MC_(clo_summary_file) = VG_(strdup)("clo_summary_file", tmp_str);
+   }
    else if VG_STR_CLO(arg, "--ignore-ranges", tmp_str) {
       Int  i;
       Bool ok  = parse_ignore_ranges(tmp_str);
@@ -5029,7 +5034,7 @@ static Bool mc_handle_client_request ( ThreadId tid, UWord* arg, UWord* ret )
          break;
 
       case VG_USERREQ__MAKE_MEM_UNDEFINED:
-         make_mem_undefined_w_tid_and_okind ( arg[1], arg[2], tid, 
+         make_mem_undefined_w_tid_and_okind ( arg[1], arg[2], tid,
                                               MC_OKIND_USER );
          *ret = -1;
          break;
@@ -5595,14 +5600,6 @@ static void ocache_sarp_Clear_Origins ( Addr a, UWord len ) {
 
 static void mc_post_clo_init ( void )
 {
-   /* If we've been asked to emit XML, mash around various other
-      options so as to constrain the output somewhat. */
-   if (VG_(clo_xml)) {
-      /* Extract as much info as possible from the leak checker. */
-      /* MC_(clo_show_reachable) = True; */
-      MC_(clo_leak_check) = LC_Full;
-   }
-
    tl_assert( MC_(clo_mc_level) >= 1 && MC_(clo_mc_level) <= 3 );
 
    if (MC_(clo_mc_level) == 3) {
@@ -5967,11 +5964,11 @@ static void mc_pre_clo_init(void)
    tl_assert(sizeof(Addr)  == 8);
    tl_assert(sizeof(UWord) == 8);
    tl_assert(sizeof(Word)  == 8);
-   tl_assert(MAX_PRIMARY_ADDRESS == 0x7FFFFFFFFULL);
-   tl_assert(MASK(1) == 0xFFFFFFF800000000ULL);
-   tl_assert(MASK(2) == 0xFFFFFFF800000001ULL);
-   tl_assert(MASK(4) == 0xFFFFFFF800000003ULL);
-   tl_assert(MASK(8) == 0xFFFFFFF800000007ULL);
+   tl_assert(MAX_PRIMARY_ADDRESS == 0x3FFFFFFFFFULL);
+   tl_assert(MASK(1) == 0xFFFFFFC000000000ULL);
+   tl_assert(MASK(2) == 0xFFFFFFC000000001ULL);
+   tl_assert(MASK(4) == 0xFFFFFFC000000003ULL);
+   tl_assert(MASK(8) == 0xFFFFFFC000000007ULL);
 #  endif
 }
 

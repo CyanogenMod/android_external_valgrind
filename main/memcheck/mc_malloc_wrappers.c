@@ -121,8 +121,9 @@ static void add_to_freed_queue ( MC_Chunk* mc )
       mc1->next = NULL; /* just paranoia */
 
       /* free MC_Chunk */
-      if (MC_AllocCustom != mc1->allockind)
+      if (MC_AllocCustom != mc1->allockind) {
          VG_(cli_free) ( (void*)(mc1->data) );
+      }
       VG_(free) ( mc1 );
    }
 }

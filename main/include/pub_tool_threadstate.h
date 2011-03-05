@@ -36,7 +36,11 @@
    scheduler algorithms is surely O(N) in the number of threads, since
    that's simple, at least.  And (in practice) we hope that most
    programs do not need many threads. */
+#if defined(VGO_darwin) || defined(ANDROID)
 #define VG_N_THREADS 500
+#else
+#define VG_N_THREADS 10000
+#endif
 
 /* Special magic value for an invalid ThreadId.  It corresponds to
    LinuxThreads using zero as the initial value for

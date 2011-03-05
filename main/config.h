@@ -328,3 +328,12 @@
 
 /* Define to `int' if <sys/types.h> doesn't define. */
 /* #undef uid_t */
+
+/* path to egrep */
+#define EGREP_PATH "/system/bin/grep -E"
+
+/* path to sh */
+#define SH_PATH "/system/bin/sh"
+
+/* path to strings */
+#define STRINGS_PATH "/system/bin/strings"

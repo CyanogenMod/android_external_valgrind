@@ -83,6 +83,9 @@ extern Bool  VG_(clo_child_silent_after_fork);
 extern Char* VG_(clo_log_fname_expanded);
 extern Char* VG_(clo_xml_fname_expanded);
 
+extern Char* VG_(clo_log_fname_unexpanded);
+extern Char* VG_(clo_xml_fname_unexpanded);
+
 /* Add timestamps to log messages?  default: NO */
 extern Bool  VG_(clo_time_stamp);
 
@@ -135,8 +138,12 @@ extern Char* VG_(clo_sim_hints);
 extern Bool VG_(clo_sym_offsets);
 /* Read DWARF3 variable info even if tool doesn't ask for it? */
 extern Bool VG_(clo_read_var_info);
-/* Which prefix to strip from full source file paths, if any. */
-extern Char* VG_(clo_prefix_to_strip);
+
+/* Mountpoint for memfs */
+extern Char* VG_(clo_memfs_malloc_path);
+/* Size of memfs page in Kbytes */
+extern Int   VG_(clo_memfs_page_size);
+
 
 /* An array of strings harvested from --require-text-symbol= 
    flags.

@@ -103,14 +103,7 @@
  * 'expr' is false. Can be used in a context where no comma expressions
  * are allowed.
  */
-#ifdef __cplusplus
-template <bool b> struct vki_static_assert { int m_bitfield:(2*b-1); };
-#define VKI_STATIC_ASSERT(expr)                         \
-    (sizeof(vki_static_assert<(expr)>) - sizeof(int))
-#else
-#define VKI_STATIC_ASSERT(expr) (sizeof(struct { int:-!(expr); }))
-#endif
-
+#define VKI_STATIC_ASSERT(expr) (sizeof(int [-!(expr)]))
 //----------------------------------------------------------------------
 // Based on _IOC_TYPECHECK() from linux-2.6.34/asm-generic/ioctl.h
 //----------------------------------------------------------------------

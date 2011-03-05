@@ -1067,6 +1067,7 @@ void ppIRJumpKind ( IRJumpKind kind )
       case Ijk_Ret:          vex_printf("Return"); break;
       case Ijk_ClientReq:    vex_printf("ClientReq"); break;
       case Ijk_Yield:        vex_printf("Yield"); break;
+      case Ijk_YieldNoRedir: vex_printf("YieldNoRedir"); break;
       case Ijk_EmWarn:       vex_printf("EmWarn"); break;
       case Ijk_EmFail:       vex_printf("EmFail"); break;
       case Ijk_NoDecode:     vex_printf("NoDecode"); break;

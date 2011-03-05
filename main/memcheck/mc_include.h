@@ -42,8 +42,8 @@
 /*--- Tracking the heap                                    ---*/
 /*------------------------------------------------------------*/
 
-/* We want at least a 16B redzone on client heap blocks for Memcheck */
-#define MC_MALLOC_REDZONE_SZB    16
+/* We want at least a 64B redzone on client heap blocks for Memcheck */
+#define MC_MALLOC_REDZONE_SZB    64
 
 /* For malloc()/new/new[] vs. free()/delete/delete[] mismatch checking. */
 typedef
@@ -396,6 +396,9 @@ extern VgRes MC_(clo_leak_resolution);
 extern Bool MC_(clo_show_reachable);
 
 /* In leak check, show possibly-lost blocks?  default: YES */
+extern Bool MC_(clo_show_possible);
+
+/* In leak check, show possibly-lost blocks?  default: YES */
 extern Bool MC_(clo_show_possibly_lost);
 
 /* Assume accesses immediately below %esp are due to gcc-2.96 bugs.
@@ -435,6 +438,9 @@ extern Int MC_(clo_free_fill);
    The default is 2.
 */
 extern Int MC_(clo_mc_level);
+
+// Print a short summary to a separate file.
+extern const char* MC_(clo_summary_file);
 
 
 /*------------------------------------------------------------*/

@@ -2336,6 +2336,9 @@ Int emit_X86Instr ( UChar* buf, Int nbuf, X86Instr* i,
          case Ijk_Yield: 
             *p++ = 0xBD;
             p = emit32(p, VEX_TRC_JMP_YIELD); break;
+         case Ijk_YieldNoRedir: 
+            *p++ = 0xBD;
+            p = emit32(p, VEX_TRC_JMP_YIELD_NOREDIR); break;
          case Ijk_EmWarn:
             *p++ = 0xBD;
             p = emit32(p, VEX_TRC_JMP_EMWARN); break;

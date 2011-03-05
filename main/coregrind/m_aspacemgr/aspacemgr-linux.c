@@ -265,10 +265,18 @@
 /* ------ start of STATE for the address-space manager ------ */
 
 /* Max number of segments we can track. */
+#if defined(VGO_darwin) || defined(ANDROID)
 #define VG_N_SEGMENTS 5000
+#else
+#define VG_N_SEGMENTS 100000
+#endif
 
 /* Max number of segment file names we can track. */
+#if defined(VGO_darwin) || defined(ANDROID)
 #define VG_N_SEGNAMES 1000
+#else
+#define VG_N_SEGNAMES 100000
+#endif
 
 /* Max length of a segment file name. */
 #define VG_MAX_SEGNAMELEN 1000
@@ -1649,7 +1657,7 @@ Addr VG_(am_startup) ( Addr sp_at_startup )
    aspacem_minAddr = (Addr) 0x04000000; // 64M
 
 #  if VG_WORDSIZE == 8
-     aspacem_maxAddr = (Addr)0x800000000 - 1; // 32G
+     aspacem_maxAddr = (Addr)0x8000000000 - 1; // 512G
 #    ifdef ENABLE_INNER
      { Addr cse = VG_PGROUNDDN( sp_at_startup ) - 1;
        if (aspacem_maxAddr > cse)
@@ -2491,8 +2499,9 @@ SysRes VG_(am_sbrk_anon_float_valgrind)( SizeT cszB )
    segment array accordingly.  This is used by V for transiently
    mapping in object files to read their debug info.  */
 
-SysRes VG_(am_mmap_file_float_valgrind) ( SizeT length, UInt prot, 
-                                          Int fd, Off64T offset )
+SysRes VG_(am_mmap_file_float_valgrind_with_flags) ( SizeT length, UInt prot,
+                                                     UInt flags,
+                                                     Int fd, Off64T offset )
 {
    SysRes     sres;
    NSegment   seg;
@@ -2520,8 +2529,8 @@ SysRes VG_(am_mmap_file_float_valgrind) ( SizeT length, UInt prot,
       any resulting failure immediately. */
    sres = VG_(am_do_mmap_NO_NOTIFY)( 
              advised, length, prot, 
-             VKI_MAP_FIXED|VKI_MAP_PRIVATE, 
-             fd, offset 
+             flags,
+             fd, offset
           );
    if (sr_isError(sres))
       return sres;
@@ -2530,8 +2539,10 @@ SysRes VG_(am_mmap_file_float_valgrind) ( SizeT length, UInt prot,
       /* I don't think this can happen.  It means the kernel made a
          fixed map succeed but not at the requested location.  Try to
          repair the damage, then return saying the mapping failed. */
-      (void)ML_(am_do_munmap_NO_NOTIFY)( sr_Res(sres), length );
-      return VG_(mk_SysRes_Error)( VKI_EINVAL );
+       /*TODO(kcc): it apprers this may actually happen if allocating
+        in hugetlbfs. No idea why. */
+//      (void)ML_(am_do_munmap_NO_NOTIFY)( sr_Res(sres), length );
+//      return VG_(mk_SysRes_Error)( VKI_EINVAL );
    }
 
    /* Ok, the mapping succeeded.  Now notify the interval map. */
@@ -2555,6 +2566,12 @@ SysRes VG_(am_mmap_file_float_valgrind) ( SizeT length, UInt prot,
 
    AM_SANITY_CHECK;
    return sres;
+}
+
+SysRes VG_(am_mmap_file_float_valgrind) ( SizeT length, UInt prot,
+                                          Int fd, Off64T offset ) {
+  return VG_(am_mmap_file_float_valgrind_with_flags) (
+      length, prot, VKI_MAP_FIXED|VKI_MAP_PRIVATE, fd, offset);
 }
 
 

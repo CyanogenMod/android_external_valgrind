@@ -252,6 +252,14 @@ UInt VG_(get_StackTrace_wrk) ( ThreadId tid_if_known,
    if (fp_max >= sizeof(Addr))
       fp_max -= sizeof(Addr);
 
+   extern unsigned long nacl_head;
+
+   if (nacl_head && uregs.xip > nacl_head && uregs.xip < nacl_head + (1ULL << 32)) {
+     fp_min = nacl_head;
+     fp_max = nacl_head + (1ULL << 32) - 1;
+   }
+
+
    if (debug)
       VG_(printf)("max_n_ips=%d fp_min=0x%lx fp_max_orig=0x%lx, "
                   "fp_max=0x%lx ip=0x%lx fp=0x%lx\n",

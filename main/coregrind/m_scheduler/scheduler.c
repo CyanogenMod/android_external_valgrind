@@ -163,6 +163,7 @@ HChar* name_of_sched_event ( UInt event )
       case VEX_TRC_JMP_SYS_SYSENTER:  return "SYSENTER";
       case VEX_TRC_JMP_CLIENTREQ:     return "CLIENTREQ";
       case VEX_TRC_JMP_YIELD:         return "YIELD";
+      case VEX_TRC_JMP_YIELD_NOREDIR: return "YIELD_NOREDIR";
       case VEX_TRC_JMP_NODECODE:      return "NODECODE";
       case VEX_TRC_JMP_MAPFAIL:       return "MAPFAIL";
       case VEX_TRC_JMP_NOREDIR:       return "NOREDIR";
@@ -1012,6 +1013,8 @@ VgSchedReturnCode VG_(scheduler) ( ThreadId tid )
          }
 #        endif
 
+         VG_(do_syscall0)(__NR_sched_yield);
+
 	 VG_(acquire_BigLock)(tid, "VG_(scheduler):timeslice");
 	 /* ------------ now we do have The Lock ------------ */
 
@@ -1050,7 +1053,11 @@ VgSchedReturnCode VG_(scheduler) ( ThreadId tid )
          VG_(message)(Vg_DebugMsg, "thread %d: running for %d bbs\n", 
                                    tid, VG_(dispatch_ctr) - 1 );
 
-      trc = run_thread_for_a_while ( tid );
+      if (trc == VEX_TRC_JMP_YIELD_NOREDIR) {
+        trc = handle_noredir_jump(tid);
+      } else {
+        trc = run_thread_for_a_while ( tid );
+      }
 
       if (VG_(clo_trace_sched) && VG_(clo_verbosity) > 2) {
 	 Char buf[50];
@@ -1104,6 +1111,10 @@ VgSchedReturnCode VG_(scheduler) ( ThreadId tid )
 	 if (VG_(dispatch_ctr) > 2000) 
             VG_(dispatch_ctr) = 2000;
 	 break;
+
+      case VEX_TRC_JMP_YIELD_NOREDIR:
+         VG_(dispatch_ctr) = 1;
+         break;
 
       case VG_TRC_INNER_COUNTERZERO:
 	 /* Timeslice is out.  Let a new thread be scheduled. */
@@ -1584,6 +1595,22 @@ void do_client_request ( ThreadId tid )
          } else {
             goto my_default;
          }
+
+      case VG_USERREQ__NACL_MEM_START: {
+         extern void LoadNaClDebugInfo(Addr a);
+         VG_(printf)("*********************** NaCl mem_start: %p\n", (void*)arg[1]);
+         if (arg[1])
+           LoadNaClDebugInfo(arg[1]);
+         goto my_default;
+      }
+
+      case VG_USERREQ__NACL_FILE: {
+         extern char *nacl_file;
+         VG_(printf)("*********************** NaCl nacl_file: %s\n", (void*)arg[1]);
+         nacl_file = (char*) arg[1];
+         goto my_default;
+      }
+
 
       default:
        my_default:

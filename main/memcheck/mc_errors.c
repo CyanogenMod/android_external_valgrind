@@ -42,6 +42,8 @@
 #include "pub_tool_threadstate.h"
 #include "pub_tool_debuginfo.h"     // VG_(get_dataname_and_offset)
 #include "pub_tool_xarray.h"
+#include "pub_tool_vki.h"
+#include "pub_tool_libcfile.h"
 
 #include "mc_include.h"
 
@@ -753,6 +755,30 @@ void MC_(pp_Error) ( Error* err )
          VG_(printf)("Error:\n  unknown Memcheck error code %d\n",
                      VG_(get_error_kind)(err));
          VG_(tool_panic)("unknown error code in mc_pp_Error)");
+   }
+
+   if (MC_(clo_summary_file)) {
+      /* Each time we report a warning, we replace the contents of the summary
+       * file with one line indicating the number of reported warnings.
+       * This way, at the end of memcheck execution we will have a file with
+       * one line saying 
+       *   Memcheck: XX warnings reported
+       * If there were no warnings, the file will not be changed. 
+       * If memcheck crashes, the file will still contain the last summary.
+       * */
+      static int n_warnings = 0;
+      char buf[100];
+      SysRes sres = VG_(open)(MC_(clo_summary_file),
+                              VKI_O_WRONLY|VKI_O_CREAT|VKI_O_TRUNC,
+                              VKI_S_IRUSR|VKI_S_IWUSR);
+      if (sr_isError(sres)) {
+         VG_(tool_panic)("can not open the summary file");
+      }
+      n_warnings++;
+      VG_(snprintf)(buf, sizeof(buf), "Memcheck: %d warning(s) reported\n",
+                    n_warnings);
+      VG_(write)(sr_Res(sres), buf, VG_(strlen)(buf));
+      VG_(close)(sr_Res(sres));
    }
 }
 

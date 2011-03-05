@@ -33,9 +33,12 @@
 #include "pub_core_vkiscnums.h"
 #include "pub_core_libcbase.h"
 #include "pub_core_libcassert.h"
+#include "pub_core_libcfile.h"
 #include "pub_core_libcprint.h"
 #include "pub_core_libcproc.h"
 #include "pub_core_libcsignal.h"
+#include "pub_core_tooliface.h"
+#include "pub_core_options.h"
 #include "pub_core_seqmatch.h"
 #include "pub_core_mallocfree.h"
 #include "pub_core_syscall.h"
@@ -722,9 +725,38 @@ void VG_(do_atfork_parent)(ThreadId tid)
          (*atforks[i].parent)(tid);
 }
 
+// Defined in m_main.c
+void print_preamble(Bool logging_to_fd, const char* toolname);
+
+Char* VG_(clo_log_fname_unexpanded) = NULL;
+Char* VG_(clo_xml_fname_unexpanded) = NULL;
+
+// If --log-file=ABC%pXYZ is specified, we'd like to have separate log files
+// for each forked child.
+// If %p is present in the --log-file option, this function creates
+// a new log file and redirects the child's output to it.
+static void open_new_logfile_for_forked_child(void)
+{
+   Int tmp_fd = -1;
+
+   if (VG_(log_output_sink).is_socket == False && VG_(clo_log_fname_unexpanded) != NULL) {
+     tmp_fd = reopen_output_fd(False);
+     VG_(log_output_sink).fd = VG_(safe_fd)(tmp_fd);
+   }
+
+   if (VG_(xml_output_sink).is_socket == False && VG_(clo_xml_fname_unexpanded) != NULL) {
+     tmp_fd = reopen_output_fd(True);
+     VG_(xml_output_sink).fd = VG_(safe_fd)(tmp_fd);
+   }
+
+   print_preamble(False, NULL);
+}
+
 void VG_(do_atfork_child)(ThreadId tid)
 {
    Int i;
+
+   open_new_logfile_for_forked_child();
 
    for (i = 0; i < n_atfork; i++)
       if (atforks[i].child != NULL)

@@ -64,6 +64,9 @@
 #define VEX_TRC_JMP_CLIENTREQ  65  /* do a client req before continuing */
 #define VEX_TRC_JMP_YIELD      67  /* yield to thread sched 
                                       before continuing */
+#define VEX_TRC_JMP_YIELD_NOREDIR 111  /* yield to thread sched before
+                                          continuing AND jump to undirected
+                                          guest addr */
 #define VEX_TRC_JMP_NODECODE   69  /* next instruction is not decodable */
 #define VEX_TRC_JMP_MAPFAIL    71  /* address translation failed */
 

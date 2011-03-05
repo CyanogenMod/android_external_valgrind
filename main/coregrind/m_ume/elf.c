@@ -43,6 +43,7 @@
 #include "pub_core_mallocfree.h"    // VG_(malloc), VG_(free)
 #include "pub_core_syscall.h"       // VG_(strerror)
 #include "pub_core_ume.h"           // self
+#include "pub_tool_libcproc.h"      // VG_(getenv)
 
 #include "priv_ume.h"
 
@@ -492,8 +493,16 @@ Int VG_(load_ELF)(Int fd, const HChar* name, /*MOD*/ExeInfo* info)
 
       VG_(free)(interp->p);
       VG_(free)(interp);
-   } else
+   } else {
+      Char *exit_if_static = VG_(getenv)("VALGRIND_EXIT_IF_STATIC");
+      if (exit_if_static && VG_(strcmp)(exit_if_static, "0") != 0) {
+        VG_(printf)("******* You are running Valgrind on a static binary: %s\n",
+                    name);
+        VG_(printf)("******* This is not supported, exiting\n");
+        VG_(exit)(1);
+      }
       entry = (void *)(ebase + e->e.e_entry);
+   }
 
    info->exe_base = minaddr + ebase;
    info->exe_end  = maxaddr + ebase;

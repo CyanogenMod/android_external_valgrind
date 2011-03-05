@@ -288,6 +288,8 @@ extern SysRes VG_(am_sbrk_anon_float_valgrind)( SizeT cszB );
    mapping in object files to read their debug info.  */
 extern SysRes VG_(am_mmap_file_float_valgrind)
    ( SizeT length, UInt prot, Int fd, Off64T offset );
+extern SysRes VG_(am_mmap_file_float_valgrind_with_flags)
+   ( SizeT length, UInt prot, UInt flags, Int fd, Off64T offset );
 
 /* Unmap the given address range and update the segment array
    accordingly.  This fails if the range isn't valid for the client.

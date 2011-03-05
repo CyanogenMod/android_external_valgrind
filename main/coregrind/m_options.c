@@ -98,6 +98,8 @@ Bool   VG_(clo_wait_for_gdb)   = False;
 VgSmc  VG_(clo_smc_check)      = Vg_SmcStack;
 HChar* VG_(clo_kernel_variant) = NULL;
 Bool   VG_(clo_dsymutil)       = False;
+Char*  VG_(clo_memfs_malloc_path) = NULL;
+Int    VG_(clo_memfs_page_size)  = 2048;  /* 2M */
 
 
 /*====================================================================*/

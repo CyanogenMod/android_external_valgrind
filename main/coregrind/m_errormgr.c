@@ -511,6 +511,34 @@ void do_actions_on_error(Error* err, Bool allow_db_attach)
       VG_(clo_gen_suppressions) = 0;
 }
 
+// See https://bugs.kde.org/show_bug.cgi?id=265803 and b/3423996
+static Bool seen_pc_with_no_function_name_nor_object_file_name = False;
+
+static Bool ErrHasNoFunctionNamesNorObjectFileNames(Error *err) {
+  // boil out if the stack trace has no function/object names.
+  StackTrace ips      = VG_(get_ExeContext_StackTrace)(err->where);
+  UWord      n_ips    = VG_(get_ExeContext_n_ips)(err->where);
+  UWord i;
+  for (i = 0; i < n_ips; i++) {
+    Addr ip = ips[i];
+    Char buffer[1024];
+    if (VG_(get_fnname)(ip, buffer, sizeof(buffer))) {
+      return False;
+    }
+    if (VG_(get_objname)(ip, buffer, sizeof(buffer))) {
+      return False;
+    }
+  }
+  if (!seen_pc_with_no_function_name_nor_object_file_name)
+    VG_(umsg)("\n\n\nWARNING: Valgrind encountered a stack trace which has\n"
+              "no function names nor object file names.\n"
+              "Unless your program has a dynamically generated code (e.g. it is a JIT)\n"
+              "something is very much wrong with your binary's debug info.\n"
+              "See https://bugs.kde.org/show_bug.cgi?id=265803 and b/3423996\n\n\n"
+             );
+  seen_pc_with_no_function_name_nor_object_file_name = True;
+  return True;
+}
 
 /* Prints an error.  Not entirely simple because of the differences
    between XML and text mode output.
@@ -694,6 +722,10 @@ void VG_(maybe_record_error) ( ThreadId tid,
                    "detail than before.\n");
          slowdown_message = True;
       }
+   } else if (seen_pc_with_no_function_name_nor_object_file_name) {
+      // we are probably inside some unknown code -- don't spend too much time 
+      // matching the error reports.
+      exe_res = Vg_LowRes;
    }
 
    /* Build ourselves the error */
@@ -713,7 +745,8 @@ void VG_(maybe_record_error) ( ThreadId tid,
             p->supp->count++;
             n_errs_suppressed++;	 
          } else {
-            n_errs_found++;
+            if (!seen_pc_with_no_function_name_nor_object_file_name)
+              n_errs_found++;
          }
 
          /* Move p to the front of the list so that future searches
@@ -775,6 +808,10 @@ void VG_(maybe_record_error) ( ThreadId tid,
    p->next = errors;
    p->supp = is_suppressible_error(&err);
    errors  = p;
+
+   if (ErrHasNoFunctionNamesNorObjectFileNames(p))
+     return;
+
    if (p->supp == NULL) {
       n_err_contexts++;
       n_errs_found++;

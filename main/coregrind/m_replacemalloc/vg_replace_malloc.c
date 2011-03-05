@@ -269,8 +269,8 @@ ALLOC_or_BOMB(VG_Z_LIBC_SONAME,       __builtin_new,  __builtin_new);
 
 
 /*---------------------- new nothrow ----------------------*/
-
 // operator new(unsigned, std::nothrow_t const&), GNU mangling
+
 #if VG_WORDSIZE == 4
  ALLOC_or_NULL(VG_Z_LIBSTDCXX_SONAME, _ZnwjRKSt9nothrow_t,  __builtin_new);
  ALLOC_or_NULL(VG_Z_LIBC_SONAME,      _ZnwjRKSt9nothrow_t,  __builtin_new);
@@ -695,7 +695,11 @@ MALLOC_TRIM(VG_Z_LIBC_SONAME, malloc_trim);
           || (alignment & (alignment - 1)) != 0) \
          return VKI_EINVAL; \
       \
-      mem = VG_REPLACE_FUNCTION_ZU(VG_Z_LIBC_SONAME,memalign)(alignment, size); \
+      /* Round up to minimum alignment if necessary. */ \
+      if (alignment < VG_MIN_MALLOC_SZB) \
+         alignment = VG_MIN_MALLOC_SZB; \
+      \
+      mem = (void*)VALGRIND_NON_SIMD_CALL2( info.tl_memalign, alignment, size); \
       \
       if (mem != NULL) { \
         *memptr = mem; \
@@ -842,6 +846,112 @@ ZONE_CHECK(VG_Z_LIBC_SONAME, malloc_zone_check);
 #endif
 
 #endif
+
+void I_WRAP_SONAME_FNNAME_ZZ(NONE, StopForDebuggerInit) (void *arg);
+void I_WRAP_SONAME_FNNAME_ZZ(NONE, StopForDebuggerInit) (void *arg) {
+  OrigFn fn;
+  VALGRIND_GET_ORIG_FN(fn);
+  CALL_FN_v_W(fn, arg);
+  int res;
+  VALGRIND_DO_CLIENT_REQUEST(res, 0, VG_USERREQ__NACL_MEM_START, arg, 0, 0, 0, 0);
+}
+
+int I_WRAP_SONAME_FNNAME_ZZ(NONE, GioMemoryFileSnapshotCtor) (void *a, char *file);
+int I_WRAP_SONAME_FNNAME_ZZ(NONE, GioMemoryFileSnapshotCtor) (void *a, char *file) {
+  OrigFn fn;
+  int ret;
+  VALGRIND_GET_ORIG_FN(fn);
+  CALL_FN_W_WW(ret, fn, a, file);
+  int res;
+  VALGRIND_DO_CLIENT_REQUEST(res, 0, VG_USERREQ__NACL_FILE, file, 0, 0, 0, 0);
+  return ret;
+}
+
+/* Handle tcmalloc (http://code.google.com/p/google-perftools/) */
+
+/* tc_ functions (used when tcmalloc is running in release mode) */
+ALLOC_or_NULL(NONE,tc_malloc,malloc);
+ALLOC_or_BOMB(NONE,tc_new,__builtin_new);
+ALLOC_or_NULL(NONE,tc_new_nothrow,__builtin_new);
+ALLOC_or_BOMB(NONE,tc_newarray,__builtin_vec_new);
+ALLOC_or_NULL(NONE,tc_newarray_nothrow,__builtin_vec_new);
+FREE(NONE,tc_free,free);
+FREE(NONE,tc_cfree,free);
+FREE(NONE,tc_delete,__builtin_delete);
+FREE(NONE,tc_delete_nothrow,__builtin_delete);
+FREE(NONE,tc_deletearray,__builtin_vec_delete);
+FREE(NONE,tc_deletearray_nothrow,__builtin_vec_delete);
+CALLOC(NONE,tc_calloc);
+REALLOC(NONE,tc_realloc);
+VALLOC(NONE,tc_valloc);
+MEMALIGN(NONE,tc_memalign);
+MALLOPT(NONE,tc_mallopt);
+POSIX_MEMALIGN(NONE,tc_posix_memalign);
+MALLOC_USABLE_SIZE(NONE,tc_malloc_size);
+MALLINFO(NONE,tc_mallinfo);
+
+/* Python */
+ALLOC_or_NULL(NONE, PyObject_Malloc,   malloc);
+FREE(NONE,          PyObject_Free,     free);
+REALLOC(NONE,       PyObject_Realloc);
+
+/* Interceptors for custom malloc functions in user code
+   (NONE, malloc). We need these to intercept tcmalloc in debug builds.
+   TODO(kcc): get rid of these once we have tc_malloc/tc_new/etc
+   in tcmalloc's debugallocation.cc
+ */
+ALLOC_or_NULL(NONE,  malloc,               malloc);
+ALLOC_or_BOMB(NONE,  _Znwj,                __builtin_new);
+ALLOC_or_BOMB(NONE,  _Znwm,                __builtin_new);
+ALLOC_or_NULL(NONE,  _ZnwjRKSt9nothrow_t,  __builtin_new);
+ALLOC_or_NULL(NONE,  _ZnwmRKSt9nothrow_t,  __builtin_new);
+ALLOC_or_BOMB(NONE,  _Znaj,                __builtin_vec_new);
+ALLOC_or_BOMB(NONE,  _Znam,                __builtin_vec_new);
+ALLOC_or_NULL(NONE,  _ZnajRKSt9nothrow_t,  __builtin_vec_new);
+ALLOC_or_NULL(NONE,  _ZnamRKSt9nothrow_t,  __builtin_vec_new);
+FREE(NONE,  free,                 free );
+FREE(NONE,  cfree,                free );
+FREE(NONE,  _ZdlPv,               __builtin_delete );
+FREE(NONE,  _ZdlPvRKSt9nothrow_t, __builtin_delete );
+FREE(NONE,  _ZdaPv,               __builtin_vec_delete );
+FREE(NONE,  _ZdaPvRKSt9nothrow_t, __builtin_vec_delete );
+CALLOC(NONE,   calloc);
+REALLOC(NONE,  realloc);
+MEMALIGN(NONE, memalign);
+VALLOC(NONE,   valloc);
+MALLOPT(NONE,  mallopt);
+MALLOC_TRIM(NONE,            malloc_trim);
+POSIX_MEMALIGN(NONE,         posix_memalign);
+MALLOC_USABLE_SIZE(NONE,     malloc_usable_size);
+MALLINFO(NONE,               mallinfo);
+
+// TODO(kcc): these are interceptors for bash's malloc.
+// The bash interpretor has functions malloc() and sh_malloc()
+// as well as free() and sh_free(). And sometimes they are called
+// inconsistently (malloc, then sh_free).
+// So, if we intercept malloc/free, we also need to intercept
+// sh_malloc/sh_free.
+//
+// Standard valgrind does not intercept user's malloc, so it does not have this
+// problem.
+// 
+// Get rid of these once we are able to intercept tcmalloc
+// w/o intercepting (NONE,malloc)
+ALLOC_or_NULL(NONE,       sh_malloc,   malloc);
+FREE(NONE,                sh_free,     free );
+FREE(NONE,                sh_cfree,    free );
+CALLOC(NONE,              sh_calloc);
+REALLOC(NONE,             sh_realloc);
+MEMALIGN(NONE,            sh_memalign);
+VALLOC(NONE,              sh_valloc);
+
+/*------- alternative to RUNNING_ON_VALGRIND client request -----*/
+
+#define ANN_FUNC0(ret_ty, f) \
+    ret_ty I_WRAP_SONAME_FNNAME_ZZ(NONE,f)(void); \
+    ret_ty I_WRAP_SONAME_FNNAME_ZZ(NONE,f)(void)
+
+ANN_FUNC0(int, RunningOnValgrind) { return 1; }
 
 
 /* All the code in here is unused until this function is called */

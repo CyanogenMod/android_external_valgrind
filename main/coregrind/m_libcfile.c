@@ -209,6 +209,14 @@ OffT VG_(lseek) ( Int fd, OffT offset, Int whence )
       change VG_(pread) and all other usage points. */
 }
 
+extern Int VG_(ftruncate) ( Int fd, OffT length ) {
+#if defined (VGO_linux)
+   SysRes res = VG_(do_syscall2)(__NR_ftruncate, fd, length);
+   return sr_isError(res) ? (-1) : sr_Res(res);
+#else
+   return -1;  /*UNIMPLEMENTED*/
+#endif
+}
 
 /* stat/fstat support.  It's uggerly.  We have impedance-match into a
    'struct vg_stat' in order to have a single structure that callers

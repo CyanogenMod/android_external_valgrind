@@ -111,6 +111,15 @@ case "${gcc_version}" in
 	;;
 esac
 
+AC_PROG_EGREP
+AC_DEFINE_UNQUOTED(EGREP_PATH, "$EGREP", [path to egrep])
+
+AC_PATH_PROG(STRINGS, strings)
+AC_DEFINE_UNQUOTED(STRINGS_PATH, "$STRINGS", [path to strings])
+
+AC_PATH_PROG(SH, sh)
+AC_DEFINE_UNQUOTED(SH_PATH, "$SH", [path to sh])
+
 #----------------------------------------------------------------------------
 # Arch/OS/platform tests.
 #----------------------------------------------------------------------------
@@ -785,6 +794,31 @@ case "${GLIBC_VERSION}" in
 esac
 
 AC_SUBST(GLIBC_VERSION)
+
+if test x$ac_cv_header_features_h = xyes; then
+  rm -f conftest.$ac_ext
+  cat <<_ACEOF >conftest.$ac_ext
+#include <features.h>
+#if defined(__GNU_LIBRARY__) && defined(__GLIBC__) && defined(__GLIBC_MINOR__)
+glibc major version is: __GLIBC__
+#endif
+_ACEOF
+  GLIBC_MAJOR="`$CPP conftest.$ac_ext | $SED -n 's/^glibc major version is: //p'`"
+fi
+
+AC_MSG_CHECKING([the GLIBC_MAJOR version])
+
+case "${GLIBC_MAJOR}" in
+     2)
+	AC_MSG_RESULT(2.X family)
+	AC_DEFINE([GLIBC_2_X], 1, [Define to 1 if you're using glibc 2.x.x])
+	DEFAULT_SUPP="glibc-X.X.supp ${DEFAULT_SUPP}"
+	;;
+     *)
+	;;
+esac
+
+AC_SUBST(GLIBC_MAJOR)
 
 
 # Add default suppressions for the X client libraries.  Make no
@@ -1917,6 +1951,7 @@ AC_CONFIG_FILES([
    valgrind.spec
    valgrind.pc
    glibc-2.X.supp
+   glibc-X.X.supp
    docs/Makefile 
    tests/Makefile 
    tests/vg_regtest 

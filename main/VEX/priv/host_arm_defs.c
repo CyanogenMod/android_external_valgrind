@@ -2891,6 +2891,8 @@ Int emit_ARMInstr ( UChar* buf, Int nbuf, ARMInstr* i,
             case Ijk_EmWarn:
             case Ijk_MapFail:
                goto unhandled_jk;
+            case Ijk_YieldNoRedir:
+               trc = VEX_TRC_JMP_YIELD_NOREDIR; break;
             case Ijk_NoDecode:
                trc = VEX_TRC_JMP_NODECODE; break;
             case Ijk_TInval:

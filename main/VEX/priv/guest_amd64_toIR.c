@@ -8833,12 +8833,16 @@ static IRExpr* dis_PALIGNR_XMM_helper ( IRTemp hi64,
    if effective_addr is not 16-aligned.  This is required behaviour
    for some SSE3 instructions and all 128-bit SSSE3 instructions.
    This assumes that guest_RIP_curr_instr is set correctly! */
+/* TODO(glider): we've replaced the 0xF mask with 0x0, effectively disabling
+ * the check. Need to enable it once TSan stops generating unaligned
+ * accesses in the wrappers.
+ * See http://code.google.com/p/data-race-test/issues/detail?id=49 */
 static void gen_SEGV_if_not_16_aligned ( IRTemp effective_addr )
 {
    stmt(
       IRStmt_Exit(
          binop(Iop_CmpNE64,
-               binop(Iop_And64,mkexpr(effective_addr),mkU64(0xF)),
+               binop(Iop_And64,mkexpr(effective_addr),mkU64(0x0)),
                mkU64(0)),
          Ijk_SigSEGV,
          IRConst_U64(guest_RIP_curr_instr)
@@ -16924,7 +16928,7 @@ DisResult disInstr_AMD64_WRK (
       /* Note.  There is no encoding for a 32-bit popf in 64-bit mode.
          So sz==4 actually means sz==8. */
       if (haveF2orF3(pfx)) goto decode_failure;
-      vassert(sz == 2 || sz == 4);
+      vassert(sz == 2 || sz == 4 || sz == 8);
       if (sz == 4) sz = 8;
       if (sz != 8) goto decode_failure; // until we know a sz==2 test case exists
       t1 = newTemp(Ity_I64); t2 = newTemp(Ity_I64);
@@ -18081,11 +18085,11 @@ DisResult disInstr_AMD64_WRK (
          if (haveF2orF3(pfx)) goto decode_failure;
          if (archinfo->hwcaps == (VEX_HWCAPS_AMD64_SSE3
                                   |VEX_HWCAPS_AMD64_CX16)) {
-            //fName = "amd64g_dirtyhelper_CPUID_sse3_and_cx16";
-            //fAddr = &amd64g_dirtyhelper_CPUID_sse3_and_cx16; 
+            fName = "amd64g_dirtyhelper_CPUID_sse3_and_cx16";
+            fAddr = &amd64g_dirtyhelper_CPUID_sse3_and_cx16; 
             /* This is a Core-2-like machine */
-            fName = "amd64g_dirtyhelper_CPUID_sse42_and_cx16";
-            fAddr = &amd64g_dirtyhelper_CPUID_sse42_and_cx16;
+            //fName = "amd64g_dirtyhelper_CPUID_sse42_and_cx16";
+            //fAddr = &amd64g_dirtyhelper_CPUID_sse42_and_cx16;
             /* This is a Core-i5-like machine */
          }
          else {

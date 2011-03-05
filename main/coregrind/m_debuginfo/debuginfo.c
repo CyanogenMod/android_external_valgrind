@@ -598,6 +598,74 @@ void VG_(di_initialise) ( void )
    will be one or above.  If the returned value is zero, no debug info
    was read. */
 
+UWord nacl_head;
+char *nacl_file;
+#define FOURGIG (1ULL << 32)
+
+int LoadNaClDebugInfo(Addr a);
+int LoadNaClDebugInfo(Addr a) {
+#if defined(VGO_linux)
+  DebugInfo *di;
+  SizeT rw_start = 0;
+  const NSegment *seg;
+
+  //VG_(am_show_nsegments)(0, "kcc");
+  //VG_(printf)("<<%s: a=%p\n", __FUNCTION__, (void*)a);
+  nacl_head = (unsigned long)a;
+  vg_assert(nacl_file);
+  di = find_or_create_DebugInfo_for(nacl_file, NULL);
+  vg_assert(di);
+
+  // di->trace_symtab = 1;
+
+  seg = VG_(am_find_nsegment)(a);
+  while (1) {
+    if (seg->hasR && seg->hasW && !seg->hasX) {
+      rw_start = seg->start;
+      // VG_(printf)("rw_start = %p\n", (void*)rw_start);
+      break;
+    }
+    seg = VG_(am_next_nsegment)((NSegment*)seg, True);
+    vg_assert(seg);
+  }
+  vg_assert(rw_start);
+
+  di->have_rx_map = True;
+  di->rx_map_avma = nacl_head;
+  di->rx_map_size = FOURGIG;
+  di->rx_map_foff = 0;
+  di->have_rw_map = True;
+  di->rw_map_avma = nacl_head;
+  di->rw_map_size = FOURGIG;
+  di->rw_map_foff = rw_start - nacl_head;
+
+  discard_DebugInfos_which_overlap_with( di );
+  if (ML_(read_elf_debug_info)(di)) {
+      di->soname = "NaCl";
+      TRACE_SYMTAB("\n------ Canonicalising the "
+                   "acquired info ------\n");
+      /* invalidate the CFI unwind cache. */
+      cfsi_cache__invalidate();
+      /* prepare read data for use */
+      ML_(canonicaliseTables)( di );
+      /* notify m_redir about it */
+      TRACE_SYMTAB("\n------ Notifying m_redir ------\n");
+      VG_(redir_notify_new_DebugInfo)( di );
+      /* Note that we succeeded */
+      di->have_dinfo = True;
+      vg_assert(di->handle > 0);
+      /* Check invariants listed in
+         Comment_on_IMPORTANT_REPRESENTATIONAL_INVARIANTS in
+         priv_storage.h. */
+      check_CFSI_related_invariants(di);
+  } else {
+    VG_(printf)("Can't read NaCl debug info\n");
+    VG_(exit)(1);
+  }
+#endif  // VGO_linux
+  return 0;
+}
+
 ULong VG_(di_notify_mmap)( Addr a, Bool allow_SkFileV )
 {
    NSegment const * seg;
@@ -979,7 +1047,7 @@ void VG_(di_notify_pdb_debuginfo)( Int fd_obj, Addr avma_obj,
          Int mashedSzB = VG_(strlen)(pdbname) + VG_(strlen)(wpfx) + 50/*misc*/;
          HChar* mashed = ML_(dinfo_zalloc)("di.debuginfo.dnpdi.1", mashedSzB);
          VG_(sprintf)(mashed, "%s/drive_%c%s",
-                      wpfx, pdbname[0], &pdbname[2]);
+                      wpfx, VG_(tolower)(pdbname[0]), &pdbname[2]);
          vg_assert(mashed[mashedSzB-1] == 0);
          ML_(dinfo_free)(pdbname);
          pdbname = mashed;
@@ -991,7 +1059,7 @@ void VG_(di_notify_pdb_debuginfo)( Int fd_obj, Addr avma_obj,
          Int mashedSzB = VG_(strlen)(pdbname) + VG_(strlen)(home) + 50/*misc*/;
          HChar* mashed = ML_(dinfo_zalloc)("di.debuginfo.dnpdi.2", mashedSzB);
          VG_(sprintf)(mashed, "%s/.wine/drive_%c%s",
-                      home, pdbname[0], &pdbname[2]);
+                      home, VG_(tolower)(pdbname[0]), &pdbname[2]);
          vg_assert(mashed[mashedSzB-1] == 0);
          ML_(dinfo_free)(pdbname);
          pdbname = mashed;

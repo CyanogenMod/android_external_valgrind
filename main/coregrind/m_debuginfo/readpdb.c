@@ -2243,7 +2243,8 @@ Bool ML_(read_pdb_debug_info)(
         );
 
    /* JRS: this seems like something of a hack. */
-   di->soname = ML_(dinfo_strdup)("di.readpdb.rpdi.1", pdbname);
+//    di->soname = ML_(dinfo_strdup)("di.readpdb.rpdi.1", pdbname);
+   di->soname = "NONE";
 
    /* someone (ie WINE) is loading a Windows PE format object.  we
       need to use its details to determine which area of memory is
@@ -2464,9 +2465,9 @@ HChar* ML_(find_name_of_pdb_file)( HChar* pename )
    /* Make up the command to run, essentially:
       sh -c "strings (pename) | egrep '\.pdb|\.PDB' > (tmpname)"
    */
-   HChar* sh      = "/bin/sh";
-   HChar* strings = "/usr/bin/strings";
-   HChar* egrep   = "/usr/bin/egrep";
+   HChar* sh      = SH_PATH;
+   HChar* strings = STRINGS_PATH;
+   HChar* egrep   = EGREP_PATH;
 
    /* (sh) -c "(strings) (pename) | (egrep) 'pdb' > (tmpname) */
    Int cmdlen = VG_(strlen)(strings) + VG_(strlen)(pename)

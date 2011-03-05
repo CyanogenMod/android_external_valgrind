@@ -681,6 +681,8 @@ Bool ML_(read_macho_debug_info)( struct _DebugInfo* di )
    if (VG_(clo_verbosity) > 1)
       VG_(message)(Vg_DebugMsg,
                    "%s (%#lx)\n", di->filename, di->rx_map_avma );
+   if (VG_(clo_xml))
+      VG_(printf_xml)("<load_obj><obj>%s</obj><ip>%#lx</ip></load_obj>\n",  di->filename, di->rx_map_avma);
 
    /* This should be ensured by our caller. */
    vg_assert(di->have_rx_map);
