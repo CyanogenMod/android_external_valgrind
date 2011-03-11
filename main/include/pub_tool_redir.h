@@ -203,7 +203,9 @@
 
 /* --- Soname of the pthreads library. --- */
 
-#if defined(VGO_linux) || defined(VGO_aix5)
+#if defined(ANDROID)
+#  define  VG_Z_LIBPTHREAD_SONAME  libcZdsoZa            // libc.so*
+#elif defined(VGO_linux) || defined(VGO_aix5)
 #  define  VG_Z_LIBPTHREAD_SONAME  libpthreadZdsoZd0     // libpthread.so.0
 #elif defined(VGO_darwin)
 #  define  VG_Z_LIBPTHREAD_SONAME  libSystemZdZaZddylib  // libSystem.*.dylib
