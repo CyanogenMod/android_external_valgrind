@@ -356,10 +356,10 @@ inline uintptr_t tsan_bswap(uintptr_t x) {
   return __builtin_bswap64(x);
 #elif defined(VGP_arm_linux) && VG_WORDSIZE == 4
   return __builtin_bswap32(x);
-#elif defined(__GNUC__) && __WORDSIZE == 64
+#elif defined(__GNUC__) && VG_WORDSIZE == 8
   __asm__("bswapq %0" : "=r" (x) : "0" (x));
   return x;
-#elif defined(__GNUC__) && __WORDSIZE == 32
+#elif defined(__GNUC__) && VG_WORDSIZE == 4
   __asm__("bswapl %0" : "=r" (x) : "0" (x));
   return x;
 #elif defined(_WIN32)
