@@ -98,7 +98,7 @@ LOCAL_MODULE_PATH := $(TARGET_OUT_SHARED_LIBRARIES)/valgrind
 LOCAL_ARM_MODE := arm
 LOCAL_STRIP_MODULE := false
 LOCAL_NO_CRT := true
-LOCAL_PRELINK_MODULE := false
+
 LOCAL_SRC_FILES := \
 	ts_valgrind_intercepts.c
 LOCAL_C_INCLUDES := $(common_includes)
