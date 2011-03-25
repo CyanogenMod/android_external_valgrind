@@ -203,6 +203,7 @@ typedef unsigned int	        vki_uint;
 //----------------------------------------------------------------------
 
 typedef		__vki_s32	vki_int32_t;
+typedef		__vki_s64	vki_int64_t;
 
 typedef		__vki_u8	vki_uint8_t;
 typedef		__vki_u16	vki_uint16_t;
@@ -2742,6 +2743,31 @@ struct vki_ashmem_pin {
 #define VKI_ASHMEM_UNPIN _VKI_IOW(__VKI_ASHMEMIOC, 8, struct vki_ashmem_pin)
 #define VKI_ASHMEM_GET_PIN_STATUS _VKI_IO(__VKI_ASHMEMIOC, 9)
 #define VKI_ASHMEM_PURGE_ALL_CACHES _VKI_IO(__VKI_ASHMEMIOC, 10)
+
+//----------------------------------------------------------------------
+// From kernel/common/include/linux/binder.h
+//----------------------------------------------------------------------
+
+struct vki_binder_write_read {
+ signed long write_size;
+ signed long write_consumed;
+ unsigned long write_buffer;
+ signed long read_size;
+ signed long read_consumed;
+ unsigned long read_buffer;
+};
+
+struct vki_binder_version {
+ signed long protocol_version;
+};
+
+#define VKI_BINDER_WRITE_READ _VKI_IOWR('b', 1, struct vki_binder_write_read)
+#define VKI_BINDER_SET_IDLE_TIMEOUT _VKI_IOW('b', 3, vki_int64_t)
+#define VKI_BINDER_SET_MAX_THREADS _VKI_IOW('b', 5, vki_size_t)
+#define VKI_BINDER_SET_IDLE_PRIORITY _VKI_IOW('b', 6, int)
+#define VKI_BINDER_SET_CONTEXT_MGR _VKI_IOW('b', 7, int)
+#define VKI_BINDER_THREAD_EXIT _VKI_IOW('b', 8, int)
+#define VKI_BINDER_VERSION _VKI_IOWR('b', 9, struct vki_binder_version)
 
 #endif // ANDROID
 
