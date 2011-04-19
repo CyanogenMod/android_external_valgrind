@@ -20,6 +20,7 @@ LOCAL_MODULE_TAGS := optional
 LOCAL_ARM_MODE := arm
 LOCAL_CFLAGS += -DDYNAMIC_ANNOTATIONS_ENABLED=1
 LOCAL_SRC_FILES := dynamic_annotations.c
+LOCAL_PRELINK_MODULE := false
 
 # Remove this when the all toolchains are GCC 4.4
 ifeq ($(TARGET_ARCH),arm)
