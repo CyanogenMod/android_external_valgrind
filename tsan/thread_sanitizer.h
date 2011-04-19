@@ -85,16 +85,19 @@ struct FLAGS {
   bool        show_valgrind_context;  // debug-only
   bool        suggest_happens_before_arcs;
   bool        show_pc;
+  bool        full_stack_frames;
   bool        color;  // Colorify terminal output.
   bool        html;  // Output in html format.
   bool        show_pid;
 
   intptr_t  debug_level;
+  bool        save_ignore_context;  // print stack if ignore_end was forgotten.
   vector<string> debug_phase;
   intptr_t  trace_level;
 
   intptr_t     dry_run;
   intptr_t     max_sid;
+  intptr_t     max_sid_before_flush;
   intptr_t     max_mem_in_mb;
   intptr_t     num_callers_in_history;
   intptr_t     flush_period;
@@ -195,6 +198,11 @@ struct CallStack: public CallStackPod {
 struct Thread;
 extern void ThreadSanitizerInit();
 extern void ThreadSanitizerFini();
+// TODO(glider): this is a temporary solution to avoid deadlocks after fork().
+#ifdef TS_LLVM
+extern void ThreadSanitizerLockAcquire();
+extern void ThreadSanitizerLockRelease();
+#endif
 extern void ThreadSanitizerHandleOneEvent(Event *event);
 extern Thread *ThreadSanitizerGetThreadByTid(int32_t tid);
 extern void ThreadSanitizerHandleTrace(int32_t tid, TraceInfo *trace_info,

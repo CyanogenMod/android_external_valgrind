@@ -10,16 +10,16 @@ STLPORT_ROOT=../third_party/stlport
 GTEST_ROOT=../third_party/googletest
 OFFLINE=1
 
-TS_VERSION=$(shell /usr/bin/svnversion)
+TS_VERSION=$(shell svnversion)
 
 COPT=-O -fno-omit-frame-pointer
 CWARN=-Wall -Wmissing-prototypes -Wshadow -Wpointer-arith -Wstrict-prototypes \
-      -Wmissing-declarations -Wno-format-zero-length  \
+      -Wmissing-declarations -Wno-format-zero-length \
       -fno-strict-aliasing -Wno-long-long -Wno-pointer-sign \
       -Wdeclaration-after-statement
 CFLAGS=-g $(COPT) $(CWARN) -fno-strict-aliasing -fno-stack-protector -fpic
 CXXOPT=-O2
-CXXFLAGS=$(CXXOPT) -g -Wall  -Wno-deprecated -fno-exceptions # -Wvla
+CXXFLAGS=$(CXXOPT) -g -Wall -Wno-deprecated -fno-exceptions # -Wvla
 LDFLAGS=
 
 OFFLINE_DEFINES=-DTS_OFFLINE=1
@@ -29,12 +29,12 @@ VG_DEFINES=-DVGA_$(ARCH)=1 -DVGO_$(OS)=1 -DVGP_$(ARCH_OS)=1 -D_STLP_NO_IOSTREAMS
 VG_INCLUDES=-I$(VALGRIND_ROOT) -I$(VALGRIND_ROOT)/include -I$(VALGRIND_ROOT)/VEX/pub -I$(STLPORT_ROOT)
 
 PIN_CXXFLAGS_L=-fPIC
-PIN_DEFINES=-DBIGARRAY_MULTIPLIER=1 -DUSING_XED  -DTARGET_$(PIN_ARCH2)  -DHOST_$(PIN_ARCH2)   -DTARGET_LINUX -DTS_PIN=1
+PIN_DEFINES=-DBIGARRAY_MULTIPLIER=1 -DUSING_XED -DTARGET_$(PIN_ARCH2)  -DHOST_$(PIN_ARCH2)   -DTARGET_LINUX -DTS_PIN=1
 PIN_INCLUDES=-I$(PIN_ROOT)/source/include -I$(PIN_ROOT)/source/include/gen \
              -I$(PIN_ROOT)/extras/xed2-$(PIN_ARCH)/include -I$(PIN_ROOT)/extras/components/include
 PIN_LIBPATHS=-L$(PIN_ROOT)/extras/xed2-$(PIN_ARCH)/lib -L$(PIN_ROOT)/$(PIN_ARCH)/lib -L$(PIN_ROOT)/$(PIN_ARCH)/lib-ext
 PIN_LDFLAGS=-g -shared -Wl,-Bsymbolic -Wl,--version-script=$(PIN_ROOT)/source/include/pintool.ver
-PIN_LIBS= -lpin  -lxed -ldwarf -lelf -ldl -lpthread
+PIN_LIBS= -lpin -lxed -ldwarf -lelf -ldl -lpthread
 
 DR_CXXFLAGS=-fPIC -fno-rtti -fno-stack-protector
 DR_DEFINES=-D$(DR_OS) -D$(DR_ARCH)
@@ -81,7 +81,7 @@ endif
 
 ifeq ($(OS), linux)
   PIN_CXXFLAGS=$(PIN_CXXFLAGS_L)
-  VG_LD_FLAGS=-Wl,--build-id=none  -Wl,-Ttext=0x38000000  -static -nodefaultlibs -nostartfiles -u _start 
+  VG_LD_FLAGS=-Wl,--build-id=none -Wl,-Ttext=0x38000000 -static -nodefaultlibs -nostartfiles -u _start 
   VG_LD_PRELOAD_FLAGS= -nodefaultlibs -shared -Wl,-z,interpose,-z,initfirst
   DR_OS=LINUX
   STRIP=strip -g  # keep some symbols for profiling.
@@ -101,12 +101,12 @@ endif
   VG_CXXFLAGS+=-fno-weak -bind_at_load -fno-PIC
 else ifeq ($(OS), windows)
   VALGRIND_ROOT= # no valgrind on windows :(
-  CXXFLAGS=/c /Zi /MT /EHs- /EHa- /wd4530   /D_CRT_SECURE_NO_DEPRECATE /D_SECURE_SCL=0 /nologo /Gy /Ox /GL
+  CXXFLAGS=/c /Zi /MT /EHs- /EHa- /wd4530 /D_CRT_SECURE_NO_DEPRECATE /D_SECURE_SCL=0 /D_HAS_ITERATOR_DEBUGGING=0 /nologo /Gy /Ox /GL
   PIN_DEFINES=/DTARGET_WINDOWS /DBIGARRAY_MULTIPLIER=1 /DUSING_XED /DTARGET_IA32 /DHOST_IA32a /D_SECURE_SCL=0 -DTS_PIN=1
-  PIN_INCLUDES=/I$(PIN_ROOT)/source/include /I$(PIN_ROOT)/source/include/gen   /I$(PIN_ROOT)/extras/xed2-ia32/include
-  PIN_LDFLAGS=/LTCG /DEBUG /DLL /EXPORT:main /NODEFAULTLIB  /NOLOGO /INCREMENTAL:NO  /OPT:REF  /MACHINE:x86 /ENTRY:Ptrace_DllMainCRTStartup@12 /BASE:0x55000000
+  PIN_INCLUDES=/I$(PIN_ROOT)/source/include /I$(PIN_ROOT)/source/include/gen /I$(PIN_ROOT)/extras/xed2-ia32/include
+  PIN_LDFLAGS=/LTCG /DEBUG /DLL /EXPORT:main /NODEFAULTLIB /NOLOGO /INCREMENTAL:NO /OPT:REF /MACHINE:x86 /ENTRY:Ptrace_DllMainCRTStartup@12 /BASE:0x55000000
   LDFLAGS=/LTCG
-  PIN_LIBPATHS= /LIBPATH:$(PIN_ROOT)/ia32/lib /LIBPATH:$(PIN_ROOT)/ia32/lib-ext  /LIBPATH:$(PIN_ROOT)/extras/xed2-ia32/lib
+  PIN_LIBPATHS= /LIBPATH:$(PIN_ROOT)/ia32/lib /LIBPATH:$(PIN_ROOT)/ia32/lib-ext /LIBPATH:$(PIN_ROOT)/extras/xed2-ia32/lib
   PIN_LIBS=pin.lib libxed.lib libcpmt.lib libcmt.lib pinvm.lib kernel32.lib ntdll-32.lib winmm.lib
   DR_OS=WINDOWS
 else
@@ -128,13 +128,13 @@ l64: l64d l64o
 
 
 l64d:
-	$(MAKE) all OS=linux ARCH=amd64  DEBUG=1
+	$(MAKE) all OS=linux ARCH=amd64 DEBUG=1
 l64o:
-	$(MAKE) all OS=linux ARCH=amd64  DEBUG=0
+	$(MAKE) all OS=linux ARCH=amd64 DEBUG=0
 l32d:
-	$(MAKE) all OS=linux ARCH=x86  DEBUG=1
+	$(MAKE) all OS=linux ARCH=x86 DEBUG=1
 l32o:
-	$(MAKE) all OS=linux ARCH=x86  DEBUG=0
+	$(MAKE) all OS=linux ARCH=x86 DEBUG=0
 la:
 	$(MAKE) all OS=linux ARCH=arm DEBUG=0
 
@@ -224,7 +224,7 @@ $(OUTDIR):
 
 TS_HEADERS=thread_sanitizer.h ts_util.h suppressions.h ignore.h ts_replace.h ts_heap_info.h \
 	   ts_simple_cache.h ts_stats.h ts_lock.h ts_events.h ts_event_names.h \
-	   ts_trace_info.h ts_race_verifier.h \
+	   ts_trace_info.h ts_race_verifier.h dense_multimap.h \
 	   ../dynamic_annotations/dynamic_annotations.h
 ts_event_names.h: ts_events.h
 	sed -n '/^enum/,/^};/ {s/enum EventType/static const char *kEventNames[] = /; s/^  \([A-Z_]\+\)/  "\1"/g; p}' $< > $@
@@ -269,7 +269,7 @@ $(OUTDIR)/vgpreload_tsan$(D)-$(ARCHOS).so: $(P)preload-ts_valgrind_intercepts.o
 	ln -sf `pwd`/$@  $(VALGRIND_INST_ROOT)/lib/valgrind/  # install the symlink into the valgrind inst dir.
 
 $(P)ts_offline$(EXE): $(TS_OFFLINE_OBJECTS)
-	$(LD) $(LDFLAGS) $(ARCHFLAGS) $(LINKO)$@ $^ -static
+	$(LD) $(LDFLAGS) $(ARCHFLAGS) $(LINKO)$@ $^
 
 $(P)suppressions_test$(EXE): $(P)gtest-suppressions_test.$(OBJ) $(P)suppressions.$(OBJ) $(P)common_util.$(OBJ) $(P)ts_util.$(OBJ) $(GTEST_LIB)
 	$(LD) $(LDFLAGS) $(ARCHFLAGS) $(LINKO)$@ $^

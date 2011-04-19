@@ -34,7 +34,8 @@
 // funcions with simpler implementation.
 //
 // The includer must define these macros:
-// REPORT_WRITE_RANGE, REPORT_READ_RANGE, EXTRA_REPLACE_PARAMS, NOINLINE
+// REPORT_WRITE_RANGE, REPORT_READ_RANGE, EXTRA_REPLACE_PARAMS,
+// EXTRA_REPLACE_ARGS, NOINLINE
 // See ts_valgrind_intercepts.c and ts_pin.cc.
 
 #ifndef TS_REPLACE_H_
@@ -100,6 +101,40 @@ static NOINLINE char *Replace_memcpy(EXTRA_REPLACE_PARAMS char *dst,
   REPORT_READ_RANGE(src, i);
   REPORT_WRITE_RANGE(dst, i);
   return dst;
+}
+
+static NOINLINE char *Replace_memmove(EXTRA_REPLACE_PARAMS char *dst,
+                                     const char *src, size_t len) {
+
+  size_t i;
+  if (dst < src) {
+    for (i = 0; i < len; i++) {
+      dst[i] = src[i];
+    }
+  } else {
+    for (i = 0; i < len; i++) {
+      dst[len - i - 1] = src[len - i - 1];
+    }
+  }
+  REPORT_READ_RANGE(src, i);
+  REPORT_WRITE_RANGE(dst, i);
+  return dst;
+}
+
+static NOINLINE int Replace_memcmp(EXTRA_REPLACE_PARAMS const unsigned char *s1,
+                                     const unsigned char *s2, size_t len) {
+  size_t i;
+  int res = 0;
+  for (i = 0; i < len; i++) {
+    if (s1[i] != s2[i]) {
+      res = (int)s1[i] - (int)s2[i];
+      i++;
+      break;
+    }
+  }
+  REPORT_READ_RANGE(s1, i);
+  REPORT_READ_RANGE(s2, i);
+  return res;
 }
 
 static NOINLINE char *Replace_strcpy(EXTRA_REPLACE_PARAMS char *dst,
@@ -173,6 +208,13 @@ static NOINLINE int Replace_strncmp(EXTRA_REPLACE_PARAMS const char *s1,
   if (c1 < c2) return -1;
   if (c1 > c2) return 1;
   return 0;
+}
+
+static NOINLINE char *Replace_strcat(EXTRA_REPLACE_PARAMS char *dest,
+                                     const char *src) {
+  size_t dest_len = Replace_strlen(EXTRA_REPLACE_ARGS dest);
+  Replace_strcpy(EXTRA_REPLACE_ARGS dest + dest_len, src);
+  return dest;
 }
 
 #if defined(TS_VALGRIND)

@@ -36,12 +36,15 @@
 #include "suppressions.h"
 #include "ignore.h"
 #include "ts_lock.h"
+#include "dense_multimap.h"
 #include <stdarg.h>
 // -------- Constants --------------- {{{1
 // Segment ID (SID)      is in range [1, kMaxSID-1]
 // Segment Set ID (SSID) is in range [-kMaxSID+1, -1]
 // This is not a compile-time constant, but it can only be changed at startup.
 int kMaxSID = (1 << 23);
+// Flush state after so many SIDs have been allocated. Set by command line flag.
+int kMaxSIDBeforeFlush;
 
 // Lock ID (LID)      is in range [1, kMaxLID-1]
 // Lock Set ID (LSID) is in range [-kMaxLID+1, -1]
@@ -114,6 +117,16 @@ class TIL {
 static TSLock *ts_lock;
 static TSLock *ts_ignore_below_lock;
 
+#ifdef TS_LLVM
+void ThreadSanitizerLockAcquire() {
+  ts_lock->Lock();
+}
+
+void ThreadSanitizerLockRelease() {
+  ts_lock->Unlock();
+}
+#endif
+
 static INLINE void AssertTILHeld() {
   if (TS_SERIALIZED == 0 && DEBUG_MODE) {
     ts_lock->AssertHeld();
@@ -131,12 +144,7 @@ inline T INTERNAL_ANNOTATE_UNPROTECTED_READ(const volatile T &x) {
   return res;
 }
 
-string PcToRtnNameWithStats(uintptr_t pc, bool demangle) {
-  G_stats->pc_to_rtn_name++;
-  return PcToRtnName(pc, demangle);
-}
-
-static string RemovePrefixFromString(string str) {
+static string RemoveFilePrefix(string str) {
   for (size_t i = 0; i < G_flags->file_prefix_to_cut.size(); i++) {
     string prefix_to_cut = G_flags->file_prefix_to_cut[i];
     size_t pos = str.find(prefix_to_cut);
@@ -158,9 +166,11 @@ string PcToRtnNameAndFilePos(uintptr_t pc) {
   int line_no = -1;
   PcToStrings(pc, G_flags->demangle, &img_name, &rtn_name,
               &file_name, &line_no);
-  file_name = RemovePrefixFromString(file_name);
+  if (G_flags->demangle && !G_flags->full_stack_frames)
+    rtn_name = NormalizeFunctionName(rtn_name);
+  file_name = RemoveFilePrefix(file_name);
   if (file_name == "") {
-    return rtn_name + " " + RemovePrefixFromString(img_name);
+    return rtn_name + " " + RemoveFilePrefix(img_name);
   }
   char buff[10];
   snprintf(buff, sizeof(buff), "%d", line_no);
@@ -280,6 +290,7 @@ const char *c_default = "";
 
 // -------- Forward decls ------ {{{1
 static void ForgetAllStateAndStartOver(Thread *thr, const char *reason);
+static void FlushStateIfOutOfSegments(Thread *thr);
 static int32_t raw_tid(Thread *t);
 // -------- Simple Cache ------ {{{1
 #include "ts_simple_cache.h"
@@ -538,7 +549,9 @@ class StackTrace {
     for (size_t i = 0; i < n; i++) {
       if (!emb_trace[i]) break;
       string rtn_and_file = PcToRtnNameAndFilePos(emb_trace[i]);
-      string rtn = PcToRtnName(emb_trace[i], true);
+      if (rtn_and_file.find("(below main) ") == 0 ||
+          rtn_and_file.find("ThreadSanitizerStartThread ") == 0)
+        break;
 
       if (i == 0) res += c_bold;
       if (G_flags->show_pc) {
@@ -559,6 +572,7 @@ class StackTrace {
         break;
       // ... and after some default functions (see ThreadSanitizerParseFlags())
       // and some more functions specified via command line flag.
+      string rtn = NormalizeFunctionName(PcToRtnName(emb_trace[i], true));
       if (CutStackBelowFunc(rtn))
         break;
     }
@@ -846,14 +860,11 @@ class LockSet {
     }
     LSID res;
     if (lsid.IsSingleton()) {
-      LSSet set;
-      set.insert(lsid.GetSingleton());
-      set.insert(lid);
+      LSSet set(lsid.GetSingleton(), lid);
       G_stats->ls_add_to_singleton++;
       res = ComputeId(set);
     } else {
-      LSSet set = Get(lsid);
-      set.insert(lid);
+      LSSet set(Get(lsid), lid);
       G_stats->ls_add_to_multi++;
       res = ComputeId(set);
     }
@@ -883,10 +894,10 @@ class LockSet {
       return true;
     }
 
-    LSSet set = Get(lsid);
-    LSSet::iterator it = set.find(lid);
-    if (it == set.end()) return false;
-    set.erase(it);
+    LSSet &prev_set = Get(lsid);
+    if (!prev_set.has(lid)) return false;
+    LSSet set(prev_set, LSSet::REMOVE, lid);
+    CHECK(set.size() == prev_set.size() - 1);
     G_stats->ls_remove_from_multi++;
     LSID res = ComputeId(set);
     ls_rem_cache_->Insert(lsid.raw(), lid.raw(), res.raw());
@@ -907,13 +918,13 @@ class LockSet {
     // first is singleton, second is not
     if (lsid1.IsSingleton()) {
       const LSSet &set2 = Get(lsid2);
-      return set2.count(LID(lsid1.raw())) == 0;
+      return set2.has(LID(lsid1.raw())) == false;
     }
 
     // second is singleton, first is not
     if (lsid2.IsSingleton()) {
       const LSSet &set1 = Get(lsid1);
-      return set1.count(LID(lsid2.raw())) == 0;
+      return set1.has(LID(lsid2.raw())) == false;
     }
 
     // LockSets are equal and not empty
@@ -933,7 +944,7 @@ class LockSet {
     const LSSet &set2 = Get(lsid2);
 
     FixedArray<LID> intersection(min(set1.size(), set2.size()));
-    LID *end = set_intersection(set1.begin(), set1.end(),
+    LID *end = std::set_intersection(set1.begin(), set1.end(),
                             set2.begin(), set2.end(),
                             intersection.begin());
     DCHECK(!cache_hit || (ret == (end == intersection.begin())));
@@ -948,8 +959,8 @@ class LockSet {
     if (lsid.IsSingleton())
       return !Lock::LIDtoLock(LID(lsid.raw()))->is_pure_happens_before();
 
-    LSSet set = Get(lsid);
-    for (LSSet::iterator it = set.begin(); it != set.end(); ++it)
+    LSSet &set = Get(lsid);
+    for (LSSet::const_iterator it = set.begin(); it != set.end(); ++it)
       if (!Lock::LIDtoLock(*it)->is_pure_happens_before())
         return true;
     return false;
@@ -1018,7 +1029,7 @@ class LockSet {
   // No instances are allowed.
   LockSet() { }
 
-  typedef multiset<LID> LSSet;
+  typedef DenseMultimap<LID, 3> LSSet;
 
   static LSSet &Get(LSID lsid) {
     ScopedMallocCostCenter cc(__FUNCTION__);
@@ -1029,10 +1040,7 @@ class LockSet {
   }
 
   static LSID ComputeId(const LSSet &set) {
-    if (set.empty()) {
-      // empty lock set has id 0.
-      return LSID(0);
-    }
+    CHECK(set.size() > 0);
     if (set.size() == 1) {
       // signleton lock set has lsid == lid.
       return LSID(set.begin()->raw());
@@ -1040,11 +1048,25 @@ class LockSet {
     DCHECK(map_);
     DCHECK(vec_);
     // multiple locks.
+    ScopedMallocCostCenter cc("LockSet::ComputeId");
     int32_t *id = &(*map_)[set];
-    ScopedMallocCostCenter cc(__FUNCTION__);
     if (*id == 0) {
       vec_->push_back(set);
       *id = map_->size();
+      if      (set.size() == 2) G_stats->ls_size_2++;
+      else if (set.size() == 3) G_stats->ls_size_3++;
+      else if (set.size() == 4) G_stats->ls_size_4++;
+      else if (set.size() == 5) G_stats->ls_size_5++;
+      else                      G_stats->ls_size_other++;
+      if (*id >= 4096 && ((*id & (*id - 1)) == 0)) {
+        Report("INFO: %d LockSet IDs have been allocated "
+               "(2: %ld 3: %ld 4: %ld 5: %ld o: %ld)\n",
+               *id,
+               G_stats->ls_size_2, G_stats->ls_size_3,
+               G_stats->ls_size_4, G_stats->ls_size_5,
+               G_stats->ls_size_other
+               );
+      }
     }
     return LSID(-*id);
   }
@@ -1944,7 +1966,7 @@ class Segment {
   // so that for small tests we do not require too much RAM.
   // We don't use vector<> or another resizable array to avoid expensive 
   // resizing.
-  enum { kChunkSizeForStacks = DEBUG_MODE ? 512 : 4 * 1024 * 1024 };
+  enum { kChunkSizeForStacks = DEBUG_MODE ? 512 : 1 * 1024 * 1024 };
   static uintptr_t **all_stacks_;
   static size_t      n_stack_chunks_;
 
@@ -4073,6 +4095,7 @@ struct RecentSegmentsCache {
 vector<TraceInfo*> *TraceInfo::g_all_traces;
 
 TraceInfo *TraceInfo::NewTraceInfo(size_t n_mops, uintptr_t pc) {
+  ScopedMallocCostCenter cc("TraceInfo::NewTraceInfo");
   size_t mem_size = (sizeof(TraceInfo) + (n_mops - 1) * sizeof(MopInfo));
   uint8_t *mem = new uint8_t[mem_size];
   memset(mem, 0xab, mem_size);
@@ -4082,6 +4105,21 @@ TraceInfo *TraceInfo::NewTraceInfo(size_t n_mops, uintptr_t pc) {
   res->counter_ = 0;
   if (g_all_traces == NULL) {
     g_all_traces = new vector<TraceInfo*>;
+  }
+  res->literace_storage = NULL;
+  if (G_flags->literace_sampling != 0) {
+    ScopedMallocCostCenter cc("TraceInfo::NewTraceInfo::LiteRaceStorage");
+    size_t index_of_this_trace = g_all_traces->size();
+    if ((index_of_this_trace % kLiteRaceStorageSize) == 0) {
+      res->literace_storage = (LiteRaceStorage*)
+          new LiteRaceCounters [kLiteRaceStorageSize * kLiteRaceNumTids];
+      memset(res->literace_storage, 0, sizeof(LiteRaceStorage));
+    } else {
+      CHECK(index_of_this_trace > 0);
+      res->literace_storage = (*g_all_traces)[index_of_this_trace - 1]->literace_storage;
+      CHECK(res->literace_storage);
+    }
+    res->storage_index = index_of_this_trace % kLiteRaceStorageSize;
   }
   g_all_traces->push_back(res);
   return res;
@@ -4391,7 +4429,7 @@ struct Thread {
     ignore_depth_[is_w] += on ? 1 : -1;
     CHECK(ignore_depth_[is_w] >= 0);
     ComputeExpensiveBits();
-    if (DEBUG_MODE && on && G_flags->debug_level >= 1) {
+    if (on && G_flags->save_ignore_context) {
       StackTrace::Delete(ignore_context_[is_w]);
       ignore_context_[is_w] = CreateStackTrace(0, 3);
     }
@@ -4614,6 +4652,21 @@ struct Thread {
     lock_era_access_set_[1].Clear();
   }
 
+  void HandleForgetSignaller(uintptr_t cv) {
+    SignallerMap::iterator it = signaller_map_->find(cv);
+    if (it != signaller_map_->end()) {
+      if (debug_happens_before) {
+        Printf("T%d: ForgetSignaller: %p:\n    %s\n", tid_.raw(), cv,
+            (it->second.vts)->ToString().c_str());
+        if (G_flags->debug_level >= 1) {
+          ReportStackTrace();
+        }
+      }
+      VTS::Unref(it->second.vts);
+      signaller_map_->erase(it);
+    }
+  }
+
   LSID lsid(bool is_w) {
     return is_w ? wr_lockset_ : rd_lockset_;
   }
@@ -4703,23 +4756,15 @@ struct Thread {
 
 
   void SetTopPc(uintptr_t pc) {
-    DCHECK(!call_stack_->empty());
     if (pc) {
+      DCHECK(!call_stack_->empty());
       call_stack_->back() = pc;
     }
   }
 
   void NOINLINE HandleSblockEnterSlowLocked() {
     AssertTILHeld();
-    if (Segment::NumberOfSegments() > ((kMaxSID * 15) / 16)) {
-      // too few sids left -- flush state.
-      if (DEBUG_MODE) {
-        G_cache->PrintStorageStats();
-        Segment::ShowSegmentStats();
-      }
-      ForgetAllStateAndStartOver(this,
-                                 "ThreadSanitizer has run out of segment IDs");
-    }
+    FlushStateIfOutOfSegments(this);
     this->stats.history_creates_new_segment++;
     VTS *new_vts = vts()->Clone();
     NewSegment("HandleSblockEnter", new_vts);
@@ -4729,7 +4774,6 @@ struct Thread {
 
   INLINE bool HandleSblockEnter(uintptr_t pc, bool allow_slow_path) {
     DCHECK(G_flags->keep_history);
-    DCHECK(!this->ignore_reads() || !this->ignore_writes());
     if (!pc) return true;
 
     this->stats.events[SBLOCK_ENTER]++;
@@ -5027,7 +5071,7 @@ struct Thread {
     if (call_stack_->size() <= offset_from_top)
       return "";
     uintptr_t pc = (*call_stack_)[call_stack_->size() - offset_from_top - 1];
-    return PcToRtnNameWithStats(pc, false);
+    return PcToRtnName(pc, false);
   }
 
   string CallStackToStringRtnOnly(int len) {
@@ -5347,6 +5391,18 @@ static void ForgetAllStateAndStartOver(Thread *thr, const char *reason) {
            stop_time - start_time);
   }
 }
+
+static INLINE void FlushStateIfOutOfSegments(Thread *thr) {
+  if (Segment::NumberOfSegments() > kMaxSIDBeforeFlush) {
+    // too few sids left -- flush state.
+    if (DEBUG_MODE) {
+      G_cache->PrintStorageStats();
+      Segment::ShowSegmentStats();
+    }
+    ForgetAllStateAndStartOver(thr, "run out of segment IDs");
+  }
+}
+
 // -------- Expected Race ---------------------- {{{1
 typedef  HeapMap<ExpectedRace> ExpectedRacesMap;
 static ExpectedRacesMap *G_expected_races_map;
@@ -5774,9 +5830,15 @@ class ReportStorage {
       string img, rtn, file;
       int line;
       PcToStrings(pc, false, &img, &rtn, &file, &line);
+      if (rtn == "(below main)" || rtn == "ThreadSanitizerStartThread")
+        break;
+
       funcs_mangled.push_back(rtn);
-      funcs_demangled.push_back(PcToRtnName(pc, true));
+      funcs_demangled.push_back(NormalizeFunctionName(PcToRtnName(pc, true)));
       objects.push_back(img);
+
+      if (rtn == "main")
+        break;
     }
     string suppression_name;
     if (suppressions_.StackTraceSuppressed("ThreadSanitizer",
@@ -5849,7 +5911,7 @@ class ReportStorage {
       supp += string("  ThreadSanitizer:") + report->ReportName() + "\n";
       for (size_t i = 0; i < funcs_mangled.size(); i++) {
         const string &func = funcs_demangled[i];
-        if (func.size() == 0 || func == "???") {
+        if (func.size() == 0 || func == "(no symbols") {
           supp += "  obj:" + objects[i] + "\n";
         } else {
           supp += "  fun:" + funcs_demangled[i] + "\n";
@@ -6291,11 +6353,14 @@ class Detector {
     TIL til(ts_lock, 0);
     AssertTILHeld();
 
+
     if (UNLIKELY(type == THR_START)) {
         HandleThreadStart(TID(e->tid()), TID(e->info()), (CallStack*)e->pc());
         Thread::Get(TID(e->tid()))->stats.events[type]++;
         return;
     }
+
+    FlushStateIfOutOfSegments(thr);
 
     // Since we have the lock, get some fresh SIDs.
     thr->GetSomeFreshSids();
@@ -6642,6 +6707,7 @@ class Detector {
           thread->HandleUnlock(lock_addr);
         }
       }
+      thread->HandleForgetSignaller(lock_addr);
       Lock::Destroy(lock_addr);
     }
   }
@@ -7395,6 +7461,22 @@ one_call:
     }
   }
 
+  void ImitateWriteOnFree(Thread *thr, uintptr_t a, uintptr_t size, uintptr_t pc) {
+    // Handle the memory deletion as a write, but don't touch all
+    // the memory if there is too much of it, limit with the first 1K.
+    if (size && G_flags->free_is_write && !global_ignore) {
+      const uintptr_t kMaxWriteSizeOnFree = 2048;
+      uintptr_t write_size = min(kMaxWriteSizeOnFree, size);
+      uintptr_t step = sizeof(uintptr_t);
+      // We simulate 4- or 8-byte accesses to make analysis faster.
+      for (uintptr_t i = 0; i < write_size; i += step) {
+        uintptr_t this_size = write_size - i >= step ? step : write_size - i;
+        HandleMemoryAccess(thr, pc, a + i, this_size,
+                           /*is_w=*/true, /*need_locking*/false);
+      }
+    }
+  }
+
   // FREE
   void HandleFree(Event *e) {
     TID tid(e->tid());
@@ -7410,25 +7492,22 @@ one_call:
     if (!info || info->ptr != a)
       return;
     uintptr_t size = info->size;
-    // Handle the memory deletion as a write, but don't touch all
-    // the memory if there is too much of it, limit with the first 1K.
-    if (size && G_flags->free_is_write && !global_ignore) {
-      const uintptr_t max_write_size = 1024;
-      uintptr_t write_size = min(max_write_size, size);
-      uintptr_t step = sizeof(uintptr_t);
-      // We simulate 4- or 8-byte accesses to make analysis faster.
-      for (uintptr_t i = 0; i < write_size; i += step) {
-        uintptr_t this_size = write_size - i >= step ? step : write_size - i;
-        HandleMemoryAccess(thr, e->pc(), a + i, this_size,
-                           /*is_w=*/true, /*need_locking*/false);
-      }
-    }
+    uintptr_t pc = e->pc();
+    ImitateWriteOnFree(thr, a, size, pc);
     // update G_heap_map
     CHECK(info->ptr == a);
     Segment::Unref(info->sid, __FUNCTION__);
 
     ClearMemoryState(thr, a, a + size);
     G_heap_map->EraseInfo(a);
+
+    // We imitate a Write event again, in case there will be use-after-free.
+    // We also need to create a new sblock so that the previous stack trace
+    // has free() in it.
+    if (G_flags->keep_history && G_flags->free_is_write) {
+      thr->HandleSblockEnter(pc, /*allow_slow_path*/true);
+    }
+    ImitateWriteOnFree(thr, a, size, pc);
   }
 
   void HandleMunmap(Event *e) {
@@ -7555,14 +7634,16 @@ one_call:
       Report("WARNING: T%d ended while at least one 'ignore' bit is set: "
              "ignore_wr=%d ignore_rd=%d\n", tid.raw(),
              thr->ignore_reads(), thr->ignore_writes());
-      if (G_flags->debug_level >= 1) {
-        for (int i = 0; i < 2; i++) {
-          StackTrace *context = thr->GetLastIgnoreContext(i);
-          if (context) {
-            Report("Last ignore_%s call was here: \n%s\n", i ? "wr" : "rd",
-               context->ToString().c_str());
-          }
+      for (int i = 0; i < 2; i++) {
+        StackTrace *context = thr->GetLastIgnoreContext(i);
+        if (context) {
+          Report("Last ignore_%s call was here: \n%s\n", i ? "wr" : "rd",
+                 context->ToString().c_str());
         }
+      }
+      if (G_flags->save_ignore_context == false) {
+        Report("Rerun with --save_ignore_context to see where "
+               "IGNORE_END is missing\n");
       }
     }
     ShowProcSelfStatus();
@@ -7847,6 +7928,7 @@ void ThreadSanitizerParseFlags(vector<string> *args) {
   FindBoolFlag("suggest_happens_before_arcs", true, args,
                &G_flags->suggest_happens_before_arcs);
   FindBoolFlag("show_pc", false, args, &G_flags->show_pc);
+  FindBoolFlag("full_stack_frames", false, args, &G_flags->full_stack_frames);
   FindBoolFlag("free_is_write", true, args, &G_flags->free_is_write);
   FindBoolFlag("exit_after_main", false, args, &G_flags->exit_after_main);
 
@@ -7860,6 +7942,8 @@ void ThreadSanitizerParseFlags(vector<string> *args) {
   bool show_pid_default = true;
 #endif
   FindBoolFlag("show_pid", show_pid_default, args, &G_flags->show_pid);
+  FindBoolFlag("save_ignore_context", DEBUG_MODE ? true : false, args,
+               &G_flags->save_ignore_context);
 
   FindIntFlag("dry_run", 0, args, &G_flags->dry_run);
   FindBoolFlag("report_races", true, args, &G_flags->report_races);
@@ -7875,6 +7959,7 @@ void ThreadSanitizerParseFlags(vector<string> *args) {
   FindIntFlag("trace_level", 0, args, &G_flags->trace_level);
 
   FindIntFlag("literace_sampling", 0, args, &G_flags->literace_sampling);
+  FindIntFlag("sampling", 0, args, &G_flags->literace_sampling);
   CHECK(G_flags->literace_sampling < 32);
   CHECK(G_flags->literace_sampling >= 0);
   FindBoolFlag("start_with_global_ignore_on", false, args,
@@ -7946,6 +8031,9 @@ void ThreadSanitizerParseFlags(vector<string> *args) {
     Printf("Error: max-sid should be at least 100000. Exiting\n");
     exit(1);
   }
+  FindIntFlag("max_sid_before_flush", (kMaxSID * 15) / 16, args, 
+              &G_flags->max_sid_before_flush);
+  kMaxSIDBeforeFlush = G_flags->max_sid_before_flush;
 
   FindIntFlag("num_callers_in_history", kSizeOfHistoryStackTrace, args,
               &G_flags->num_callers_in_history);
@@ -7965,6 +8053,7 @@ void ThreadSanitizerParseFlags(vector<string> *args) {
   if (G_flags->full_output) {
     G_flags->announce_threads = true;
     G_flags->show_pc = true;
+    G_flags->full_stack_frames = true;
     G_flags->show_states = true;
     G_flags->file_prefix_to_cut.clear();
   }
@@ -8008,33 +8097,38 @@ void ThreadSanitizerParseFlags(vector<string> *args) {
 static void SetupIgnore() {
   g_ignore_lists = new IgnoreLists;
   g_white_lists = new IgnoreLists;
-  // add some major ignore entries so that tsan remains sane
-  // even w/o any ignore file.
+
+  // Add some major ignore entries so that tsan remains sane
+  // even w/o any ignore file. First - for all platforms.
+  g_ignore_lists->ignores.push_back(IgnoreFun("ThreadSanitizerStartThread"));
+  g_ignore_lists->ignores.push_back(IgnoreFun("exit"));
+  g_ignore_lists->ignores.push_back(IgnoreFun("longjmp"));
+
+  // Dangerous: recursively ignoring vfprintf hides races on printf arguments.
+  // See PrintfTests in unittest/racecheck_unittest.cc
+  // TODO(eugenis): Do something about this.
+  // http://code.google.com/p/data-race-test/issues/detail?id=53
+  g_ignore_lists->ignores_r.push_back(IgnoreFun("vfprintf"));
+
+  // do not create segments in our Replace_* functions
+  g_ignore_lists->ignores_hist.push_back(IgnoreFun("Replace_memcpy"));
+  g_ignore_lists->ignores_hist.push_back(IgnoreFun("Replace_memchr"));
+  g_ignore_lists->ignores_hist.push_back(IgnoreFun("Replace_strcpy"));
+  g_ignore_lists->ignores_hist.push_back(IgnoreFun("Replace_strchr"));
+  g_ignore_lists->ignores_hist.push_back(IgnoreFun("Replace_strrchr"));
+  g_ignore_lists->ignores_hist.push_back(IgnoreFun("Replace_strlen"));
+  g_ignore_lists->ignores_hist.push_back(IgnoreFun("Replace_strcmp"));
+
+  // Ignore everything in our own file.
+  g_ignore_lists->ignores.push_back(IgnoreFile("*ts_valgrind_intercepts.c"));
+
+#ifndef _MSC_VER
+  // POSIX ignores
   g_ignore_lists->ignores.push_back(IgnoreObj("*/libpthread*"));
   g_ignore_lists->ignores.push_back(IgnoreObj("*/ld-2*.so"));
-
-  g_ignore_lists->ignores.push_back(IgnoreObj("*ole32.dll"));
-  g_ignore_lists->ignores.push_back(IgnoreObj("*OLEAUT32.dll"));
-  g_ignore_lists->ignores.push_back(IgnoreObj("*MSCTF.dll"));
-  g_ignore_lists->ignores.push_back(IgnoreObj("*ntdll.dll"));
-  g_ignore_lists->ignores.push_back(IgnoreObj("*ntdll.dll.so"));
-  g_ignore_lists->ignores.push_back(IgnoreObj("*mswsock.dll"));
-  g_ignore_lists->ignores.push_back(IgnoreObj("*WS2_32.dll"));
-  g_ignore_lists->ignores.push_back(IgnoreObj("*msvcrt.dll"));
-  g_ignore_lists->ignores.push_back(IgnoreObj("*kernel32.dll"));
-  g_ignore_lists->ignores.push_back(IgnoreObj("*ADVAPI32.DLL"));
-
-#ifdef VGO_darwin
-  g_ignore_lists->ignores.push_back(IgnoreObj("/usr/lib/dyld"));
-  g_ignore_lists->ignores.push_back(IgnoreObj("/usr/lib/libobjc.A.dylib"));
-  g_ignore_lists->ignores.push_back(IgnoreObj("*/libSystem.*.dylib"));
-#endif
-
-  g_ignore_lists->ignores.push_back(IgnoreFun("ThreadSanitizerStartThread"));
   g_ignore_lists->ignores.push_back(IgnoreFun("pthread_create"));
   g_ignore_lists->ignores.push_back(IgnoreFun("pthread_create@*"));
   g_ignore_lists->ignores.push_back(IgnoreFun("pthread_create_WRK"));
-  g_ignore_lists->ignores.push_back(IgnoreFun("exit"));
   g_ignore_lists->ignores.push_back(IgnoreFun("__cxa_*"));
   g_ignore_lists->ignores.push_back(
       IgnoreFun("*__gnu_cxx*__exchange_and_add*"));
@@ -8050,31 +8144,47 @@ static void SetupIgnore() {
   g_ignore_lists->ignores.push_back(IgnoreFun("__sigjmp_save"));
   g_ignore_lists->ignores.push_back(IgnoreFun("_setjmp"));
   g_ignore_lists->ignores.push_back(IgnoreFun("_longjmp_unwind"));
-  g_ignore_lists->ignores.push_back(IgnoreFun("longjmp"));
+
+  g_ignore_lists->ignores.push_back(IgnoreFun("__mktime_internal"));
+
+  // http://code.google.com/p/data-race-test/issues/detail?id=40
+  g_ignore_lists->ignores_r.push_back(IgnoreFun("_ZNSsD1Ev"));
+
+  g_ignore_lists->ignores_r.push_back(IgnoreFun("gaih_inet"));
+  g_ignore_lists->ignores_r.push_back(IgnoreFun("getaddrinfo"));
+  g_ignore_lists->ignores_r.push_back(IgnoreFun("gethostbyname2_r"));
+
+  #ifdef VGO_darwin
+    // Mac-only ignores
+    g_ignore_lists->ignores.push_back(IgnoreObj("/usr/lib/dyld"));
+    g_ignore_lists->ignores.push_back(IgnoreObj("/usr/lib/libobjc.A.dylib"));
+    g_ignore_lists->ignores.push_back(IgnoreObj("*/libSystem.*.dylib"));
+    g_ignore_lists->ignores_r.push_back(IgnoreFun("__CFDoExternRefOperation"));
+    g_ignore_lists->ignores_r.push_back(IgnoreFun("_CFAutoreleasePoolPop"));
+    g_ignore_lists->ignores_r.push_back(IgnoreFun("_CFAutoreleasePoolPush"));
+    g_ignore_lists->ignores_r.push_back(IgnoreFun("OSAtomicAdd32"));
+    g_ignore_lists->ignores_r.push_back(IgnoreTriple("_dispatch_Block_copy",
+                                            "/usr/lib/libSystem.B.dylib", "*"));
+
+    // pthread_lib_{enter,exit} shouldn't give us any reports since they
+    // have IGNORE_ALL_ACCESSES_BEGIN/END but they do give the reports...
+    g_ignore_lists->ignores_r.push_back(IgnoreFun("pthread_lib_enter"));
+    g_ignore_lists->ignores_r.push_back(IgnoreFun("pthread_lib_exit"));
+  #endif
+#else
+  // Windows-only ignores
+  g_ignore_lists->ignores.push_back(IgnoreObj("*ole32.dll"));
+  g_ignore_lists->ignores.push_back(IgnoreObj("*OLEAUT32.dll"));
+  g_ignore_lists->ignores.push_back(IgnoreObj("*MSCTF.dll"));
+  g_ignore_lists->ignores.push_back(IgnoreObj("*ntdll.dll"));
+  g_ignore_lists->ignores.push_back(IgnoreObj("*mswsock.dll"));
+  g_ignore_lists->ignores.push_back(IgnoreObj("*WS2_32.dll"));
+  g_ignore_lists->ignores.push_back(IgnoreObj("*msvcrt.dll"));
+  g_ignore_lists->ignores.push_back(IgnoreObj("*kernel32.dll"));
+  g_ignore_lists->ignores.push_back(IgnoreObj("*ADVAPI32.DLL"));
+
   g_ignore_lists->ignores.push_back(IgnoreFun("_EH_epilog3"));
   g_ignore_lists->ignores.push_back(IgnoreFun("_EH_prolog3_catch"));
-
-  // Dangerous: recursively ignoring vfprintf hides races on printf arguments.
-  // See PrintfTests in unittest/racecheck_unittest.cc
-  // TODO(eugenis): Do something about this.
-  // http://code.google.com/p/data-race-test/issues/detail?id=53
-  g_ignore_lists->ignores_r.push_back(IgnoreFun("vfprintf"));
-
-#ifdef VGO_darwin
-  g_ignore_lists->ignores_r.push_back(IgnoreFun("__CFDoExternRefOperation"));
-  g_ignore_lists->ignores_r.push_back(IgnoreFun("_CFAutoreleasePoolPop"));
-  g_ignore_lists->ignores_r.push_back(IgnoreFun("_CFAutoreleasePoolPush"));
-  g_ignore_lists->ignores_r.push_back(IgnoreFun("OSAtomicAdd32"));
-  g_ignore_lists->ignores_r.push_back(
-      IgnoreTriple("_dispatch_Block_copy", "/usr/lib/libSystem.B.dylib", "*"));
-
-  // pthread_lib_{enter,exit} shouldn't give us any reports since they
-  // have IGNORE_ALL_ACCESSES_BEGIN/END but they do give the reports...
-  g_ignore_lists->ignores_r.push_back(IgnoreFun("pthread_lib_enter"));
-  g_ignore_lists->ignores_r.push_back(IgnoreFun("pthread_lib_exit"));
-#endif
-
-#ifdef _MSC_VER
   g_ignore_lists->ignores.push_back(IgnoreFun("unnamedImageEntryPoint"));
   g_ignore_lists->ignores.push_back(IgnoreFun("_Mtxunlock"));
   g_ignore_lists->ignores.push_back(IgnoreFun("IsNLSDefinedString"));
@@ -8090,30 +8200,14 @@ static void SetupIgnore() {
   // TODO(timurrrr): Add support for FLS (fiber-local-storage)
   // http://code.google.com/p/data-race-test/issues/detail?id=55
   g_ignore_lists->ignores_r.push_back(IgnoreFun("_freefls"));
-#else
-  // http://code.google.com/p/data-race-test/issues/detail?id=40
-  g_ignore_lists->ignores_r.push_back(IgnoreFun("_ZNSsD1Ev"));
 #endif
 
 #ifdef ANDROID
   // Android does not have a libpthread; pthread_* functions live in libc.
   // We have to ignore them one-by-one.
   g_ignore_lists->ignores.push_back(IgnoreFun("pthread_*"));
-  g_ignore_lists->ignores.push_back(IgnoreFun("__atomic_*"));
   g_ignore_lists->ignores.push_back(IgnoreFun("__init_tls"));
 #endif
-
-  // do not create segments in our Replace_* functions
-  g_ignore_lists->ignores_hist.push_back(IgnoreFun("Replace_memcpy"));
-  g_ignore_lists->ignores_hist.push_back(IgnoreFun("Replace_memchr"));
-  g_ignore_lists->ignores_hist.push_back(IgnoreFun("Replace_strcpy"));
-  g_ignore_lists->ignores_hist.push_back(IgnoreFun("Replace_strchr"));
-  g_ignore_lists->ignores_hist.push_back(IgnoreFun("Replace_strrchr"));
-  g_ignore_lists->ignores_hist.push_back(IgnoreFun("Replace_strlen"));
-  g_ignore_lists->ignores_hist.push_back(IgnoreFun("Replace_strcmp"));
-
-  // Ignore everything in our own file.
-  g_ignore_lists->ignores.push_back(IgnoreFile("*ts_valgrind_intercepts.c"));
 
   // Now read the ignore/whitelist files.
   for (size_t i = 0; i < G_flags->ignore.size(); i++) {
@@ -8163,7 +8257,7 @@ bool ThreadSanitizerWantToInstrumentSblock(uintptr_t pc) {
     }
   }
 
-  if (G_flags->ignore_unknown_pcs && rtn_name == "???") {
+  if (G_flags->ignore_unknown_pcs && rtn_name == "(no symbols)") {
     if (debug_ignore) {
       Report("INFO: not instrumenting unknown function at %p\n", pc);
     }
@@ -8185,7 +8279,7 @@ bool ThreadSanitizerWantToInstrumentSblock(uintptr_t pc) {
 
 bool ThreadSanitizerWantToCreateSegmentsOnSblockEntry(uintptr_t pc) {
   string rtn_name;
-  rtn_name = PcToRtnNameWithStats(pc, false);
+  rtn_name = PcToRtnName(pc, false);
   if (G_flags->keep_history == 0)
     return false;
   return !(TripleVectorMatchKnown(g_ignore_lists->ignores_hist,
@@ -8194,6 +8288,7 @@ bool ThreadSanitizerWantToCreateSegmentsOnSblockEntry(uintptr_t pc) {
 
 // Returns true if function at "pc" is marked as "fun_r" in the ignore file.
 bool NOINLINE ThreadSanitizerIgnoreAccessesBelowFunction(uintptr_t pc) {
+  ScopedMallocCostCenter cc(__FUNCTION__);
   typedef unordered_map<uintptr_t, bool> Cache;
   static Cache *cache = NULL;
   {
@@ -8207,9 +8302,16 @@ bool NOINLINE ThreadSanitizerIgnoreAccessesBelowFunction(uintptr_t pc) {
       return i->second;
   }
 
-  string rtn_name = PcToRtnNameWithStats(pc, false);
+  string rtn_name = PcToRtnName(pc, false);
   bool ret =
       TripleVectorMatchKnown(g_ignore_lists->ignores_r, rtn_name, "", "");
+
+  if (DEBUG_MODE) {
+    // Heavy test for NormalizeFunctionName: test on all possible inputs in
+    // debug mode. TODO(timurrrr): Remove when tested.
+    NormalizeFunctionName(PcToRtnName(pc, true));
+  }
+
   // Grab the lock again
   TIL ignore_below_lock(ts_ignore_below_lock, 19);
   if (ret && debug_ignore) {

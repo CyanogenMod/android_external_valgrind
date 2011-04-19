@@ -60,7 +60,7 @@ static bool ReadIgnoreLine(string input_line, IgnoreLists *ignore_lists) {
   return true;
 }
 
-void ReadIgnoresFromString(string ignoreString, IgnoreLists *ignore_lists) {
+void ReadIgnoresFromString(const string& ignoreString, IgnoreLists *ignore_lists) {
   vector<string> lines;
   SplitStringIntoLinesAndRemoveBlanksAndComments(ignoreString, &lines);
   for (size_t j = 0; j < lines.size(); j++) {
