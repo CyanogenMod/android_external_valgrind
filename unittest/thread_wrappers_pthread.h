@@ -67,9 +67,22 @@ static const bool kMallocUsesMutex = false;
   #define NO_SPINLOCK
   #endif
 
+  // Older Android toolchain does not support atomic builtins.
+  #if !defined(ANDROID) || defined(__ANDROID__)
   static int AtomicIncrement(volatile int *value, int increment) {
     return __sync_add_and_fetch(value, increment);
   }
+  #else
+  static int AtomicIncrement(volatile int *value, int increment) {
+    static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
+    ANNOTATE_NOT_HAPPENS_BEFORE_MUTEX(&mu);
+    pthread_mutex_lock(&mu);
+    int result = *value += increment;
+    pthread_mutex_unlock(&mu);
+    return result;
+  }
+  #endif
+
 
   #ifdef ANDROID
     #undef TLS
