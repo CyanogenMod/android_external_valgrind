@@ -32,7 +32,7 @@
 
 #include "ts_util.h"
 
-#if (DEBUG > 0) && (TS_SERIALIZED == 0) && defined (TS_LLVM)
+#if (DEBUG > 0) && (TS_SERIALIZED == 0) && defined (TS_LLVM) && !defined(DYNAMIC_ANNOTATIONS_ENABLED)
 # define DYNAMIC_ANNOTATIONS_ENABLED 1
 #endif
 #include "dynamic_annotations.h"

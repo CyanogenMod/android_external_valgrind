@@ -29,9 +29,6 @@
 
 // This file contains the parser for valgrind-compatible suppressions.
 
-#include "common_util.h"
-#include "ts_util.h"
-
 #include "suppressions.h"
 
 // TODO(eugenis): convert checks to warning messages.
@@ -198,6 +195,13 @@ bool Parser::ParseStackTraceLine(StackTraceTemplate* trace, string line) {
       return true;
     } else if (s1 == "fun") {
       Location location = {LT_FUN, s2};
+      // A suppression frame can only have ( or ) if it comes from Objective-C,
+      // i.e. starts with +[ or -[ or =[
+      PARSER_CHECK(s2.find_first_of("()") == string::npos ||
+                   (s2[1] == '[' && strchr("+-=", s2[0]) != NULL),
+                   "'fun:' lines can't contain '()'");
+      PARSER_CHECK(s2.find_first_of("<>") == string::npos,
+                   "'fun:' lines can't contain '<>'");
       trace->locations.push_back(location);
       return true;
     } else {

@@ -66,10 +66,10 @@ struct MopInfo {
   bool      create_sblock() { return create_sblock_; }
 
  private:
-  uint64_t  pc_            :58;  // 48 bits is enough for pc, even on x86-64.
-  uintptr_t  create_sblock_ :1;
-  uintptr_t  is_write_      :1;
-  uintptr_t  size_minus1_   :4;  // 0..15
+  uint64_t  pc_           :58;  // 48 bits is enough for pc, even on x86-64.
+  uint64_t  create_sblock_ :1;
+  uint64_t  is_write_      :1;
+  uint64_t  size_minus1_   :4;  // 0..15
 };
 
 // ---------------- Lite Race ------------------
@@ -100,17 +100,14 @@ struct LiteRaceCounters {
   int32_t num_to_skip;
 };
 
-typedef LiteRaceCounters LiteRaceStorage[8][8];
-
 struct TraceInfoPOD {
   enum { kLiteRaceNumTids = 8 };
   enum { kLiteRaceStorageSize = 8 };
+  typedef LiteRaceCounters LiteRaceStorage[kLiteRaceNumTids][kLiteRaceStorageSize];
+
   size_t n_mops_;
   size_t pc_;
   size_t counter_;
-  uint32_t literace_counters[kLiteRaceNumTids];
-  int32_t  literace_num_to_skip[kLiteRaceNumTids];
-  // [kLiteRaceNumTids]x[kLiteRaceStorageSize]
   LiteRaceStorage *literace_storage;
   int32_t storage_index;
   MopInfo mops_[1];
@@ -138,9 +135,10 @@ class TraceInfo : public TraceInfoPOD {
 
   INLINE bool LiteRaceSkipTraceQuickCheck(uintptr_t tid_modulo_num) {
     DCHECK(tid_modulo_num < kLiteRaceNumTids);
-    // Check how may accesses are left to skip.
-    // Racey, but ok.
-    int32_t num_to_skip = --(literace_num_to_skip[tid_modulo_num]);
+    // Check how may accesses are left to skip. Racey, but ok.
+    LiteRaceCounters *counters =
+        &((*literace_storage)[tid_modulo_num][storage_index]);
+    int32_t num_to_skip = --counters->num_to_skip;
     if (num_to_skip > 0) {
       return true;
     }
@@ -150,20 +148,6 @@ class TraceInfo : public TraceInfoPOD {
   INLINE void LiteRaceUpdate(uintptr_t tid_modulo_num, uint32_t sampling_rate) {
     DCHECK(sampling_rate < 32);
     DCHECK(sampling_rate > 0);
-    uint32_t cur_counter = literace_counters[tid_modulo_num];
-    // The bigger the counter the bigger the number of skipped accesses.
-    int32_t next_num_to_skip = (cur_counter >> (32 - sampling_rate)) + 1;
-    //if (id() == 2861)
-    //  Printf("T%d id=%ld take s=%d c=%u\n", tid_modulo_num, id(),
-    //         next_num_to_skip, cur_counter);
-    literace_num_to_skip[tid_modulo_num] = next_num_to_skip;
-    literace_counters[tid_modulo_num] = cur_counter + next_num_to_skip;
-  }
-
-  INLINE void LLVMLiteRaceUpdate(uintptr_t tid_modulo_num,
-                                 uint32_t sampling_rate) {
-    DCHECK(sampling_rate < 32);
-    DCHECK(sampling_rate > 0);
     LiteRaceCounters *counters =
         &((*literace_storage)[tid_modulo_num][storage_index]);
     uint32_t cur_counter = counters->counter;
@@ -171,6 +155,13 @@ class TraceInfo : public TraceInfoPOD {
     int32_t next_num_to_skip = (cur_counter >> (32 - sampling_rate)) + 1;
     counters->num_to_skip = next_num_to_skip;
     counters->counter = cur_counter + next_num_to_skip;
+
+  }
+
+  // TODO(glider): get rid of this.
+  INLINE void LLVMLiteRaceUpdate(uintptr_t tid_modulo_num,
+                                 uint32_t sampling_rate) {
+    LiteRaceUpdate(tid_modulo_num, sampling_rate);
   }
 
   // This is all racey, but ok.

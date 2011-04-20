@@ -40,7 +40,8 @@ extern vector<string> *g_ignore_obj;
 
 extern IgnoreLists *g_white_lists;
 
-void ReadIgnoresFromString(string ignoreString, IgnoreLists* ignoreLists);
+void ReadIgnoresFromString(const string& ignoreString,
+    IgnoreLists* ignoreLists);
 
 bool TripleVectorMatchKnown(const vector<IgnoreTriple>& v,
     const string& fun,

@@ -70,9 +70,10 @@ size_t TimeInMilliSeconds() {
 
 Stats *G_stats;
 
+#ifndef TS_LLVM
 bool GetNameAndOffsetOfGlobalObject(uintptr_t addr,
                                     string *name, uintptr_t *offset) {
-#ifdef TS_VALGRIND
+# ifdef TS_VALGRIND
     const int kBufLen = 1023;
     char buff[kBufLen+1];
     PtrdiffT off;
@@ -83,10 +84,11 @@ bool GetNameAndOffsetOfGlobalObject(uintptr_t addr,
       return true;
     }
     return false;
-#else
+# else
   return false;
-#endif // TS_VALGRIND
+# endif  // TS_VALGRIND
 }
+#endif  // TS_LLVM
 
 
 #ifndef TS_VALGRIND
@@ -228,6 +230,222 @@ size_t GetVmSizeInMb() {
 #else
   return 0;
 #endif
+}
+
+static string StripTemplatesFromFunctionName(const string &fname) {
+  // Returns "" in case of error.
+
+  string ret;
+  size_t read_pointer = 0, braces_depth = 0;
+
+  while (read_pointer < fname.size()) {
+    size_t next_brace = fname.find_first_of("<>", read_pointer);
+    if (next_brace == fname.npos) {
+      if (braces_depth > 0) {
+        // This can happen on Visual Studio if we reach the ~2000 char limit.
+        CHECK(fname.size() > 256);
+        return "";
+      }
+      ret += (fname.c_str() + read_pointer);
+      break;
+    }
+
+    if (braces_depth == 0) {
+      ret.append(fname, read_pointer, next_brace - read_pointer);
+    }
+
+    if (next_brace > 0) {
+      // We could have found one of the following operators.
+      const char *OP[] = {">>=", "<<=",
+                          ">>", "<<",
+                          ">=", "<=",
+                          "->", "->*",
+                          "<", ">"};
+
+      bool operator_name = false;
+      for (size_t i = 0; i < sizeof(OP)/sizeof(*OP); i++) {
+        size_t op_offset = ((string)OP[i]).find(fname[next_brace]);
+        if (op_offset == string::npos)
+          continue;
+        if (next_brace >= 8 + op_offset &&  // 8 == strlen("operator");
+            "operator" == fname.substr(next_brace - (8 + op_offset), 8) &&
+            OP[i] == fname.substr(next_brace - op_offset, strlen(OP[i]))) {
+          operator_name = true;
+          ret += OP[i] + op_offset;
+          next_brace += strlen(OP[i] + op_offset);
+          read_pointer = next_brace;
+          break;
+        }
+      }
+
+      if (operator_name)
+        continue;
+    }
+
+    if (fname[next_brace] == '<') {
+      braces_depth++;
+      read_pointer = next_brace + 1;
+    } else if (fname[next_brace] == '>') {
+      if (braces_depth == 0) {
+        // Going to `braces_depth == -1` IS possible at least for this function on Windows:
+        // "std::operator<<char,std::char_traits<char>,std::allocator<char> >".
+        // Oh, well... Return an empty string and let the caller decide.
+        return "";
+      }
+      braces_depth--;
+      read_pointer = next_brace + 1;
+    } else
+      CHECK(0);
+  }
+  if (braces_depth != 0) {
+    CHECK(fname.size() > 256);
+    return "";
+  }
+  return ret;
+}
+
+static string StripParametersFromFunctionName(const string &demangled) {
+  // Returns "" in case of error.
+
+  string fname = demangled;
+
+  // Strip stuff like "(***)" and "(anonymous namespace)" -> they are tricky.
+  size_t found = fname.npos;
+  while ((found = fname.find(", ")) != fname.npos)
+    fname.erase(found+1, 1);
+  while ((found = fname.find("(**")) != fname.npos)
+    fname.erase(found+2, 1);
+  while ((found = fname.find("(*)")) != fname.npos)
+    fname.erase(found, 3);
+  while ((found = fname.find("const()")) != fname.npos)
+    fname.erase(found+5, 2);
+  while ((found = fname.find("const volatile")) != fname.npos &&
+         found > 1 && found + 14 == fname.size())
+    fname.erase(found-1);
+  while ((found = fname.find("(anonymous namespace)")) != fname.npos)
+    fname.erase(found, 21);
+
+  if (fname.find_first_of("(") == fname.npos)
+    return fname;
+  DCHECK(std::count(fname.begin(), fname.end(), '(') ==
+         std::count(fname.begin(), fname.end(), ')'));
+
+  string ret;
+  bool returns_fun_ptr = false;
+  size_t braces_depth = 0, read_pointer = 0;
+
+  size_t first_parenthesis = fname.find("(");
+  if (first_parenthesis != fname.npos) {
+    DCHECK(fname.find_first_of(")") != fname.npos);
+    DCHECK(fname.find_first_of(")") > first_parenthesis);
+    DCHECK(fname[first_parenthesis] == '(');
+    if (first_parenthesis + 2 < fname.size() &&
+        fname[first_parenthesis - 1] == ' ' &&
+        fname[first_parenthesis + 1] == '*' &&
+        fname[first_parenthesis + 2] != ' ') {
+      // Return value type is a function pointer
+      read_pointer = first_parenthesis + 2;
+      while (fname[read_pointer] == '*' || fname[read_pointer] == '&')
+        read_pointer++;
+      braces_depth = 1;
+      returns_fun_ptr = true;
+    }
+  }
+
+  while (read_pointer < fname.size()) {
+    size_t next_brace = fname.find_first_of("()", read_pointer);
+    if (next_brace == fname.npos) {
+      if (braces_depth != 0) {
+        // Overflow?
+        return "";
+      }
+      size_t _const = fname.find(" const", read_pointer);
+      if (_const == fname.npos) {
+        ret += (fname.c_str() + read_pointer);
+      } else {
+        CHECK(_const + 6 == fname.size());
+        ret.append(fname, read_pointer, _const - read_pointer);
+      }
+      break;
+    }
+
+    if (braces_depth == (returns_fun_ptr ? 1 : 0)) {
+      ret.append(fname, read_pointer, next_brace - read_pointer);
+      returns_fun_ptr = false;
+    }
+
+    if (fname[next_brace] == '(') {
+      if (next_brace >= 8 && fname[next_brace+1] == ')' &&
+          "operator" == fname.substr(next_brace - 8, 8)) {
+        ret += "()";
+        read_pointer = next_brace + 2;
+      } else {
+        braces_depth++;
+        read_pointer = next_brace + 1;
+      }
+    } else if (fname[next_brace] == ')') {
+      CHECK(braces_depth > 0);
+      braces_depth--;
+      read_pointer = next_brace + 1;
+    } else
+      CHECK(0);
+  }
+  if (braces_depth != 0)
+    return "";
+
+  // Special case: on Linux, Valgrind prepends the return type for template
+  // functions. And on Windows we may see `scalar deleting destructor'.
+  // And we may see "operaror new" etc.
+  // And some STL code inserts const& between the return type and the function
+  // name.
+  // Oh, well...
+  size_t space_or_tick;
+  while (ret != "") {
+    space_or_tick = ret.find_first_of("` ");
+    if (space_or_tick != ret.npos && ret[space_or_tick] == ' ' &&
+        ret.substr(0, space_or_tick).find("operator") == string::npos) {
+      ret = ret.substr(space_or_tick + 1);
+    } else if (space_or_tick != ret.npos && space_or_tick + 1 == ret.size()) {
+      ret = ret.substr(0, space_or_tick);
+    } else {
+      break;
+    }
+  }
+  return ret;
+}
+
+string NormalizeFunctionName(const string &demangled) {
+  if (demangled[1] == '[' && strchr("+-=", demangled[0]) != NULL) {
+    // Objective-C function
+    return demangled;
+  }
+
+  if (demangled.find_first_of("<>()") == demangled.npos) {
+    // C function or a well-formatted function name.
+    return demangled;
+  }
+
+  if (demangled == "(below main)" || demangled == "(no symbols)")
+    return demangled;
+
+  const char* const MALFORMED = "(malformed frame)";
+
+  string fname = StripTemplatesFromFunctionName(demangled);
+  if (fname.size() == 0) {
+    if (DEBUG_MODE)
+      Printf("PANIC: `%s`\n", demangled.c_str());
+    return MALFORMED;
+  }
+
+  fname = StripParametersFromFunctionName(fname);
+  if (fname.size() == 0) {
+    CHECK(demangled.size() >= 256);
+    if (DEBUG_MODE)
+      Printf("PANIC: `%s`\n", demangled.c_str());
+    return MALFORMED;
+  }
+
+  return fname;
 }
 
 void OpenFileWriteStringAndClose(const string &file_name, const string &str) {

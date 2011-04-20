@@ -62,6 +62,15 @@ extern unsigned long offline_line_n;
 #define _GLIBCXX_USE_C99 1
 #endif  // ARM
 
+// __WORDSIZE is GLibC-specific. Get it from Valgrind if needed.
+#if !defined(__WORDSIZE)
+#if VG_WORDSIZE == 4
+#define __WORDSIZE 32
+#elif VG_WORDSIZE == 8
+#define __WORDSIZE 64
+#endif // VG_WORDSIZE
+#endif // TS_VALGRIND && !__WORDSIZE
+
 #elif defined(TS_LLVM)
 # define TS_USE_STLPORT
 # include <assert.h>
@@ -325,6 +334,9 @@ extern void YIELD();
 extern "C" long my_strtol(const char *str, char **end, int base);
 extern void Printf(const char *format, ...);
 
+// Strip (.*) and <.*>, also handle "function returns a function pointer" case.
+string NormalizeFunctionName(const string &mangled_fname);
+
 string ReadFileToString(const string &file_name, bool die_if_failed);
 
 // Get the current memory footprint of myself (parse /proc/self/status).
@@ -352,21 +364,21 @@ bool LiteRaceSkipTrace(int tid, uint32_t trace_no, uint32_t sampling_rate);
 
 
 inline uintptr_t tsan_bswap(uintptr_t x) {
-#if defined(VGP_arm_linux) && VG_WORDSIZE == 8
+#if defined(VGP_arm_linux) && __WORDSIZE == 64
   return __builtin_bswap64(x);
-#elif defined(VGP_arm_linux) && VG_WORDSIZE == 4
+#elif defined(VGP_arm_linux) && __WORDSIZE == 32
   return __builtin_bswap32(x);
-#elif defined(__GNUC__) && VG_WORDSIZE == 8
+#elif defined(__GNUC__) && __WORDSIZE == 64
   __asm__("bswapq %0" : "=r" (x) : "0" (x));
   return x;
-#elif defined(__GNUC__) && VG_WORDSIZE == 4
+#elif defined(__GNUC__) && __WORDSIZE == 32
   __asm__("bswapl %0" : "=r" (x) : "0" (x));
   return x;
 #elif defined(_WIN32)
   return x;  // TODO(kcc)
 #else
 # error  "Unknown Configuration"
-#endif // __WORDSIZE
+#endif // arch && VG_WORDSIZE
 }
 
 #ifdef _MSC_VER

@@ -21,7 +21,7 @@ fi
 IN_FILES="bin/valgrind lib/valgrind/vgpreload_core* lib/valgrind/*$TOOL* lib/valgrind/default.supp"
 EXCLUDE_FILES="lib/valgrind/*$TOOL-debug*"
 
-rm -rf $OUT && touch $OUT && chmod +x $OUT || exit 1
+rm -f $OUT && touch $OUT && chmod +x $OUT || exit 1
 
 # Create the header.
 cat << 'EOF' >> $OUT || exit 1

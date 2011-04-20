@@ -88,9 +88,6 @@ class ScopedReentrantClientLock {
 //--------------- Globals ----------------- {{{1
 extern FILE *G_out;
 
-
-static bool main_entered, main_exited;
-
 // Number of threads created by pthread_create (i.e. not counting main thread).
 static int n_created_threads = 0;
 // Number of started threads, i.e. the number of CallbackForThreadStart calls.
@@ -122,6 +119,65 @@ struct StackFrame {
   uintptr_t sp;
   StackFrame(uintptr_t p, uintptr_t s) : pc(p), sp(s) { }
 };
+//--------------- InstrumentedCallFrame ----- {{{1
+// Machinery to implement the fast interceptors in PIN
+// (i.e. the ones that don't use PIN_CallApplicationFunction).
+// We instrument the entry of the interesting function (e.g. malloc)
+// and all RET instructions in this function's module (e.g. libc).
+// At entry, we push an InstrumentedCallFrame object onto InstrumentedCallStack.
+// At every RET instruction we check if the stack is not empty (fast path)
+// and if the top contains the current SP. If yes -- this is the function return
+// and we pop the stack.
+struct InstrumentedCallFrame {
+  typedef void (*callback_t)(THREADID tid, InstrumentedCallFrame &frame,
+                             ADDRINT ret);
+  callback_t callback;
+  uintptr_t pc;
+  uintptr_t sp;
+  uintptr_t arg[4];
+};
+
+struct InstrumentedCallStack {
+ public:
+  InstrumentedCallStack() : size_(0) { }
+
+  size_t size() { return size_; }
+
+  void Push(InstrumentedCallFrame::callback_t callback,
+            uintptr_t pc,
+            uintptr_t sp,
+            uintptr_t a0, uintptr_t a1) {
+    CHECK(size() < TS_ARRAY_SIZE(frames_));
+    size_++;
+    Top()->callback = callback;
+    Top()->pc = pc;
+    Top()->sp = sp;
+    Top()->arg[0] = a0;
+    Top()->arg[1] = a1;
+  }
+
+  void Pop() {
+    CHECK(size() > 0);
+    size_--;
+  }
+
+  InstrumentedCallFrame *Top() {
+    CHECK(size() > 0);
+    return &frames_[size_-1];
+  }
+
+  void Print() {
+    for (size_t i = 0; i < size(); i++) {
+      Printf( " %p\n", frames_[i].sp);
+      if (i > 0) CHECK(frames_[i].sp <= frames_[i-1].sp);
+    }
+  }
+
+ private:
+  InstrumentedCallFrame frames_[20];
+  size_t size_;
+};
+
 //--------------- PinThread ----------------- {{{1
 const size_t kThreadLocalEventBufferSize = 2048 - 2;
 // The number of mops should be at least 2 less than the size of TLEB
@@ -143,6 +199,7 @@ struct PinThread {
   int          uniq_tid;
   uint32_t     literace_sampling;  // cache of a flag.
   volatile long last_child_tid;
+  InstrumentedCallStack ic_stack;
   THREADID     tid;
   THREADID     parent_tid;
   pthread_t    my_ptid;
@@ -158,6 +215,14 @@ struct PinThread {
   bool         thread_done;
   bool         holding_lock;
   int          n_consumed_events;
+#ifdef _MSC_VER
+  enum StartupState {
+    STARTING,
+    CHILD_READY,
+    MAY_CONTINUE,
+  };
+  volatile long startup_state;  // used to handle the CREATE_SUSPENDED flag.
+#endif
   char         padding[64];  // avoid any chance of ping-pong.
 };
 
@@ -186,6 +251,7 @@ static void ReportAccesRange(THREADID tid, uintptr_t pc, EventType type, uintptr
 #define REPORT_WRITE_RANGE(x, size) ReportAccesRange(tid, pc, WRITE, (uintptr_t)x, size)
 
 #define EXTRA_REPLACE_PARAMS THREADID tid, uintptr_t pc,
+#define EXTRA_REPLACE_ARGS tid, pc,
 #include "ts_replace.h"
 
 //------------- ThreadSanitizer exports ------------ {{{1
@@ -320,7 +386,6 @@ static void HandleInnerEvent(PinThread &t, uintptr_t event) {
   } else if (event == TLEB_GLOBAL_IGNORE_OFF){
     Report("INFO: GLOBAL IGNORE OFF\n");
     global_ignore = false;
-    CODECACHE_FlushCache();  // We need to reinstrument everything.
     ComputeIgnoreAccesses(t);
   } else {
     Printf("Event: %ld (last: %ld)\n", event, LAST_EVENT);
@@ -569,16 +634,20 @@ static void TLEBAddGenericEventAndFlush(PinThread &t,
 static void UpdateCallStack(PinThread &t, ADDRINT sp);
 
 // Must be called from its thread (except for THR_END case)!
-static void DumpEvent(CONTEXT *ctx, EventType type, int32_t tid, uintptr_t pc,
-                      uintptr_t a, uintptr_t info) {
-  if (!g_race_verifier_active ||
-      (type == EXPECT_RACE || type == BENIGN_RACE)) {
+static void DumpEventWithSp(uintptr_t sp, EventType type, int32_t tid, uintptr_t pc,
+                            uintptr_t a, uintptr_t info) {
+  if (!g_race_verifier_active || type == EXPECT_RACE) {
     PinThread &t = g_pin_threads[tid];
-    if (ctx) {
-      UpdateCallStack(t, PIN_GetContextReg(ctx, REG_STACK_PTR));
+    if (sp) {
+      UpdateCallStack(t, sp);
     }
     TLEBAddGenericEventAndFlush(t, type, pc, a, info);
   }
+}
+static void DumpEvent(CONTEXT *ctx, EventType type, int32_t tid, uintptr_t pc,
+                      uintptr_t a, uintptr_t info) {
+  DumpEventWithSp(ctx ? PIN_GetContextReg(ctx, REG_STACK_PTR) : 0,
+            type, tid, pc, a, info);
 }
 
 //--------- Wraping and relacing --------------- {{{1
@@ -615,6 +684,29 @@ static bool RtnMatchesName(const string &rtn_name, const string &name) {
 
   return false;
 }
+
+#define FAST_WRAP_PARAM0 THREADID tid, ADDRINT pc, ADDRINT sp
+#define FAST_WRAP_PARAM1 FAST_WRAP_PARAM0, ADDRINT arg0
+#define FAST_WRAP_PARAM2 FAST_WRAP_PARAM1, ADDRINT arg1
+#define FAST_WRAP_PARAM3 FAST_WRAP_PARAM2, ADDRINT arg2
+
+#define FAST_WRAP_PARAM_AFTER \
+  THREADID tid, InstrumentedCallFrame &frame, ADDRINT ret
+
+
+#define DEBUG_FAST_INTERCEPTORS 0
+//#define DEBUG_FAST_INTERCEPTORS (tid == 1)
+
+#define PUSH_AFTER_CALLBACK1(callback, a0) \
+  g_pin_threads[tid].ic_stack.Push(callback, pc, sp, a0, 0); \
+  if (DEBUG_FAST_INTERCEPTORS) \
+    Printf("T%d %s pc=%p sp=%p *sp=(%p) arg0=%p stack_size=%ld\n",\
+         tid, __FUNCTION__, pc, sp,\
+         ((void**)sp)[0],\
+         arg0,\
+         g_pin_threads[tid].ic_stack.size()\
+         );\
+
 
 #define WRAP_NAME(name) Wrap_##name
 #define WRAP4(name) WrapFunc4(img, rtn, #name, (AFUNPTR)Wrap_##name)
@@ -885,7 +977,8 @@ static void HandleThreadCreateAbort(THREADID tid) {
   g_thread_create_lock.Unlock();
 }
 
-static THREADID HandleThreadCreateAfter(THREADID tid, pthread_t child_ptid) {
+static THREADID HandleThreadCreateAfter(THREADID tid, pthread_t child_ptid,
+                                        bool suspend_child) {
   // Spin, waiting for last_child_tid to appear (i.e. wait for the thread to
   // actually start) so that we know the child's tid. No locks.
   while (!ATOMIC_READ(&g_pin_threads[tid].last_child_tid)) {
@@ -898,8 +991,27 @@ static THREADID HandleThreadCreateAfter(THREADID tid, pthread_t child_ptid) {
   THREADID last_child_tid = g_pin_threads[tid].last_child_tid;
   CHECK(last_child_tid);
 
-  g_pin_threads[last_child_tid].my_ptid = child_ptid;
-  int uniq_tid_of_child = g_pin_threads[last_child_tid].uniq_tid;
+  PinThread &child_t = g_pin_threads[last_child_tid];
+  child_t.my_ptid = child_ptid;
+
+#ifdef _MSC_VER
+  if (suspend_child) {
+    while (ATOMIC_READ(&child_t.startup_state) != PinThread::CHILD_READY) {
+      YIELD();
+    }
+    // Strictly speaking, PIN forbids calling system functions like this.
+    // This may violate application library isolation but
+    // a) YIELD == WINDOWS::Sleep, so we violate it anyways
+    // b) SuspendThread probably calls NtSuspendThread right away
+    WINDOWS::DWORD old_count = WINDOWS::SuspendThread((WINDOWS::HANDLE)child_ptid);  // TODO handle?
+    CHECK(old_count == 0);
+  }
+  child_t.startup_state = PinThread::MAY_CONTINUE;
+#else
+  CHECK(!suspend_child);  // Not implemented - do we need to?
+#endif
+
+  int uniq_tid_of_child = child_t.uniq_tid;
   g_pin_threads[tid].last_child_tid = 0;
 
   IgnoreMopsEnd(tid);
@@ -919,7 +1031,7 @@ static uintptr_t WRAP_NAME(pthread_create)(WRAP_PARAM4) {
   }
 
   pthread_t child_ptid = *(pthread_t*)arg0;
-  HandleThreadCreateAfter(tid, child_ptid);
+  HandleThreadCreateAfter(tid, child_ptid, false);
 
   return ret;
 }
@@ -947,18 +1059,13 @@ void CallbackForThreadStart(THREADID tid, CONTEXT *ctxt,
   t.literace_sampling = G_flags->literace_sampling;
   t.tid = tid;
   t.tleb.t = &t;
+#if defined(_MSC_VER)
+  t.startup_state = PinThread::STARTING;
+#endif
   ComputeIgnoreAccesses(t);
 
 
   PIN_SetContextReg(ctxt, tls_reg, (ADDRINT)&t.tleb.events[2]);
-
-#if 0
-  if (n_started_threads == 2) {
-    // we are creating the first non-main thread. Flush the code cache and start
-    // doing real work.
-    CODECACHE_FlushCache();
-  }
-#endif  // _MSC_VER
 
   t.parent_tid = -1;
   if (has_parent) {
@@ -976,6 +1083,10 @@ void CallbackForThreadStart(THREADID tid, CONTEXT *ctxt,
     g_pin_threads[t.parent_tid].last_child_tid = tid;
     t.thread_stack_size_if_known =
         g_pin_threads[t.parent_tid].last_child_stack_size_if_known;
+  } else {
+#if defined(_MSC_VER)
+    t.startup_state = PinThread::MAY_CONTINUE;
+#endif
   }
 
   // This is a lock-free (thread local) operation.
@@ -1058,13 +1169,22 @@ static uintptr_t WRAP_NAME(CreateThread)(WRAP_PARAM6) {
   t.last_child_stack_size_if_known = arg1 ? arg1 : 1024 * 1024;
 
   HandleThreadCreateBefore(tid, pc);
+
+  // We can't start the thread suspended because we want to get its
+  // PIN thread ID before leaving CreateThread.
+  // So, we reset the CREATE_SUSPENDED flag and SuspendThread before any client
+  // code is executed in the HandleThreadCreateAfter if needed.
+  bool should_be_suspended = arg4 & CREATE_SUSPENDED;
+  arg4 &= ~CREATE_SUSPENDED;
+
   uintptr_t ret = CALL_ME_INSIDE_WRAPPER_6();
   if (ret == NULL) {
     HandleThreadCreateAbort(tid);
     return ret;
   }
   pthread_t child_ptid = ret;
-  THREADID child_tid = HandleThreadCreateAfter(tid, child_ptid);
+  THREADID child_tid = HandleThreadCreateAfter(tid, child_ptid,
+                                               should_be_suspended);
   {
     ScopedReentrantClientLock lock(__LINE__);
     if (g_win_handles_which_are_threads == NULL) {
@@ -1090,6 +1210,19 @@ static void Before_BaseThreadInitThunk(THREADID tid, ADDRINT pc, ADDRINT sp) {
   }
   */
   DumpEvent(0, THR_STACK_TOP, tid, pc, sp, stack_size);
+
+#ifdef _MSC_VER
+  if (t.startup_state != PinThread::MAY_CONTINUE) {
+    CHECK(t.startup_state == PinThread::STARTING);
+    t.startup_state = PinThread::CHILD_READY;
+    while (ATOMIC_READ(&t.startup_state) != PinThread::MAY_CONTINUE) {
+      YIELD();
+    }
+    // Corresponds to SIGNAL from ResumeThread if the thread was suspended on
+    // start.
+    DumpEvent(0, WAIT, tid, pc, t.my_ptid, 0);
+  }
+#endif
 }
 
 static void Before_RtlExitUserThread(THREADID tid, ADDRINT pc) {
@@ -1295,6 +1428,12 @@ uintptr_t CallStdCallFun7(CONTEXT *ctx, THREADID tid,
   return ret;
 }
 
+uintptr_t WRAP_NAME(ResumeThread)(WRAP_PARAM4) {
+//  Printf("T%d %s arg0=%p\n", tid, __FUNCTION__, arg0);
+  DumpEvent(ctx, SIGNAL, tid, pc, arg0, 0);
+  uintptr_t ret = CallStdCallFun1(ctx, tid, f, arg0);
+  return ret;
+}
 uintptr_t WRAP_NAME(RtlInitializeCriticalSection)(WRAP_PARAM4) {
 //  Printf("T%d pc=%p %s: %p\n", tid, pc, __FUNCTION__+8, arg0);
   DumpEvent(ctx, LOCK_CREATE, tid, pc, arg0, 0);
@@ -1620,17 +1759,6 @@ uintptr_t WRAP_NAME(WaitForMultipleObjectsEx)(WRAP_PARAM6) {
 
 #endif  // _MSC_VER
 
-//--------- main() --------------------------------- {{{2
-void Before_main(THREADID tid, ADDRINT pc, ADDRINT argc, ADDRINT argv) {
-  CHECK(tid == 0);
-  main_entered = true;
-}
-
-void After_main(THREADID tid, ADDRINT pc) {
-  CHECK(tid == 0);
-  main_exited = true;
-}
-
 //--------- memory allocation ---------------------- {{{2
 uintptr_t WRAP_NAME(mmap)(WRAP_PARAM6) {
   uintptr_t ret = CALL_ME_INSIDE_WRAPPER_6();
@@ -1650,6 +1778,72 @@ uintptr_t WRAP_NAME(munmap)(WRAP_PARAM4) {
     DumpEvent(ctx, MUNMAP, tid, pc, arg0, arg1);
   }
   return ret;
+}
+
+
+void After_malloc(FAST_WRAP_PARAM_AFTER) {
+  size_t size = frame.arg[0];
+  if (DEBUG_FAST_INTERCEPTORS)
+    Printf("T%d %s %ld %p\n", tid, __FUNCTION__, size, ret);
+  IgnoreSyncAndMopsEnd(tid);
+  DumpEventWithSp(frame.sp, MALLOC, tid, frame.pc, ret, size);
+}
+
+void Before_malloc(FAST_WRAP_PARAM1) {
+  IgnoreSyncAndMopsBegin(tid);
+  PUSH_AFTER_CALLBACK1(After_malloc, arg0);
+}
+
+void After_free(FAST_WRAP_PARAM_AFTER) {
+  if (DEBUG_FAST_INTERCEPTORS)
+    Printf("T%d %s %p\n", tid, __FUNCTION__, frame.arg[0]);
+  IgnoreSyncAndMopsEnd(tid);
+}
+
+void Before_free(FAST_WRAP_PARAM1) {
+  DumpEvent(0, FREE, tid, pc, arg0, 0);
+  IgnoreSyncAndMopsBegin(tid);
+  PUSH_AFTER_CALLBACK1(After_free, arg0);
+}
+
+void Before_calloc(FAST_WRAP_PARAM2) {
+  IgnoreSyncAndMopsBegin(tid);
+  PUSH_AFTER_CALLBACK1(After_malloc, arg0 * arg1);
+}
+
+void Before_realloc(FAST_WRAP_PARAM2) {
+  IgnoreSyncAndMopsBegin(tid);
+  // TODO: handle FREE? We don't do it in Valgrind right now.
+  PUSH_AFTER_CALLBACK1(After_malloc, arg1);
+}
+
+// Fast path for INS_InsertIfCall.
+ADDRINT Before_RET_IF(THREADID tid, ADDRINT pc, ADDRINT sp, ADDRINT ret) {
+  PinThread &t = g_pin_threads[tid];
+  return t.ic_stack.size();
+}
+
+void Before_RET_THEN(THREADID tid, ADDRINT pc, ADDRINT sp, ADDRINT ret) {
+  PinThread &t = g_pin_threads[tid];
+  if (t.ic_stack.size() == 0) return;
+  DCHECK(t.ic_stack.size());
+  InstrumentedCallFrame *frame = t.ic_stack.Top();
+  if (DEBUG_FAST_INTERCEPTORS) {
+    Printf("T%d RET  pc=%p sp=%p *sp=%p frame.sp=%p stack_size %ld\n",
+           tid, pc, sp, *(uintptr_t*)sp, frame->sp, t.ic_stack.size());
+    t.ic_stack.Print();
+  }
+  while (frame->sp <= sp) {
+    if (DEBUG_FAST_INTERCEPTORS)
+      Printf("pop\n");
+    frame->callback(tid, *frame, ret);
+    t.ic_stack.Pop();
+    if (t.ic_stack.size()) {
+      frame = t.ic_stack.Top();
+    } else {
+      break;
+    }
+  }
 }
 
 uintptr_t WRAP_NAME(malloc)(WRAP_PARAM4) {
@@ -1847,16 +2041,9 @@ static void OnMop(uintptr_t *addr, THREADID tid, ADDRINT idx, ADDRINT a) {
     PinThread &t= g_pin_threads[tid];
     CHECK(idx < kMaxMopsPerTrace);
     CHECK(idx < t.trace_info->n_mops());
-    CHECK(addr >= t.tleb.events);
-    CHECK(addr < t.tleb.events + kThreadLocalEventBufferSize);
-    if (t.tleb.size > 0) {
-      CHECK(addr + idx < t.tleb.events + t.tleb.size);
-    } else {
-      // t.tleb.size is zero. We just flushed but we are still
-      // getting mop events from the old trace.
-      // This way we may loose some races, but probably we won't
-      // because such situation happens only (?) inside our interceptors.
-    }
+    uintptr_t *ptr = addr + idx;
+    CHECK(ptr >= t.tleb.events);
+    CHECK(ptr < t.tleb.events + kThreadLocalEventBufferSize);
     if (a == G_flags->trace_addr) {
       Printf("T%d %s %lx\n", t.tid, __FUNCTION__, a);
     }
@@ -1913,10 +2100,12 @@ static void Before_pthread_unlock(THREADID tid, ADDRINT pc, ADDRINT mu) {
   DumpEvent(0, UNLOCK, tid, pc, mu, 0);
 }
 
-static uintptr_t WRAP_NAME(pthread_mutex_lock)(WRAP_PARAM4) {
-  uintptr_t ret = CALL_ME_INSIDE_WRAPPER_4();
-  DumpEvent(ctx, WRITER_LOCK, tid, pc, arg0, 0);
-  return ret;
+static void After_pthread_mutex_lock(FAST_WRAP_PARAM_AFTER) {
+  DumpEventWithSp(frame.sp, WRITER_LOCK, tid, frame.pc, frame.arg[0], 0);
+}
+
+static void Before_pthread_mutex_lock(FAST_WRAP_PARAM1) {
+  PUSH_AFTER_CALLBACK1(After_pthread_mutex_lock, arg0);
 }
 
 // In some versions of libpthread, pthread_spin_lock is effectively
@@ -2049,6 +2238,17 @@ static uintptr_t WRAP_NAME(pthread_cond_timedwait)(WRAP_PARAM4) {
   }
   DumpEvent(ctx, WRITER_LOCK, tid, pc, arg1, 0);
   return ret;
+}
+
+// epoll
+static const uintptr_t kSocketMagic = 0xDEADFBAD;
+
+static void Before_epoll_ctl(THREADID tid, ADDRINT pc) {
+  DumpEvent(0, SIGNAL, tid, pc, kSocketMagic, 0);
+}
+
+static void After_epoll_wait(THREADID tid, ADDRINT pc) {
+  DumpEvent(0, WAIT, tid, pc, kSocketMagic, 0);
 }
 
 // sem
@@ -2455,19 +2655,6 @@ static void InstrumentMopsInBBl(BBL bbl, RTN rtn, TraceInfo *trace_info, uintptr
 
 void CallbackForTRACE(TRACE trace, void *v) {
   CHECK(n_started_threads > 0);
-  if (global_ignore) {
-    // Once global_ignore is set to false we will reinstrument everything.
-    return;
-  }
-
-#if 0
-  if (n_started_threads == 1) {
-    // There are no threads running other than the main thread.
-    // Do not instrument anything. When another thread starts,
-    // we will flush the code cache.
-    return;
-  }
-#endif  // _MSC_VER
 
   RTN rtn = TRACE_Rtn(trace);
   bool ignore_memory = false;
@@ -2507,6 +2694,26 @@ void CallbackForTRACE(TRACE trace, void *v) {
   for(BBL bbl = TRACE_BblHead(trace); BBL_Valid(bbl); bbl = BBL_Next(bbl)) {
     if (!ignore_memory) {
       InstrumentMopsInBBl(bbl, rtn, NULL, instrument_pc, &n_mops);
+    }
+    INS tail = BBL_InsTail(bbl);
+    if (INS_IsRet(tail)) {
+#if 0
+      INS_InsertIfCall(tail, IPOINT_BEFORE,
+                       (AFUNPTR)Before_RET_IF,
+                       IARG_THREAD_ID,
+                       IARG_END);
+
+      INS_InsertThenCall(
+#else
+        INS_InsertCall(
+#endif
+          tail, IPOINT_BEFORE,
+          (AFUNPTR)Before_RET_THEN,
+          IARG_THREAD_ID,
+          IARG_INST_PTR,
+          IARG_REG_VALUE, REG_STACK_PTR,
+          IARG_FUNCRET_EXITPOINT_VALUE,
+          IARG_END);
     }
   }
 
@@ -2591,6 +2798,17 @@ void CallbackForTRACE(TRACE trace, void *v) {
 
 #define INSERT_BEFORE_FN(name, to_insert, ...) \
     INSERT_FN(IPOINT_BEFORE, name, to_insert, __VA_ARGS__)
+
+#define INSERT_BEFORE_1_SP(name, to_insert) \
+    INSERT_BEFORE_FN(name, to_insert, \
+                     IARG_REG_VALUE, REG_STACK_PTR, \
+                     IARG_FUNCARG_ENTRYPOINT_VALUE, 0)
+
+#define INSERT_BEFORE_2_SP(name, to_insert) \
+    INSERT_BEFORE_FN(name, to_insert, \
+                     IARG_REG_VALUE, REG_STACK_PTR, \
+                     IARG_FUNCARG_ENTRYPOINT_VALUE, 0, \
+                     IARG_FUNCARG_ENTRYPOINT_VALUE, 1)
 
 #define INSERT_BEFORE_0(name, to_insert) \
     INSERT_BEFORE_FN(name, to_insert, IARG_END);
@@ -2962,39 +3180,51 @@ static void MaybeInstrumentOneRoutine(IMG img, RTN rtn) {
            img_name.c_str(), RTN_Address(rtn));
   }
 
-  // main()
-  INSERT_BEFORE_2("main", Before_main);
-  INSERT_AFTER_0("main", After_main);
-
   // malloc/free/etc
-  WrapFunc4(img, rtn, "malloc", (AFUNPTR)WRAP_NAME(malloc));
-  WrapFunc4(img, rtn, "realloc", (AFUNPTR)WRAP_NAME(realloc));
-  WrapFunc4(img, rtn, "calloc", (AFUNPTR)WRAP_NAME(calloc));
-  WrapFunc4(img, rtn, "free", (AFUNPTR)WRAP_NAME(free));
-
-  // Linux: operator new/delete
+  const char *malloc_names[] = {
+    "malloc",
 #if defined(__GNUC__)
-  WrapFunc4(img, rtn, "_Znwm", (AFUNPTR)WRAP_NAME(malloc));
-  WrapFunc4(img, rtn, "_Znam", (AFUNPTR)WRAP_NAME(malloc));
-  WrapFunc4(img, rtn, "_Znwj", (AFUNPTR)WRAP_NAME(malloc));
-  WrapFunc4(img, rtn, "_Znaj", (AFUNPTR)WRAP_NAME(malloc));
-  WrapFunc4(img, rtn, "_ZnwmRKSt9nothrow_t", (AFUNPTR)WRAP_NAME(malloc));
-  WrapFunc4(img, rtn, "_ZnamRKSt9nothrow_t", (AFUNPTR)WRAP_NAME(malloc));
-  WrapFunc4(img, rtn, "_ZnwjRKSt9nothrow_t", (AFUNPTR)WRAP_NAME(malloc));
-  WrapFunc4(img, rtn, "_ZnajRKSt9nothrow_t", (AFUNPTR)WRAP_NAME(malloc));
-  WrapFunc4(img, rtn, "_ZdaPv", (AFUNPTR)WRAP_NAME(free));
-  WrapFunc4(img, rtn, "_ZdlPv", (AFUNPTR)WRAP_NAME(free));
-  WrapFunc4(img, rtn, "_ZdlPvRKSt9nothrow_t", (AFUNPTR)WRAP_NAME(free));
-  WrapFunc4(img, rtn, "_ZdaPvRKSt9nothrow_t", (AFUNPTR)WRAP_NAME(free));
-#endif  // __GNUC__
-
-  // Windows: operator new/delete
+    "_Znwm",
+    "_Znam",
+    "_Znwj",
+    "_Znaj",
+    "_ZnwmRKSt9nothrow_t",
+    "_ZnamRKSt9nothrow_t",
+    "_ZnwjRKSt9nothrow_t",
+    "_ZnajRKSt9nothrow_t",
+#endif
 #if defined(_MSC_VER)
-  WrapFunc4(img, rtn, "operator new", (AFUNPTR)WRAP_NAME(malloc));
-  WrapFunc4(img, rtn, "operator new[]", (AFUNPTR)WRAP_NAME(malloc));
-  WrapFunc4(img, rtn, "operator delete", (AFUNPTR)WRAP_NAME(free));
-  WrapFunc4(img, rtn, "operator delete[]", (AFUNPTR)WRAP_NAME(free));
+    "operator new",
+    "operator new[]",
 #endif  // _MSC_VER
+  };
+
+  const char *free_names[] = {
+    "free",
+#if defined(__GNUC__)
+    "_ZdaPv",
+    "_ZdlPv",
+    "_ZdlPvRKSt9nothrow_t",
+    "_ZdaPvRKSt9nothrow_t",
+#endif  // __GNUC__
+#if defined(_MSC_VER)
+    "operator delete",
+    "operator delete[]",
+#endif  // _MSC_VER
+  };
+
+  for (size_t i = 0; i < TS_ARRAY_SIZE(malloc_names); i++) {
+    const char *name = malloc_names[i];
+    INSERT_BEFORE_1_SP(name, Before_malloc);
+  }
+
+  for (size_t i = 0; i < TS_ARRAY_SIZE(free_names); i++) {
+    const char *name = free_names[i];
+    INSERT_BEFORE_1_SP(name, Before_free);
+  }
+
+  INSERT_BEFORE_2_SP("calloc", Before_calloc);
+  INSERT_BEFORE_2_SP("realloc", Before_realloc);
 
 #if defined(__GNUC__)
   WrapFunc6(img, rtn, "mmap", (AFUNPTR)WRAP_NAME(mmap));
@@ -3021,7 +3251,7 @@ static void MaybeInstrumentOneRoutine(IMG img, RTN rtn) {
   INSERT_BEFORE_1("pthread_mutex_unlock", Before_pthread_unlock);
 
 
-  WRAP4(pthread_mutex_lock);
+  INSERT_BEFORE_1_SP("pthread_mutex_lock", Before_pthread_mutex_lock);
   WRAP4(pthread_mutex_trylock);
   WRAP4(pthread_spin_lock);
   WRAP4(pthread_spin_trylock);
@@ -3052,10 +3282,14 @@ static void MaybeInstrumentOneRoutine(IMG img, RTN rtn) {
   INSERT_BEFORE_1("sem_post", Before_sem_post);
   WRAP4(sem_wait);
   WRAP4(sem_trywait);
+
+  INSERT_BEFORE_0("epoll_ctl", Before_epoll_ctl);
+  INSERT_AFTER_0("epoll_wait", After_epoll_wait);
 #endif  // __GNUC__
 
 #ifdef _MSC_VER
   WrapStdCallFunc6(rtn, "CreateThread", (AFUNPTR)WRAP_NAME(CreateThread));
+  WRAPSTD1(ResumeThread);
 
   INSERT_FN(IPOINT_BEFORE, "BaseThreadInitThunk",
             Before_BaseThreadInitThunk,
@@ -3121,6 +3355,7 @@ static void MaybeInstrumentOneRoutine(IMG img, RTN rtn) {
   // Annotations.
   INSERT_BEFORE_4("AnnotateBenignRace", On_AnnotateBenignRace);
   INSERT_BEFORE_5("AnnotateBenignRaceSized", On_AnnotateBenignRaceSized);
+  INSERT_BEFORE_5("WTFAnnotateBenignRaceSized", On_AnnotateBenignRaceSized);
   INSERT_BEFORE_4("AnnotateExpectRace", On_AnnotateExpectRace);
   INSERT_BEFORE_2("AnnotateFlushExpectedRaces", On_AnnotateFlushExpectedRaces);
   INSERT_BEFORE_3("AnnotateTraceMemory", On_AnnotateTraceMemory);
@@ -3132,7 +3367,9 @@ static void MaybeInstrumentOneRoutine(IMG img, RTN rtn) {
   INSERT_BEFORE_3("AnnotateCondVarSignal", On_AnnotateCondVarSignal);
   INSERT_BEFORE_3("AnnotateCondVarSignalAll", On_AnnotateCondVarSignal);
   INSERT_BEFORE_3("AnnotateHappensBefore", On_AnnotateHappensBefore);
+  INSERT_BEFORE_3("WTFAnnotateHappensBefore", On_AnnotateHappensBefore);
   INSERT_BEFORE_3("AnnotateHappensAfter", On_AnnotateHappensAfter);
+  INSERT_BEFORE_3("WTFAnnotateHappensAfter", On_AnnotateHappensAfter);
 
   INSERT_BEFORE_3("AnnotateEnableRaceDetection", On_AnnotateEnableRaceDetection);
   INSERT_BEFORE_0("AnnotateIgnoreReadsBegin", On_AnnotateIgnoreReadsBegin);
@@ -3188,8 +3425,11 @@ static void MaybeInstrumentOneRoutine(IMG img, RTN rtn) {
     ReplaceFunc3(img, rtn, "strcmp", (AFUNPTR)Replace_strcmp);
     ReplaceFunc3(img, rtn, "strncmp", (AFUNPTR)Replace_strncmp);
     ReplaceFunc3(img, rtn, "memcpy", (AFUNPTR)Replace_memcpy);
+    ReplaceFunc3(img, rtn, "memcmp", (AFUNPTR)Replace_memcmp);
+    ReplaceFunc3(img, rtn, "memmove", (AFUNPTR)Replace_memmove);
     ReplaceFunc3(img, rtn, "strcpy", (AFUNPTR)Replace_strcpy);
     ReplaceFunc3(img, rtn, "strncpy", (AFUNPTR)Replace_strncpy);
+    ReplaceFunc3(img, rtn, "strcat", (AFUNPTR)Replace_strcat);
     ReplaceFunc3(img, rtn, "stpcpy", (AFUNPTR)Replace_stpcpy);
   }
 

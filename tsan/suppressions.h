@@ -34,7 +34,7 @@
 #ifndef TSAN_SUPPRESSIONS_H_
 #define TSAN_SUPPRESSIONS_H_
 
-#include "ts_util.h"
+#include "common_util.h"
 
 class Suppressions {
  public:

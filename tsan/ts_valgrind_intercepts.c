@@ -53,6 +53,7 @@
 // is instrumented, so we just don't touch reads/writes in replacement
 // functions.
 #define EXTRA_REPLACE_PARAMS
+#define EXTRA_REPLACE_ARGS
 #define REPORT_READ_RANGE(x, size)
 #define REPORT_WRITE_RANGE(x, size)
 #include "ts_replace.h"
@@ -1983,19 +1984,19 @@ static void *SocketMagic(long s) {
   return (void*)0xDEADFBAD;
 }
 
-NONE_FUNC(int, epoll_wait, int epfd, void * events, int maxevents, int timeout) {
+LIBC_FUNC(int, epoll_wait, int epfd, void * events, int maxevents, int timeout) {
    OrigFn fn;
    long    ret;
    void *o;
    VALGRIND_GET_ORIG_FN(fn);
 //   fprintf(stderr, "T%d socket epoll_wait: %d\n", VALGRIND_TS_THREAD_ID(), epfd);
+   CALL_FN_W_WWWW(ret, fn, epfd, events, maxevents, timeout);
    o = SocketMagic(epfd);
    do_wait(o);
-   CALL_FN_W_WWWW(ret, fn, epfd, events, maxevents, timeout);
    return ret;
 }
 
-NONE_FUNC(int, epoll_ctl, int epfd, int op, int fd, void *event) {
+LIBC_FUNC(int, epoll_ctl, int epfd, int op, int fd, void *event) {
    OrigFn fn;
    long    ret;
    void *o;
@@ -2006,8 +2007,6 @@ NONE_FUNC(int, epoll_ctl, int epfd, int op, int fd, void *event) {
    CALL_FN_W_WWWW(ret, fn, epfd, op, fd, event);
    return ret;
 }
-
-
 
 PTH_FUNC(long, send, int s, void *buf, long len, int flags) {
    OrigFn fn;
@@ -2296,6 +2295,22 @@ MEMCPY(NONE, _intel_fast_memcpy)
 MEMCPY(VG_Z_LIBC_SONAME, __GI_memcpy);
 #endif
 
+// --- MEMMOVE -----------------------------------------------------
+//
+#define MEMMOVE(soname, fnname) \
+   void* VG_REPLACE_FUNCTION_ZU(soname,fnname) \
+            ( void *dst, const void *src, SizeT len ); \
+   void* VG_REPLACE_FUNCTION_ZU(soname,fnname) \
+            ( void *dst, const void *src, SizeT len ) \
+   { return Replace_memmove(dst, src, len); }
+
+MEMMOVE(VG_Z_LIBC_SONAME, memmove)
+MEMMOVE(NONE, memmove)
+#if defined(VGO_linux)
+MEMMOVE(VG_Z_LIBC_SONAME, __GI_memmove);
+#endif
+
+
 // --- STRCHR and INDEX -------------------------------------------
 //
 #define STRCHR(soname, fnname) \
@@ -2340,6 +2355,20 @@ STRCMP(VG_Z_LIBC_SONAME, strcmp)
 STRCMP(NONE,             strcmp)
 #if defined(VGO_linux)
 STRCMP(VG_Z_LIBC_SONAME, __GI_strcmp)
+#endif
+
+#define MEMCMP(soname, fnname) \
+   int VG_REPLACE_FUNCTION_ZU(soname,fnname) \
+          ( const char* s1, const char* s2 , size_t n); \
+   int VG_REPLACE_FUNCTION_ZU(soname,fnname) \
+          ( const char* s1, const char* s2 , size_t n) \
+   { return Replace_memcmp(s1, s2, n); }
+
+MEMCMP(VG_Z_LIBC_SONAME, __memcmp_ssse3)
+MEMCMP(VG_Z_LIBC_SONAME, memcmp)
+MEMCMP(NONE,             memcmp)
+#if defined(VGO_linux)
+MEMCMP(VG_Z_LIBC_SONAME, __GI_memcmp)
 #endif
 
 #define MEMCHR(soname, fnname) \
@@ -2404,6 +2433,19 @@ STRNCPY(VG_Z_LIBC_SONAME, strncpy)
 STRNCPY(NONE,             strncpy)
 #if defined(VGO_linux)
 STRNCPY(VG_Z_LIBC_SONAME, __GI_strncpy)
+#endif
+
+// --- STRCAT -----------------------------------------------------
+//
+#define STRCAT(soname, fnname) \
+   char* VG_REPLACE_FUNCTION_ZU(soname, fnname) ( char* dst, const char* src); \
+   char* VG_REPLACE_FUNCTION_ZU(soname, fnname) ( char* dst, const char* src) \
+   { return Replace_strcat(dst, src); }
+
+STRCAT(VG_Z_LIBC_SONAME, strcat)
+STRCAT(NONE,             strcat)
+#if defined(VGO_linux)
+STRCAT(VG_Z_LIBC_SONAME, __GI_strcat)
 #endif
 
 // --- STPCPY -----------------------------------------------------
@@ -2508,9 +2550,23 @@ ANN_FUNC(void, AnnotateHappensBefore, const char *file, int line, void *obj)
   DO_CREQ_v_W(TSREQ_SIGNAL, void*, obj);
 }
 
+ANN_FUNC(void, WTFAnnotateHappensBefore, const char *file, int line, void *obj)
+{
+  const char *name = "WTFAnnotateHappensBefore";
+  ANN_TRACE("--#%d %s[%p] %s:%d\n", tid, name, obj, file, line);
+  DO_CREQ_v_W(TSREQ_SIGNAL, void*, obj);
+}
+
 ANN_FUNC(void, AnnotateHappensAfter, const char *file, int line, void *obj)
 {
   const char *name = "AnnotateHappensAfter";
+  ANN_TRACE("--#%d %s[%p] %s:%d\n", tid, name, obj, file, line);
+  do_wait(obj);
+}
+
+ANN_FUNC(void, WTFAnnotateHappensAfter, const char *file, int line, void *obj)
+{
+  const char *name = "WTFAnnotateHappensAfter";
   ANN_TRACE("--#%d %s[%p] %s:%d\n", tid, name, obj, file, line);
   do_wait(obj);
 }
@@ -2567,6 +2623,14 @@ ANN_FUNC(void, AnnotateBenignRace, const char *file, int line, void *mem, char *
 ANN_FUNC(void, AnnotateBenignRaceSized, const char *file, int line, void *mem, long size, char *description)
 {
   const char *name = "AnnotateBenignRace";
+  ANN_TRACE("--#%d %s[%p] %s:%d\n", tid, name, mem, file, line);
+  DO_CREQ_v_WWW(TSREQ_BENIGN_RACE, char*,(char*)mem, long, size,
+                char*,description);
+}
+
+ANN_FUNC(void, WTFAnnotateBenignRaceSized, const char *file, int line, void *mem, long size, char *description)
+{
+  const char *name = "WTFAnnotateBenignRace";
   ANN_TRACE("--#%d %s[%p] %s:%d\n", tid, name, mem, file, line);
   DO_CREQ_v_WWW(TSREQ_BENIGN_RACE, char*,(char*)mem, long, size,
                 char*,description);

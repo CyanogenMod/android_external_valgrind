@@ -31,7 +31,6 @@
 
 #include <gtest/gtest.h>
 
-#include "common_util.h"
 #include "suppressions.h"
 
 #define VEC(arr) *(new vector<string>(arr, arr + sizeof(arr) / sizeof(*arr)))
@@ -221,7 +220,7 @@ TEST_F(BaseSuppressionsTest, StartsWithVerticalWildcard) {
       "  ...\n"
       "  fun:qq\n"
       "}";
-  supp_.ReadFromString(data);
+  ASSERT_GT(supp_.ReadFromString(data), 0);
   string m[] = {"fun1", "bb", "qq", "function2"};
   string d[] = {"aaa", "bbb", "ddd", "ccc"};
   string o[] = {"object2", "objt1", "object3", "object4"};
@@ -236,7 +235,7 @@ TEST_F(BaseSuppressionsTest, StartsWithVerticalWildcard2) {
       "  ...\n"
       "  fun:fun1\n"
       "}";
-  supp_.ReadFromString(data);
+  ASSERT_GT(supp_.ReadFromString(data), 0);
   string m[] = {"fun1", "bb", "qq", "function2"};
   string d[] = {"aaa", "bbb", "ddd", "ccc"};
   string o[] = {"object2", "objt1", "object3", "object4"};
@@ -251,7 +250,7 @@ TEST_F(BaseSuppressionsTest, EndsWithVerticalWildcard) {
       "  fun:fun1\n"
       "  ...\n"
       "}";
-  supp_.ReadFromString(data);
+  ASSERT_GT(supp_.ReadFromString(data), 0);
   string m[] = {"fun1", "bb", "qq", "function2"};
   string d[] = {"aaa", "bbb", "ddd", "ccc"};
   string o[] = {"object2", "objt1", "object3", "object4"};
@@ -266,7 +265,7 @@ TEST_F(BaseSuppressionsTest, EndsWithVerticalWildcard2) {
       "  fun:qq\n"
       "  ...\n"
       "}";
-  supp_.ReadFromString(data);
+  ASSERT_GT(supp_.ReadFromString(data), 0);
   string m[] = {"fun1", "bb", "qq", "function2"};
   string d[] = {"aaa", "bbb", "ddd", "ccc"};
   string o[] = {"object2", "objt1", "object3", "object4"};
@@ -284,7 +283,7 @@ TEST_F(BaseSuppressionsTest, Complex) {
       "  ...\n"
       "  fun:function?\n"
       "}";
-  supp_.ReadFromString(data);
+  ASSERT_GT(supp_.ReadFromString(data), 0);
   string m[] = {"fun1", "bb", "qq", "function2"};
   string d[] = {"aaa", "bbb", "ddd", "ccc"};
   string o[] = {"object2", "objt1", "object3", "object4"};
@@ -298,7 +297,7 @@ TEST_F(BaseSuppressionsTest, DemangledNames) {
       "  test_tool:test_warning_type\n"
       "  fun:bb*w?\n"
       "}";
-  supp_.ReadFromString(data);
+  ASSERT_GT(supp_.ReadFromString(data), 0);
   string m[] = {"fun1", "bb", "qq", "function2"};
   string d[] = {"bbbxxwz", "aaa", "ddd", "ccc"};
   string o[] = {"object2", "objt1", "object3", "object4"};
@@ -312,8 +311,22 @@ TEST_F(BaseSuppressionsTest, TrailingWhitespace) {
       "  test_tool:test_warning_type\n"
       "  fun:bb*w? \n"
       "}";
-  supp_.ReadFromString(data);
+  ASSERT_GT(supp_.ReadFromString(data), 0);
   string m[] = {"fun1", "bb", "qq", "function2"};
+  string d[] = {"bbbxxwz", "aaa", "ddd", "ccc"};
+  string o[] = {"object2", "objt1", "object3", "object4"};
+  ASSERT_TRUE(IsSuppressed(VEC(m), VEC(d), VEC(o)));
+}
+
+TEST_F(BaseSuppressionsTest, ObjectiveC) {
+  const string data =
+      "{\n"
+      "  name\n"
+      "  test_tool:test_warning_type\n"
+      "  fun:-[NSObject(NSKeyValueCoding) setValue:forKeyPath:]\n"
+      "}";
+  ASSERT_GT(supp_.ReadFromString(data), 0);
+  string m[] = {"-[NSObject(NSKeyValueCoding) setValue:forKeyPath:]", "function2"};
   string d[] = {"bbbxxwz", "aaa", "ddd", "ccc"};
   string o[] = {"object2", "objt1", "object3", "object4"};
   ASSERT_TRUE(IsSuppressed(VEC(m), VEC(d), VEC(o)));
@@ -458,6 +471,39 @@ TEST_F(FailingSuppressionsTest, BadStacktrace3) {
   ASSERT_EQ(12, ErrorLineNo(data));
 }
 
+TEST_F(FailingSuppressionsTest, StacktraceWithParenthesis) {
+  const string data =
+      "{\n"
+      "  name\n"
+      "  test_tool:test_warning_type\n"
+      "  {\n"
+      "    fun:fun*2\n"
+      "    fun:fun*3\n"
+      "  }\n"
+      "  {\n"
+      "    fun:fun*4()\n"
+      "    obj:obj*5\n"
+      "  }\n"
+      "}";
+  ASSERT_EQ(9, ErrorLineNo(data));
+}
+
+TEST_F(FailingSuppressionsTest, StacktraceWithAngleBraces) {
+  const string data =
+      "{\n"
+      "  name\n"
+      "  test_tool:test_warning_type\n"
+      "  {\n"
+      "    fun:fun*2\n"
+      "    fun:fun*3\n"
+      "  }\n"
+      "  {\n"
+      "    fun:fun<int>*4\n"
+      "    obj:obj*5\n"
+      "  }\n"
+      "}";
+  ASSERT_EQ(9, ErrorLineNo(data));
+}
 
 
 TEST(WildcardTest, Simple) {
