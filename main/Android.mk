@@ -260,7 +260,7 @@ LOCAL_MODULE_PATH := $(TARGET_OUT_SHARED_LIBRARIES)/valgrind
 LOCAL_ARM_MODE := arm
 LOCAL_STRIP_MODULE := false
 LOCAL_NO_CRT := true
-
+LOCAL_PRELINK_MODULE := false
 
 LOCAL_SRC_FILES := \
 	coregrind/vg_preloaded.c
@@ -313,7 +313,7 @@ LOCAL_MODULE_PATH := $(TARGET_OUT_SHARED_LIBRARIES)/valgrind
 LOCAL_ARM_MODE := arm
 LOCAL_STRIP_MODULE := false
 LOCAL_NO_CRT := true
-
+LOCAL_PRELINK_MODULE := false
 
 LOCAL_SRC_FILES := \
 	memcheck/mc_replace_strmem.c
@@ -441,7 +441,7 @@ LOCAL_MODULE_PATH := $(TARGET_OUT_SHARED_LIBRARIES)/valgrind
 LOCAL_ARM_MODE := arm
 LOCAL_STRIP_MODULE := false
 LOCAL_NO_CRT := true
-
+LOCAL_PRELINK_MODULE := false
 
 LOCAL_SRC_FILES := \
 	helgrind/hg_intercepts.c
@@ -505,7 +505,7 @@ LOCAL_MODULE_PATH := $(TARGET_OUT_SHARED_LIBRARIES)/valgrind
 LOCAL_ARM_MODE := arm
 LOCAL_STRIP_MODULE := false
 LOCAL_NO_CRT := true
-
+LOCAL_PRELINK_MODULE := false
 
 LOCAL_SRC_FILES := \
 	drd/drd_pthread_intercepts.c \
@@ -557,7 +557,7 @@ LOCAL_MODULE_PATH := $(TARGET_OUT_SHARED_LIBRARIES)/valgrind
 LOCAL_ARM_MODE := arm
 LOCAL_STRIP_MODULE := false
 LOCAL_NO_CRT := true
-
+LOCAL_PRELINK_MODULE := false
 
 LOCAL_SRC_FILES :=
 
