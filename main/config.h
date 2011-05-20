@@ -315,7 +315,7 @@
 #define VERSION "3.6.1"
 
 /* Temporary files directory */
-#define VG_TMPDIR "/sdcard"
+#define VG_TMPDIR "/data/local/tmp"
 
 /* Define to `int' if <sys/types.h> doesn't define. */
 /* #undef gid_t */
