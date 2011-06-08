@@ -31,9 +31,6 @@ common_cflags := \
 	-DVG_PLATFORM=\"$(arch)-linux\" \
 	-D_STLP_NO_IOSTREAMS=1
 
-common_cxxflags := \
-	-fno-rtti
-
 common_includes := \
 	external/valgrind/main \
 	external/valgrind/main/include \
@@ -82,6 +79,7 @@ LOCAL_C_INCLUDES := \
 LOCAL_LDFLAGS := $(tool_ldflags)
 LOCAL_CFLAGS := $(common_cflags)
 LOCAL_CXXFLAGS := $(common_cxxflags)
+LOCAL_RTTI_FLAG := -fno-rtti
 LOCAL_STATIC_LIBRARIES := libcoregrind-$(arch)-linux libvex-$(arch)-linux
 
 include $(BUILD_EXECUTABLE)
@@ -103,6 +101,7 @@ LOCAL_SRC_FILES := \
 LOCAL_C_INCLUDES := $(common_includes)
 LOCAL_LDFLAGS := $(preload_ldflags)
 LOCAL_CFLAGS := $(common_cflags)
+LOCAL_RTTI_FLAG := -fno-rtti
 
 include $(BUILD_SHARED_LIBRARY)
 
