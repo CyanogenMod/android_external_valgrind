@@ -1084,7 +1084,12 @@ Addr find_debug_file( struct _DebugInfo* di,
          VG_(sprintf)(debugpath, "%s/.debug/%s", objdir, debugname);
          if ((addr = open_debug_file(debugpath, NULL, crc, size)) == 0) {
             VG_(sprintf)(debugpath, "/usr/lib/debug%s/%s", objdir, debugname);
-            addr = open_debug_file(debugpath, NULL, crc, size);
+            if ((addr = open_debug_file(debugpath, NULL, crc, size)) == 0) {
+#ifdef ANDROID
+	      VG_(sprintf)(debugpath, "/data/local/symbols%s/%s", objdir, debugname);
+	      addr = open_debug_file(debugpath, NULL, crc, size);
+#endif
+	    }
          }
       }
 
@@ -1237,22 +1242,11 @@ Bool ML_(read_elf_debug_info) ( struct _DebugInfo* di )
       line number info out of it.  It will be munmapped immediately
       thereafter; it is only aboard transiently. */
 
-#ifdef ANDROID
-   const SizeT symbolsDirLen = VG_(strlen)(ANDROID_SYMBOLS_DIR);
-   UChar debugFilename[symbolsDirLen + VG_(strlen)(di->filename) + 1];
-   VG_(strcpy)(debugFilename, ANDROID_SYMBOLS_DIR);
-   VG_(strcpy)(debugFilename+symbolsDirLen, di->filename);
-   fd = VG_(open)(debugFilename, VKI_O_RDONLY, 0);
-   if (sr_isError(fd)) {
-#endif
    fd = VG_(open)(di->filename, VKI_O_RDONLY, 0);
    if (sr_isError(fd)) {
       ML_(symerr)(di, True, "Can't open .so/.exe to read symbols?!");
       return False;
    }
-#ifdef ANDROID
-   }
-#endif
 
    { Long n_oimageLL = VG_(fsize)(sr_Res(fd));
      if (n_oimageLL <= 0) {
@@ -1375,9 +1369,7 @@ Bool ML_(read_elf_debug_info) ( struct _DebugInfo* di )
             if (rx_svma_limit == 0
                 && phdr->p_offset >= di->rx_map_foff
                 && phdr->p_offset < di->rx_map_foff + di->rx_map_size
-#ifndef ANDROID
                 && phdr->p_offset + phdr->p_filesz <= di->rx_map_foff + di->rx_map_size
-#endif
                 && (phdr->p_flags&(PF_R|PF_W|PF_X)) == (PF_R|PF_X)) {
                rx_svma_base = phdr->p_vaddr;
                rx_svma_limit = phdr->p_vaddr + phdr->p_memsz;
@@ -1386,9 +1378,7 @@ Bool ML_(read_elf_debug_info) ( struct _DebugInfo* di )
             else if (rw_svma_limit == 0
                      && phdr->p_offset >= di->rw_map_foff
                      && phdr->p_offset < di->rw_map_foff + di->rw_map_size
-#ifndef ANDROID
                      && phdr->p_offset + phdr->p_filesz <= di->rw_map_foff + di->rw_map_size
-#endif
                      && (phdr->p_flags&(PF_R|PF_W|PF_X)) == (PF_R|PF_W)) {
                rw_svma_base = phdr->p_vaddr;
                rw_svma_limit = phdr->p_vaddr + phdr->p_memsz;
