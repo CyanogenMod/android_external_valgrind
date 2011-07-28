@@ -1839,6 +1839,11 @@ void ML_(read_debuginfo_dwarf1) (
 /* the number of regs we are prepared to unwind */
 #if defined(VGP_ppc32_linux) || defined(VGP_ppc64_linux)
 # define N_CFI_REGS 72
+#elif defined (VGP_arm_linux)
+/* 287 is the highest allocated DWARF register name as of 27.07.2011
+  http://infocenter.arm.com/help/topic/com.arm.doc.ihi0040a/IHI0040A_aadwarf.pdf
+*/
+# define N_CFI_REGS 287
 #else
 # define N_CFI_REGS 20
 #endif
