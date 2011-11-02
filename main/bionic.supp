@@ -15,3 +15,11 @@
   fun:__dl_dlopen
 }
 
+{
+  bionic_dlopen_c
+  Memcheck:Cond
+  fun:__dl_strlen
+  ...
+  fun:__dl_find_library
+  fun:__dl_dlopen
+}
