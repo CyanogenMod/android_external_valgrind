@@ -395,9 +395,14 @@ Int VG_(load_ELF)(Int fd, const HChar* name, /*MOD*/ExeInfo* info)
                continue;
             
 #ifdef ANDROID
-            // The first LOAD segment of /system/bin/linker has vaddr=0, memsz=0
-            // but subsequent segments start at 0xb0001000.
-            if (!baseaddr_set && iph->p_vaddr) {
+            // On older versions of Android, the first LOAD segment of
+            // /system/bin/linker has vaddr=0, memsz=0, but subsequent
+            // segments start at 0xb0001000.
+            //
+            // On newer versions of Android, the linker is ET_DYN and
+            // we don't have to worry about iph->p_vaddr
+            if (!baseaddr_set
+                && (iph->p_vaddr || (interp->e.e_type == ET_DYN))) {
 #else
             if (!baseaddr_set) {
 #endif
