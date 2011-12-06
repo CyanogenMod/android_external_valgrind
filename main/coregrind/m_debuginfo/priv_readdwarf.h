@@ -7,7 +7,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2000-2010 Julian Seward 
+   Copyright (C) 2000-2011 Julian Seward 
       jseward@acm.org
 
    This program is free software; you can redistribute it and/or
@@ -62,7 +62,9 @@ void ML_(read_debuginfo_dwarf1) ( struct _DebugInfo* di,
    -------------------- */
 extern
 void ML_(read_callframe_info_dwarf3)
-    ( /*OUT*/struct _DebugInfo* di, UChar* frame, SizeT frame_sz, Bool for_eh );
+        ( /*OUT*/struct _DebugInfo* di,
+          UChar* frame_image, SizeT frame_size, Addr frame_avma,
+          Bool is_ehframe );
 
 
 #endif /* ndef __PRIV_READDWARF_H */

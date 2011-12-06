@@ -7,7 +7,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2000-2010 Julian Seward
+   Copyright (C) 2000-2011 Julian Seward
       jseward@acm.org
 
    This program is free software; you can redistribute it and/or
@@ -68,8 +68,10 @@ UWord VG_(run_innerloop) ( void* guest_state, UWord do_profiling );
    following somewhat bogus decls.  At least on x86 and amd64.  ppc32
    and ppc64 use straightforward bl-blr to get from dispatcher to
    translation and back and so do not need these labels. */
-extern Addr VG_(run_innerloop__dispatch_unprofiled);
-extern Addr VG_(run_innerloop__dispatch_profiled);
+extern Addr VG_(run_innerloop__dispatch_unassisted_unprofiled);
+extern Addr VG_(run_innerloop__dispatch_assisted_unprofiled);
+extern Addr VG_(run_innerloop__dispatch_unassisted_profiled);
+extern Addr VG_(run_innerloop__dispatch_assisted_profiled);
 #endif
 
 

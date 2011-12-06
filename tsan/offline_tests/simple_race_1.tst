@@ -8,7 +8,7 @@ LOCK_CREATE 0 ff1 7778 0
 
 
 # Start thread T1
-THR_START 1 ff 0 0
+THR_START 1 0 0 0
 
 # Call few functions in T0
 RTN_CALL 0 ca000001 ca000002 0

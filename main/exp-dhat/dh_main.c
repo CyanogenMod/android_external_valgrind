@@ -7,7 +7,7 @@
    This file is part of DHAT, a Valgrind tool for profiling the
    heap usage of programs.
 
-   Copyright (C) 2010-2010 Mozilla Inc
+   Copyright (C) 2010-2011 Mozilla Inc
 
    This program is free software; you can redistribute it and/or
    modify it under the terms of the GNU General Public License as
@@ -452,7 +452,7 @@ void* new_block ( ThreadId tid, void* p, SizeT req_szB, SizeT req_alignB,
                   Bool is_zeroed )
 {
    tl_assert(p == NULL); // don't handle custom allocators right now
-   SizeT actual_szB, slop_szB;
+   SizeT actual_szB /*, slop_szB*/;
 
    if ((SSizeT)req_szB < 0) return NULL;
 
@@ -468,9 +468,9 @@ void* new_block ( ThreadId tid, void* p, SizeT req_szB, SizeT req_alignB,
       if (is_zeroed) VG_(memset)(p, 0, req_szB);
       actual_szB = VG_(malloc_usable_size)(p);
       tl_assert(actual_szB >= req_szB);
-      slop_szB = actual_szB - req_szB;
+      /* slop_szB = actual_szB - req_szB; */
    } else {
-      slop_szB = 0;
+      /* slop_szB = 0; */
    }
 
    // Make new HP_Chunk node, add to malloc_list
@@ -1348,7 +1348,7 @@ static void dh_pre_clo_init(void)
    VG_(details_version)         (NULL);
    VG_(details_description)     ("a dynamic heap analysis tool");
    VG_(details_copyright_author)(
-      "Copyright (C) 2010-2010, and GNU GPL'd, by Mozilla Inc");
+      "Copyright (C) 2010-2011, and GNU GPL'd, by Mozilla Inc");
    VG_(details_bug_reports_to)  (VG_BUGS_TO);
 
    // Basic functions.

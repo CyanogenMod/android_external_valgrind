@@ -7,7 +7,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2000-2010 Nicholas Nethercote
+   Copyright (C) 2000-2011 Nicholas Nethercote
       njn@valgrind.org
 
    This program is free software; you can redistribute it and/or
@@ -47,7 +47,7 @@ extern SysRes ML_(do_fork_clone) ( ThreadId tid, UInt flags,
 DECL_TEMPLATE(linux, sys_mount);
 DECL_TEMPLATE(linux, sys_oldumount);
 DECL_TEMPLATE(linux, sys_umount);
-DECL_TEMPLATE(linux, sys_perf_counter_open);
+DECL_TEMPLATE(linux, sys_perf_event_open);
 DECL_TEMPLATE(linux, sys_preadv);
 DECL_TEMPLATE(linux, sys_pwritev);
 DECL_TEMPLATE(linux, sys_dup3);
@@ -100,6 +100,8 @@ DECL_TEMPLATE(linux, sys_eventfd);
 DECL_TEMPLATE(linux, sys_eventfd2);
 
 DECL_TEMPLATE(linux, sys_fallocate);
+
+DECL_TEMPLATE(linux, sys_prlimit64);
 
 DECL_TEMPLATE(linux, sys_gettid);
 DECL_TEMPLATE(linux, sys_set_tid_address);
@@ -239,7 +241,6 @@ DECL_TEMPLATE(linux, sys_lseek);
 DECL_TEMPLATE(linux, sys_sigpending);
 DECL_TEMPLATE(linux, sys_sigprocmask);
 DECL_TEMPLATE(linux, sys_sigaction);
-DECL_TEMPLATE(linux, sys_sigsuspend);
 
 // I think these are Linux-specific?
 DECL_TEMPLATE(linux, sys_rt_sigaction);

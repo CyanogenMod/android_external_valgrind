@@ -7,7 +7,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2004-2010 OpenWorks LLP
+   Copyright (C) 2004-2011 OpenWorks LLP
       info@open-works.net
 
    This program is free software; you can redistribute it and/or
@@ -46,6 +46,11 @@
 
    These values should be 61 or above so as not to conflict
    with Valgrind's VG_TRC_ values, which are 60 or below.
+
+   These values *must* be odd (have bit 0 set) because the dispatchers
+   (coregrind/m_dispatch/dispatch-*-*.S) use this fact to distinguish
+   a TRC value from the unchanged baseblock pointer -- which has 0 as
+   its lowest bit.
 */
 
 #define VEX_TRC_JMP_TINVAL     61  /* invalidate translations before

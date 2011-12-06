@@ -96,7 +96,7 @@ class Parser {
     if (!(cond)) {\
       SetError(desc);\
       return false;\
-    }} while (0)
+    }} while ((void)0, 0)
 
 void Parser::SetError(string desc) {
   error_ = true;
@@ -200,8 +200,46 @@ bool Parser::ParseStackTraceLine(StackTraceTemplate* trace, string line) {
       PARSER_CHECK(s2.find_first_of("()") == string::npos ||
                    (s2[1] == '[' && strchr("+-=", s2[0]) != NULL),
                    "'fun:' lines can't contain '()'");
-      PARSER_CHECK(s2.find_first_of("<>") == string::npos,
-                   "'fun:' lines can't contain '<>'");
+
+      // Check that we don't have template arguments in the suppression.
+      {
+        // Caveat: don't be confused by "operator>>" and similar...
+        size_t checked_till = 0;
+        // List of possible >>-like operators, sorted by the operation length.
+        const char *OP[] = {">>=", "<<=",
+                            ">>", "<<",
+                            ">=", "<=",
+                            "->", "->*",
+                            "<", ">"};
+        bool check_failed = false;
+        while (!check_failed && checked_till < s2.size()) {
+          size_t next = s2.find_first_of("<>", checked_till);
+          if (next == string::npos)
+            break;
+
+          if (next < 8) {
+            // operatorX won't fit
+            check_failed = true;
+            break;
+          }
+
+          for (size_t i = 0; i < TS_ARRAY_SIZE(OP); i++) {
+            size_t op_offset = ((string)OP[i]).find(s2[next]);
+            if (op_offset == string::npos)
+              continue;
+            if (next >= 8 + op_offset &&
+                "operator" == s2.substr(next- (8 + op_offset), 8) &&
+                OP[i] == s2.substr(next- op_offset, strlen(OP[i]))) {
+              checked_till = next + strlen(OP[i] + op_offset);
+              break;
+            }
+          }
+        }
+
+        PARSER_CHECK(!check_failed, "'fun:' lines can't contain '<' or '>' "
+                     "except for operators");
+      }
+
       trace->locations.push_back(location);
       return true;
     } else {

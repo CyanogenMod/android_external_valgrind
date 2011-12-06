@@ -7,7 +7,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2004-2010 OpenWorks LLP
+   Copyright (C) 2004-2011 OpenWorks LLP
       info@open-works.net
 
    This program is free software; you can redistribute it and/or
@@ -42,6 +42,7 @@
 #include "main_globals.h"
 #include "host_generic_regs.h"
 #include "host_generic_simd64.h"
+#include "host_generic_simd128.h"
 #include "host_x86_defs.h"
 
 /* TODO 21 Apr 2005:
@@ -1835,6 +1836,25 @@ static X86CondCode iselCondCode_wrk ( ISelEnv* env, IRExpr* e )
       }
    }
 
+   /* CmpNE32(ccall, 32-bit constant) (--smc-check=all optimisation).
+      Saves a "movl %eax, %tmp" compared to the default route. */
+   if (e->tag == Iex_Binop 
+       && e->Iex.Binop.op == Iop_CmpNE32
+       && e->Iex.Binop.arg1->tag == Iex_CCall
+       && e->Iex.Binop.arg2->tag == Iex_Const) {
+      IRExpr* cal = e->Iex.Binop.arg1;
+      IRExpr* con = e->Iex.Binop.arg2;
+      /* clone & partial-eval of generic Iex_CCall and Iex_Const cases */
+      vassert(cal->Iex.CCall.retty == Ity_I32); /* else ill-typed IR */
+      vassert(con->Iex.Const.con->tag == Ico_U32);
+      /* Marshal args, do the call. */
+      doHelperCall( env, False, NULL, cal->Iex.CCall.cee, cal->Iex.CCall.args );
+      addInstr(env, X86Instr_Alu32R(Xalu_CMP,
+                                    X86RMI_Imm(con->Iex.Const.con->Ico.U32),
+                                    hregX86_EAX()));
+      return Xcc_NZ;
+   }
+
    /* Cmp*32*(x,y) */
    if (e->tag == Iex_Binop 
        && (e->Iex.Binop.op == Iop_CmpEQ32
@@ -2367,12 +2387,16 @@ static void iselInt64Expr_wrk ( HReg* rHi, HReg* rLo, ISelEnv* env, IRExpr* e )
          case Iop_QAdd16Ux4:
             fn = (HWord)h_generic_calc_QAdd16Ux4; goto binnish;
 
-         case Iop_QNarrow32Sx2:
-            fn = (HWord)h_generic_calc_QNarrow32Sx2; goto binnish;
-         case Iop_QNarrow16Sx4:
-            fn = (HWord)h_generic_calc_QNarrow16Sx4; goto binnish;
-         case Iop_QNarrow16Ux4:
-            fn = (HWord)h_generic_calc_QNarrow16Ux4; goto binnish;
+         case Iop_QNarrowBin32Sto16Sx4:
+            fn = (HWord)h_generic_calc_QNarrowBin32Sto16Sx4; goto binnish;
+         case Iop_QNarrowBin16Sto8Sx8:
+            fn = (HWord)h_generic_calc_QNarrowBin16Sto8Sx8; goto binnish;
+         case Iop_QNarrowBin16Sto8Ux8:
+            fn = (HWord)h_generic_calc_QNarrowBin16Sto8Ux8; goto binnish;
+         case Iop_NarrowBin16to8x8:
+            fn = (HWord)h_generic_calc_NarrowBin16to8x8; goto binnish;
+         case Iop_NarrowBin32to16x4:
+            fn = (HWord)h_generic_calc_NarrowBin32to16x4; goto binnish;
 
          case Iop_QSub8Sx8:
             fn = (HWord)h_generic_calc_QSub8Sx8; goto binnish;
@@ -3116,6 +3140,7 @@ static HReg iselVecExpr_wrk ( ISelEnv* env, IRExpr* e )
 #  define SSE2_OR_ABOVE                                   \
        (env->hwcaps & VEX_HWCAPS_X86_SSE2)
 
+   HWord     fn = 0; /* address of helper fn, if required */
    MatchInfo mi;
    Bool      arg1isEReg = False;
    X86SseOp  op = Xsse_INVALID;
@@ -3481,11 +3506,11 @@ static HReg iselVecExpr_wrk ( ISelEnv* env, IRExpr* e )
          return dst;
       }
 
-      case Iop_QNarrow32Sx4: 
+      case Iop_QNarrowBin32Sto16Sx8: 
          op = Xsse_PACKSSD; arg1isEReg = True; goto do_SseReRg;
-      case Iop_QNarrow16Sx8: 
+      case Iop_QNarrowBin16Sto8Sx16: 
          op = Xsse_PACKSSW; arg1isEReg = True; goto do_SseReRg;
-      case Iop_QNarrow16Ux8: 
+      case Iop_QNarrowBin16Sto8Ux16: 
          op = Xsse_PACKUSW; arg1isEReg = True; goto do_SseReRg;
 
       case Iop_InterleaveHI8x16: 
@@ -3579,6 +3604,59 @@ static HReg iselVecExpr_wrk ( ISelEnv* env, IRExpr* e )
 	 addInstr(env, mk_vMOVsd_RR(greg, dst));
          addInstr(env, X86Instr_SseReRg(op, ereg, dst));
          add_to_esp(env, 16);
+         return dst;
+      }
+
+      case Iop_NarrowBin32to16x8:
+         fn = (HWord)h_generic_calc_NarrowBin32to16x8;
+         goto do_SseAssistedBinary;
+      case Iop_NarrowBin16to8x16:
+         fn = (HWord)h_generic_calc_NarrowBin16to8x16;
+         goto do_SseAssistedBinary;
+      do_SseAssistedBinary: {
+         /* As with the amd64 case (where this is copied from) we
+            generate pretty bad code. */
+         vassert(fn != 0);
+         HReg dst = newVRegV(env);
+         HReg argL = iselVecExpr(env, e->Iex.Binop.arg1);
+         HReg argR = iselVecExpr(env, e->Iex.Binop.arg2);
+         HReg argp = newVRegI(env);
+         /* subl $112, %esp         -- make a space */
+         sub_from_esp(env, 112);
+         /* leal 48(%esp), %r_argp  -- point into it */
+         addInstr(env, X86Instr_Lea32(X86AMode_IR(48, hregX86_ESP()),
+                                      argp));
+         /* andl $-16, %r_argp      -- 16-align the pointer */
+         addInstr(env, X86Instr_Alu32R(Xalu_AND,
+                                       X86RMI_Imm( ~(UInt)15 ), 
+                                       argp));
+         /* Prepare 3 arg regs:
+            leal  0(%r_argp), %eax
+            leal 16(%r_argp), %edx
+            leal 32(%r_argp), %ecx
+         */
+         addInstr(env, X86Instr_Lea32(X86AMode_IR(0, argp),
+                                      hregX86_EAX()));
+         addInstr(env, X86Instr_Lea32(X86AMode_IR(16, argp),
+                                      hregX86_EDX()));
+         addInstr(env, X86Instr_Lea32(X86AMode_IR(32, argp),
+                                      hregX86_ECX()));
+         /* Store the two args, at (%edx) and (%ecx):
+            movupd  %argL, 0(%edx)
+            movupd  %argR, 0(%ecx)
+         */
+         addInstr(env, X86Instr_SseLdSt(False/*!isLoad*/, argL,
+                                        X86AMode_IR(0, hregX86_EDX())));
+         addInstr(env, X86Instr_SseLdSt(False/*!isLoad*/, argR,
+                                        X86AMode_IR(0, hregX86_ECX())));
+         /* call the helper */
+         addInstr(env, X86Instr_Call( Xcc_ALWAYS, (Addr32)fn, 3 ));
+         /* fetch the result from memory, using %r_argp, which the
+            register allocator will keep alive across the call. */
+         addInstr(env, X86Instr_SseLdSt(True/*isLoad*/, dst,
+                                        X86AMode_IR(0, argp)));
+         /* and finally, clear the space */
+         add_to_esp(env, 112);
          return dst;
       }
 

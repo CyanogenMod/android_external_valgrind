@@ -7,7 +7,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2010-2010 OpenWorks GbR
+   Copyright (C) 2010-2011 OpenWorks GbR
       info@open-works.net
 
    This program is free software; you can redistribute it and/or
@@ -88,6 +88,12 @@ static inline UChar min8S ( Char xx, Char yy )
    return toUChar((xx < yy) ? xx : yy);
 }
 
+static inline ULong cmpEQ64 ( Long xx, Long yy )
+{
+   return (((Long)xx) == ((Long)yy))
+             ? 0xFFFFFFFFFFFFFFFFULL : 0ULL;
+}
+
 static inline ULong cmpGT64S ( Long xx, Long yy )
 {
    return (((Long)xx) > ((Long)yy))
@@ -104,7 +110,27 @@ static inline UChar sar8 ( UChar v, UInt n )
    return toUChar(((Char)v) >> n);
 }
 
-void h_generic_calc_Mul32x4 ( /*OUT*/V128* res,
+static inline UShort qnarrow32Sto16U ( UInt xx0 )
+{
+   Int xx = (Int)xx0;
+   if (xx < 0)     xx = 0;
+   if (xx > 65535) xx = 65535;
+   return (UShort)xx;
+}
+
+static inline UShort narrow32to16 ( UInt xx )
+{
+   return (UShort)xx;
+}
+
+static inline UChar narrow16to8 ( UShort xx )
+{
+   return (UChar)xx;
+}
+
+
+void VEX_REGPARM(3)
+     h_generic_calc_Mul32x4 ( /*OUT*/V128* res,
                               V128* argL, V128* argR )
 {
    res->w32[0] = mul32(argL->w32[0], argR->w32[0]);
@@ -113,7 +139,8 @@ void h_generic_calc_Mul32x4 ( /*OUT*/V128* res,
    res->w32[3] = mul32(argL->w32[3], argR->w32[3]);
 }
 
-void h_generic_calc_Max32Sx4 ( /*OUT*/V128* res,
+void VEX_REGPARM(3)
+     h_generic_calc_Max32Sx4 ( /*OUT*/V128* res,
                                V128* argL, V128* argR )
 {
    res->w32[0] = max32S(argL->w32[0], argR->w32[0]);
@@ -122,7 +149,8 @@ void h_generic_calc_Max32Sx4 ( /*OUT*/V128* res,
    res->w32[3] = max32S(argL->w32[3], argR->w32[3]);
 }
 
-void h_generic_calc_Min32Sx4 ( /*OUT*/V128* res,
+void VEX_REGPARM(3)
+     h_generic_calc_Min32Sx4 ( /*OUT*/V128* res,
                                V128* argL, V128* argR )
 {
    res->w32[0] = min32S(argL->w32[0], argR->w32[0]);
@@ -131,7 +159,8 @@ void h_generic_calc_Min32Sx4 ( /*OUT*/V128* res,
    res->w32[3] = min32S(argL->w32[3], argR->w32[3]);
 }
 
-void h_generic_calc_Max32Ux4 ( /*OUT*/V128* res,
+void VEX_REGPARM(3)
+     h_generic_calc_Max32Ux4 ( /*OUT*/V128* res,
                                V128* argL, V128* argR )
 {
    res->w32[0] = max32U(argL->w32[0], argR->w32[0]);
@@ -140,7 +169,8 @@ void h_generic_calc_Max32Ux4 ( /*OUT*/V128* res,
    res->w32[3] = max32U(argL->w32[3], argR->w32[3]);
 }
 
-void h_generic_calc_Min32Ux4 ( /*OUT*/V128* res,
+void VEX_REGPARM(3)
+     h_generic_calc_Min32Ux4 ( /*OUT*/V128* res,
                                V128* argL, V128* argR )
 {
    res->w32[0] = min32U(argL->w32[0], argR->w32[0]);
@@ -149,7 +179,8 @@ void h_generic_calc_Min32Ux4 ( /*OUT*/V128* res,
    res->w32[3] = min32U(argL->w32[3], argR->w32[3]);
 }
 
-void h_generic_calc_Max16Ux8 ( /*OUT*/V128* res,
+void VEX_REGPARM(3)
+     h_generic_calc_Max16Ux8 ( /*OUT*/V128* res,
                                V128* argL, V128* argR )
 {
    res->w16[0] = max16U(argL->w16[0], argR->w16[0]);
@@ -162,7 +193,8 @@ void h_generic_calc_Max16Ux8 ( /*OUT*/V128* res,
    res->w16[7] = max16U(argL->w16[7], argR->w16[7]);
 }
 
-void h_generic_calc_Min16Ux8 ( /*OUT*/V128* res,
+void VEX_REGPARM(3)
+     h_generic_calc_Min16Ux8 ( /*OUT*/V128* res,
                                V128* argL, V128* argR )
 {
    res->w16[0] = min16U(argL->w16[0], argR->w16[0]);
@@ -175,7 +207,8 @@ void h_generic_calc_Min16Ux8 ( /*OUT*/V128* res,
    res->w16[7] = min16U(argL->w16[7], argR->w16[7]);
 }
 
-void h_generic_calc_Max8Sx16 ( /*OUT*/V128* res,
+void VEX_REGPARM(3)
+     h_generic_calc_Max8Sx16 ( /*OUT*/V128* res,
                                V128* argL, V128* argR )
 {
    res->w8[ 0] = max8S(argL->w8[ 0], argR->w8[ 0]);
@@ -196,7 +229,8 @@ void h_generic_calc_Max8Sx16 ( /*OUT*/V128* res,
    res->w8[15] = max8S(argL->w8[15], argR->w8[15]);
 }
 
-void h_generic_calc_Min8Sx16 ( /*OUT*/V128* res,
+void VEX_REGPARM(3)
+     h_generic_calc_Min8Sx16 ( /*OUT*/V128* res,
                                V128* argL, V128* argR )
 {
    res->w8[ 0] = min8S(argL->w8[ 0], argR->w8[ 0]);
@@ -217,7 +251,16 @@ void h_generic_calc_Min8Sx16 ( /*OUT*/V128* res,
    res->w8[15] = min8S(argL->w8[15], argR->w8[15]);
 }
 
-void h_generic_calc_CmpGT64Sx2 ( /*OUT*/V128* res,
+void VEX_REGPARM(3)
+     h_generic_calc_CmpEQ64x2 ( /*OUT*/V128* res,
+                                V128* argL, V128* argR )
+{
+   res->w64[0] = cmpEQ64(argL->w64[0], argR->w64[0]);
+   res->w64[1] = cmpEQ64(argL->w64[1], argR->w64[1]);
+}
+
+void VEX_REGPARM(3)
+     h_generic_calc_CmpGT64Sx2 ( /*OUT*/V128* res,
                                  V128* argL, V128* argR )
 {
    res->w64[0] = cmpGT64S(argL->w64[0], argR->w64[0]);
@@ -231,7 +274,8 @@ void h_generic_calc_CmpGT64Sx2 ( /*OUT*/V128* res,
    semantics of these primops (Sar64x2, etc) it is an error if in
    fact we are ever given an out-of-range shift amount. 
 */
-void h_generic_calc_SarN64x2 ( /*OUT*/V128* res,
+void /*not-regparm*/
+     h_generic_calc_SarN64x2 ( /*OUT*/V128* res,
                                V128* argL, UInt nn)
 {
    /* vassert(nn < 64); */
@@ -240,7 +284,8 @@ void h_generic_calc_SarN64x2 ( /*OUT*/V128* res,
    res->w64[1] = sar64(argL->w64[1], nn);
 }
 
-void h_generic_calc_SarN8x16 ( /*OUT*/V128* res,
+void /*not-regparm*/
+     h_generic_calc_SarN8x16 ( /*OUT*/V128* res,
                               V128* argL, UInt nn)
 {
    /* vassert(nn < 8); */
@@ -262,6 +307,57 @@ void h_generic_calc_SarN8x16 ( /*OUT*/V128* res,
    res->w8[14] = sar8(argL->w8[14], nn);
    res->w8[15] = sar8(argL->w8[15], nn);
 }
+
+void VEX_REGPARM(3)
+     h_generic_calc_QNarrowBin32Sto16Ux8 ( /*OUT*/V128* res,
+                                           V128* argL, V128* argR )
+{
+   res->w16[0] = qnarrow32Sto16U(argR->w32[0]);
+   res->w16[1] = qnarrow32Sto16U(argR->w32[1]);
+   res->w16[2] = qnarrow32Sto16U(argR->w32[2]);
+   res->w16[3] = qnarrow32Sto16U(argR->w32[3]);
+   res->w16[4] = qnarrow32Sto16U(argL->w32[0]);
+   res->w16[5] = qnarrow32Sto16U(argL->w32[1]);
+   res->w16[6] = qnarrow32Sto16U(argL->w32[2]);
+   res->w16[7] = qnarrow32Sto16U(argL->w32[3]);
+}
+
+void VEX_REGPARM(3)
+     h_generic_calc_NarrowBin16to8x16 ( /*OUT*/V128* res,
+                                        V128* argL, V128* argR )
+{
+   res->w8[ 0] = narrow16to8(argR->w16[0]);
+   res->w8[ 1] = narrow16to8(argR->w16[1]);
+   res->w8[ 2] = narrow16to8(argR->w16[2]);
+   res->w8[ 3] = narrow16to8(argR->w16[3]);
+   res->w8[ 4] = narrow16to8(argR->w16[4]);
+   res->w8[ 5] = narrow16to8(argR->w16[5]);
+   res->w8[ 6] = narrow16to8(argR->w16[6]);
+   res->w8[ 7] = narrow16to8(argR->w16[7]);
+   res->w8[ 8] = narrow16to8(argL->w16[0]);
+   res->w8[ 9] = narrow16to8(argL->w16[1]);
+   res->w8[10] = narrow16to8(argL->w16[2]);
+   res->w8[11] = narrow16to8(argL->w16[3]);
+   res->w8[12] = narrow16to8(argL->w16[4]);
+   res->w8[13] = narrow16to8(argL->w16[5]);
+   res->w8[14] = narrow16to8(argL->w16[6]);
+   res->w8[15] = narrow16to8(argL->w16[7]);
+}
+
+void VEX_REGPARM(3)
+     h_generic_calc_NarrowBin32to16x8 ( /*OUT*/V128* res,
+                                        V128* argL, V128* argR )
+{
+   res->w16[0] = narrow32to16(argR->w32[0]);
+   res->w16[1] = narrow32to16(argR->w32[1]);
+   res->w16[2] = narrow32to16(argR->w32[2]);
+   res->w16[3] = narrow32to16(argR->w32[3]);
+   res->w16[4] = narrow32to16(argL->w32[0]);
+   res->w16[5] = narrow32to16(argL->w32[1]);
+   res->w16[6] = narrow32to16(argL->w32[2]);
+   res->w16[7] = narrow32to16(argL->w32[3]);
+}
+
 
 /*---------------------------------------------------------------*/
 /*--- end                              host_generic_simd128.c ---*/

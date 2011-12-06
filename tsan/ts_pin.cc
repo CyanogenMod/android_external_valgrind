@@ -1801,6 +1801,8 @@ void After_free(FAST_WRAP_PARAM_AFTER) {
 }
 
 void Before_free(FAST_WRAP_PARAM1) {
+  PinThread &t = g_pin_threads[tid];
+  TLEBFlushLocked(t);
   DumpEvent(0, FREE, tid, pc, arg0, 0);
   IgnoreSyncAndMopsBegin(tid);
   PUSH_AFTER_CALLBACK1(After_free, arg0);
@@ -1812,6 +1814,8 @@ void Before_calloc(FAST_WRAP_PARAM2) {
 }
 
 void Before_realloc(FAST_WRAP_PARAM2) {
+  PinThread &t = g_pin_threads[tid];
+  TLEBFlushLocked(t);
   IgnoreSyncAndMopsBegin(tid);
   // TODO: handle FREE? We don't do it in Valgrind right now.
   PUSH_AFTER_CALLBACK1(After_malloc, arg1);
@@ -1846,44 +1850,12 @@ void Before_RET_THEN(THREADID tid, ADDRINT pc, ADDRINT sp, ADDRINT ret) {
   }
 }
 
-uintptr_t WRAP_NAME(malloc)(WRAP_PARAM4) {
-  IgnoreSyncAndMopsBegin(tid);
-  uintptr_t ret = CALL_ME_INSIDE_WRAPPER_4();
-  IgnoreSyncAndMopsEnd(tid);
-
-  DumpEvent(ctx, MALLOC, tid, pc, ret, arg0);
-  return ret;
-}
-
-uintptr_t WRAP_NAME(realloc)(WRAP_PARAM4) {
-  PinThread &t = g_pin_threads[tid];
-  TLEBFlushLocked(t);
-  IgnoreSyncAndMopsBegin(tid);
-  uintptr_t ret = CALL_ME_INSIDE_WRAPPER_4();
-  IgnoreSyncAndMopsEnd(tid);
-
-  // TODO: handle FREE? We don't do it in Valgrind right now.
-  DumpEvent(ctx, MALLOC, tid, pc, ret, arg1);
-  return ret;
-}
-
-uintptr_t WRAP_NAME(calloc)(WRAP_PARAM4) {
-  IgnoreSyncAndMopsBegin(tid);
-  uintptr_t ret = CALL_ME_INSIDE_WRAPPER_4();
-  IgnoreSyncAndMopsEnd(tid);
-
-  DumpEvent(ctx, MALLOC, tid, pc, ret, arg0*arg1);
-  return ret;
-}
-
-uintptr_t WRAP_NAME(free)(WRAP_PARAM4) {
-  DumpEvent(ctx, FREE, tid, pc, arg0, 0);
-
-  IgnoreSyncAndMopsBegin(tid);
-  uintptr_t ret = CALL_ME_INSIDE_WRAPPER_4();
-  IgnoreSyncAndMopsEnd(tid);
-  return ret;
-}
+// These are no longer used in favor of "fast" wrappers (e.g. Before_malloc)
+// TODO(timurrrr): Check on the buildbot and remove.
+uintptr_t WRAP_NAME(malloc)(WRAP_PARAM4) { CHECK(0); }
+uintptr_t WRAP_NAME(realloc)(WRAP_PARAM4) { CHECK(0); }
+uintptr_t WRAP_NAME(calloc)(WRAP_PARAM4) { CHECK(0); }
+uintptr_t WRAP_NAME(free)(WRAP_PARAM4) { CHECK(0); }
 
 
 //-------- Routines and stack ---------------------- {{{2
@@ -2276,15 +2248,15 @@ static uintptr_t WRAP_NAME(sem_trywait)(WRAP_PARAM4) {
 // etc
 #if defined(__GNUC__)
 uintptr_t WRAP_NAME(lockf)(WRAP_PARAM4) {
-  const long offset_magic = 0xFEB0ACC0;
-
-  if (arg1 == F_ULOCK)
-    DumpEvent(ctx, UNLOCK, tid, pc, arg0 ^ offset_magic, 0);
+  if (arg1 == F_ULOCK) {
+    DumpEvent(0, SIGNAL, tid, pc, kSocketMagic, 0);
+  }
 
   uintptr_t ret = CALL_ME_INSIDE_WRAPPER_4();
 
-  if (arg1 == F_LOCK && ret == 0)
-    DumpEvent(ctx, WRITER_LOCK, tid, pc, arg0 ^ offset_magic, 0);
+  if (arg1 == F_LOCK && ret == 0) {
+    DumpEvent(0, WAIT, tid, pc, kSocketMagic, 0);
+  }
 
   return ret;
 }
@@ -2306,7 +2278,7 @@ static void On_AnnotateBenignRaceSized(THREADID tid, ADDRINT pc,
 static void On_AnnotateExpectRace(THREADID tid, ADDRINT pc,
                                   ADDRINT file, ADDRINT line,
                                   ADDRINT a, ADDRINT descr) {
-  DumpEvent(0, EXPECT_RACE, tid, descr, a, 1);
+  DumpEvent(0, EXPECT_RACE, tid, descr, a, 0);
 }
 
 static void On_AnnotateFlushExpectedRaces(THREADID tid, ADDRINT pc,
@@ -3419,6 +3391,7 @@ static void MaybeInstrumentOneRoutine(IMG img, RTN rtn) {
     ReplaceFunc3(img, rtn, "memchr", (AFUNPTR)Replace_memchr);
     ReplaceFunc3(img, rtn, "strchr", (AFUNPTR)Replace_strchr);
     ReplaceFunc3(img, rtn, "index", (AFUNPTR)Replace_strchr);
+    ReplaceFunc3(img, rtn, "strchrnul", (AFUNPTR)Replace_strchrnul);
     ReplaceFunc3(img, rtn, "strrchr", (AFUNPTR)Replace_strrchr);
     ReplaceFunc3(img, rtn, "rindex", (AFUNPTR)Replace_strrchr);
     ReplaceFunc3(img, rtn, "strlen", (AFUNPTR)Replace_strlen);

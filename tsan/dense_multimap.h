@@ -57,27 +57,27 @@ class DenseMultimap {
   // Create a copy of m.
   DenseMultimap(const DenseMultimap &m) {
     Allocate(m.size());
-    std::copy(m.begin(), m.end(), ptr_);
+    copy(m.begin(), m.end(), ptr_);
     Validate();
   }
 
   // Create multimap m+{t}
   DenseMultimap(const DenseMultimap &m, const T &t) {
     Allocate(m.size() + 1);
-    const_iterator it = std::lower_bound(m.begin(), m.end(), t);
-    std::copy(m.begin(), it, ptr_);
+    const_iterator it = lower_bound(m.begin(), m.end(), t);
+    copy(m.begin(), it, ptr_);
     ptr_[it - m.begin()] = t;
-    std::copy(it, m.end(), ptr_ + (it - m.begin()) + 1);
+    copy(it, m.end(), ptr_ + (it - m.begin()) + 1);
     Validate();
   }
 
   // Create multimap m-{t}
   DenseMultimap(const DenseMultimap &m, RemoveEnum remove, const T &t) {
-    const_iterator it = std::lower_bound(m.begin(), m.end(), t);
+    const_iterator it = lower_bound(m.begin(), m.end(), t);
     CHECK(it < m.end() && it >= m.begin());
     Allocate(m.size() - 1);
-    std::copy(m.begin(), it, ptr_);
-    std::copy(it + 1, m.end(), ptr_ + (it - m.begin()));
+    copy(m.begin(), it, ptr_);
+    copy(it + 1, m.end(), ptr_ + (it - m.begin()));
     Validate();
   }
 
@@ -101,7 +101,7 @@ class DenseMultimap {
   const_iterator end()   const { return ptr_ + size(); }
 
   bool has(const T&t) const {
-    return std::binary_search(begin(), end(), t);
+    return binary_search(begin(), end(), t);
   }
 
   bool operator < (const DenseMultimap &m) const {

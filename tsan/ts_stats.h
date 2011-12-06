@@ -59,8 +59,6 @@ struct ThreadLocalStats {
   uintptr_t access_to_first_1g;
   uintptr_t access_to_first_2g;
   uintptr_t access_to_first_4g;
-
-  uintptr_t cache_fast_get;
 };
 
 // Statistic counters for the entire tool, including aggregated
@@ -161,12 +159,11 @@ struct Stats : private ThreadLocalStats {
   }
   void PrintStatsForCache() {
     Printf("   Cache:\n"
-           "    fast      = %'ld\n"
            "    new       = %'ld\n"
            "    delete    = %'ld\n"
            "    fetch     = %'ld\n"
            "    storage   = %'ld\n",
-           cache_fast_get, cache_new_line,
+           cache_new_line,
            cache_delete_empty_line, cache_fetch,
            cache_max_storage_size);
   }

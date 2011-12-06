@@ -7,7 +7,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2004-2010 OpenWorks LLP
+   Copyright (C) 2004-2011 OpenWorks LLP
       info@open-works.net
 
    This program is free software; you can redistribute it and/or
@@ -588,7 +588,7 @@ UInt x86g_calculate_eflags_all ( UInt cc_op,
 
 /* CALLED FROM GENERATED CODE: CLEAN HELPER */
 /* Calculate just the carry flag from the supplied thunk parameters. */
-__attribute((regparm(3)))
+VEX_REGPARM(3)
 UInt x86g_calculate_eflags_c ( UInt cc_op, 
                                UInt cc_dep1, 
                                UInt cc_dep2,

@@ -8,7 +8,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2008-2010 OpenWorks LLP
+   Copyright (C) 2008-2011 OpenWorks LLP
       info@open-works.co.uk
 
    This program is free software; you can redistribute it and/or
@@ -139,6 +139,7 @@
 #include "pub_core_libcbase.h"
 #include "pub_core_libcassert.h"
 #include "pub_core_libcprint.h"
+#include "pub_core_libcsetjmp.h"   // setjmp facilities
 #include "pub_core_options.h"
 #include "pub_core_tooliface.h"    /* VG_(needs) */
 #include "pub_core_xarray.h"
@@ -242,7 +243,7 @@ static UShort get_UShort ( Cursor* c ) {
       /*NOTREACHED*/
       vg_assert(0);
    }
-   r = * (UShort*) &c->region_start_img[ c->region_next ];
+   r = ML_(read_UShort)(&c->region_start_img[ c->region_next ]);
    c->region_next += sizeof(UShort);
    return r;
 }
@@ -254,7 +255,7 @@ static UInt get_UInt ( Cursor* c ) {
       /*NOTREACHED*/
       vg_assert(0);
    }
-   r = * (UInt*) &c->region_start_img[ c->region_next ];
+   r = ML_(read_UInt)(&c->region_start_img[ c->region_next ]);
    c->region_next += sizeof(UInt);
    return r;
 }
@@ -266,7 +267,7 @@ static ULong get_ULong ( Cursor* c ) {
       /*NOTREACHED*/
       vg_assert(0);
    }
-   r = * (ULong*) &c->region_start_img[ c->region_next ];
+   r = ML_(read_ULong)(&c->region_start_img[ c->region_next ]);
    c->region_next += sizeof(ULong);
    return r;
 }
@@ -471,8 +472,8 @@ typedef
 static void bias_GX ( /*MOD*/GExpr* gx, struct _DebugInfo* di )
 {
    UShort nbytes;
-   Addr*  pA;
    UChar* p = &gx->payload[0];
+   UChar* pA;
    UChar  uc;
    uc = *p++; /*biasMe*/
    if (uc == 0)
@@ -485,15 +486,15 @@ static void bias_GX ( /*MOD*/GExpr* gx, struct _DebugInfo* di )
          break; /*isEnd*/
       vg_assert(uc == 0);
       /* t-bias aMin */
-      pA = (Addr*)p;
-      *pA += di->text_debug_bias;
+      pA = (UChar*)p;
+      ML_(write_Addr)(pA, ML_(read_Addr)(pA) + di->text_debug_bias);
       p += sizeof(Addr);
       /* t-bias aMax */
-      pA = (Addr*)p;
-      *pA += di->text_debug_bias;
+      pA = (UChar*)p;
+      ML_(write_Addr)(pA, ML_(read_Addr)(pA) + di->text_debug_bias);
       p += sizeof(Addr);
       /* nbytes, and actual expression */
-      nbytes = * (UShort*)p; p += sizeof(UShort);
+      nbytes = ML_(read_UShort)(p); p += sizeof(UShort);
       p += nbytes;
    }
 }
@@ -519,13 +520,13 @@ static GExpr* make_singleton_GX ( UChar* block, UWord nbytes )
 
    p = pstart = &gx->payload[0];
 
-   * ((UChar*)p)  = 0;          /*biasMe*/ p += sizeof(UChar);
-   * ((UChar*)p)  = 0;          /*!isEnd*/ p += sizeof(UChar);
-   * ((Addr*)p)   = 0;          /*aMin*/   p += sizeof(Addr);
-   * ((Addr*)p)   = ~((Addr)0); /*aMax */  p += sizeof(Addr);
-   * ((UShort*)p) = (UShort)nbytes; /*nbytes*/ p += sizeof(UShort);
+   p = ML_(write_UChar)(p, 0);        /*biasMe*/
+   p = ML_(write_UChar)(p, 0);        /*!isEnd*/
+   p = ML_(write_Addr)(p, 0);         /*aMin*/
+   p = ML_(write_Addr)(p, ~0);        /*aMax*/
+   p = ML_(write_UShort)(p, nbytes);  /*nbytes*/
    VG_(memcpy)(p, block, nbytes); p += nbytes;
-   * ((UChar*)p)  = 1;          /*isEnd*/  p += sizeof(UChar);
+   p = ML_(write_UChar)(p, 1);        /*isEnd*/
 
    vg_assert( (SizeT)(p - pstart) == bytesReqd);
    vg_assert( &gx->payload[bytesReqd] 
@@ -3952,18 +3953,14 @@ void new_dwarf3_reader_wrk (
 /*---                                                      ---*/
 /*------------------------------------------------------------*/
 
-/* --- !!! --- EXTERNAL HEADERS start --- !!! --- */
-#include <setjmp.h>   /* For jmp_buf */
-/* --- !!! --- EXTERNAL HEADERS end --- !!! --- */
-
-static Bool    d3rd_jmpbuf_valid  = False;
-static HChar*  d3rd_jmpbuf_reason = NULL;
-static jmp_buf d3rd_jmpbuf;
+static Bool               d3rd_jmpbuf_valid  = False;
+static HChar*             d3rd_jmpbuf_reason = NULL;
+static VG_MINIMAL_JMP_BUF(d3rd_jmpbuf);
 
 static __attribute__((noreturn)) void barf ( HChar* reason ) {
    vg_assert(d3rd_jmpbuf_valid);
    d3rd_jmpbuf_reason = reason;
-   __builtin_longjmp(&d3rd_jmpbuf, 1);
+   VG_MINIMAL_LONGJMP(d3rd_jmpbuf);
    /*NOTREACHED*/
    vg_assert(0);
 }
@@ -3991,7 +3988,7 @@ ML_(new_dwarf3_reader) (
    vg_assert(d3rd_jmpbuf_reason == NULL);
 
    d3rd_jmpbuf_valid = True;
-   jumped = __builtin_setjmp(&d3rd_jmpbuf);
+   jumped = VG_MINIMAL_SETJMP(d3rd_jmpbuf);
    if (jumped == 0) {
       /* try this ... */
       new_dwarf3_reader_wrk( di, barf,

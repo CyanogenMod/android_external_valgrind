@@ -26,8 +26,6 @@
 
 #include "common_util.h"
 
-void Report(const char *format, ...);
-
 bool StringMatch(const string& wildcard, const string& text) {
   const char* c_text = text.c_str();
   const char* c_wildcard = wildcard.c_str();
@@ -105,7 +103,7 @@ TS_FILE OpenFileReadOnly(const string &file_name, bool die_if_failed) {
   ret = open(file_name.c_str(), O_RDONLY);
 #endif
   if (ret == TS_FILE_INVALID && die_if_failed) {
-    Report("ERROR: can not open file %s\n", file_name.c_str());
+    Printf("ERROR: can not open file %s\n", file_name.c_str());
     exit(1);
   }
   return ret;

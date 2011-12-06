@@ -7,7 +7,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2000-2010 Julian Seward 
+   Copyright (C) 2000-2011 Julian Seward 
       jseward@acm.org
 
    This program is free software; you can redistribute it and/or
@@ -37,6 +37,7 @@
 #include "pub_core_stacktrace.h"
 #include "pub_core_machine.h"       // VG_(get_IP)
 #include "pub_core_vki.h"           // To keep pub_core_threadstate.h happy
+#include "pub_core_libcsetjmp.h"    // Ditto
 #include "pub_core_threadstate.h"   // VG_(is_valid_tid)
 #include "pub_core_execontext.h"    // self
 

@@ -41,8 +41,8 @@
 #define OFFSET_ppc32_GPR8 32
 #define OFFSET_ppc32_GPR9 36
 #define OFFSET_ppc32_GPR10 40
-#define OFFSET_ppc32_CIA 896
-#define OFFSET_ppc32_CR0_0 913
+#define OFFSET_ppc32_CIA 1152
+#define OFFSET_ppc32_CR0_0 1169
 #define OFFSET_ppc64_GPR0 0
 #define OFFSET_ppc64_GPR1 8
 #define OFFSET_ppc64_GPR2 16
@@ -54,8 +54,8 @@
 #define OFFSET_ppc64_GPR8 64
 #define OFFSET_ppc64_GPR9 72
 #define OFFSET_ppc64_GPR10 80
-#define OFFSET_ppc64_CIA 1024
-#define OFFSET_ppc64_CR0_0 1053
+#define OFFSET_ppc64_CIA 1280
+#define OFFSET_ppc64_CR0_0 1309
 #define OFFSET_arm_R0 0
 #define OFFSET_arm_R1 4
 #define OFFSET_arm_R2 8
@@ -66,3 +66,14 @@
 #define OFFSET_arm_R13 52
 #define OFFSET_arm_R14 56
 #define OFFSET_arm_R15T 60
+#define OFFSET_s390x_r2 208
+#define OFFSET_s390x_r3 216
+#define OFFSET_s390x_r4 224
+#define OFFSET_s390x_r5 232
+#define OFFSET_s390x_r6 240
+#define OFFSET_s390x_r7 248
+#define OFFSET_s390x_r15 312
+#define OFFSET_s390x_IA 336
+#define OFFSET_s390x_SYSNO 344
+#define OFFSET_s390x_IP_AT_SYSCALL 408
+#define OFFSET_s390x_fpc 328
