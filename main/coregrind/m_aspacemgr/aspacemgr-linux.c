@@ -10,7 +10,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2000-2011 Julian Seward 
+   Copyright (C) 2000-2010 Julian Seward 
       jseward@acm.org
 
    This program is free software; you can redistribute it and/or
@@ -265,14 +265,8 @@
 /* ------ start of STATE for the address-space manager ------ */
 
 /* Max number of segments we can track. */
-/* glider: We keep VG_N_SEGMENTS low on Android, because they occupy
-   too much memory. We used to have VG_N_SEGMENTS=10000 on Darwin,
-   but it turned out to be too low for Chromium.
-*/ 
-#if defined(VGO_darwin)
-#define VG_N_SEGMENTS 50000
-#elif defined(ANDROID)
-#define VG_N_SEGMENTS 10000
+#if defined(VGO_darwin) || defined(ANDROID)
+#define VG_N_SEGMENTS 5000
 #else
 #define VG_N_SEGMENTS 100000
 #endif
@@ -914,10 +908,10 @@ static void sync_check_mapping_callback ( Addr addr, SizeT len, UInt prot,
       These kernels report which mappings are really executable in
       the /proc/self/maps output rather than mirroring what was asked
       for when each mapping was created. In order to cope with this we
-      have a sloppyXcheck mode which we enable on x86 and s390 - in this
-      mode we allow the kernel to report execute permission when we weren't
+      have a sloppyXcheck mode which we enable on x86 - in this mode we
+      allow the kernel to report execute permission when we weren't
       expecting it but not vice versa. */
-#  if defined(VGA_x86) || defined (VGA_s390x)
+#  if defined(VGA_x86)
    sloppyXcheck = True;
 #  else
    sloppyXcheck = False;
@@ -1160,7 +1154,7 @@ static Int find_nsegment_idx_WRK ( Addr a )
 
 inline static Int find_nsegment_idx ( Addr a )
 {
-#  define N_CACHE 131 /*prime*/
+#  define N_CACHE 63
    static Addr cache_pageno[N_CACHE];
    static Int  cache_segidx[N_CACHE];
    static Bool cache_inited = False;
@@ -2046,41 +2040,6 @@ VG_(am_notify_client_mmap)( Addr a, SizeT len, UInt prot, UInt flags,
    return needDiscard;
 }
 
-Bool
-VG_(am_notify_fake_client_mmap)( Addr a, SizeT len, UInt prot, UInt flags,
-                            HChar* fileName, Off64T offset )
-{
-   HChar    buf[VKI_PATH_MAX];
-   ULong    dev, ino;
-   UInt     mode;
-   NSegment seg;
-   Bool     needDiscard;
-
-   aspacem_assert(len > 0);
-   aspacem_assert(VG_IS_PAGE_ALIGNED(a));
-   aspacem_assert(VG_IS_PAGE_ALIGNED(len));
-   aspacem_assert(VG_IS_PAGE_ALIGNED(offset));
-
-   /* Discard is needed if any of the just-trashed range had T. */
-   needDiscard = any_Ts_in_range( a, len );
-
-   init_nsegment( &seg );
-   seg.kind   = (flags & VKI_MAP_ANONYMOUS) ? SkAnonC : SkFileC;
-   seg.start  = a;
-   seg.end    = a + len - 1;
-   seg.hasR   = toBool(prot & VKI_PROT_READ);
-   seg.hasW   = toBool(prot & VKI_PROT_WRITE);
-   seg.hasX   = toBool(prot & VKI_PROT_EXEC);
-   if (!(flags & VKI_MAP_ANONYMOUS)) {
-      // Nb: We ignore offset requests in anonymous mmaps (see bug #126722)
-      seg.offset = offset;
-      seg.fnIdx = allocate_segname( fileName );
-   }
-   add_segment( &seg );
-   AM_SANITY_CHECK;
-   return needDiscard;
-}
-
 /* Notifies aspacem that the client completed a shmat successfully.
    The segment array is updated accordingly.  If the returned Bool is
    True, the caller should immediately discard translations from the
@@ -2538,11 +2497,11 @@ SysRes VG_(am_sbrk_anon_float_valgrind)( SizeT cszB )
 
 /* Map a file at an unconstrained address for V, and update the
    segment array accordingly.  This is used by V for transiently
-   segment array accordingly. Use the provided flags */
+   mapping in object files to read their debug info.  */
 
-SysRes VG_(am_mmap_file_float_valgrind_flags) ( SizeT length, UInt prot,
-                                                UInt flags,
-                                                Int fd, Off64T offset )
+SysRes VG_(am_mmap_file_float_valgrind_with_flags) ( SizeT length, UInt prot,
+                                                     UInt flags,
+                                                     Int fd, Off64T offset )
 {
    SysRes     sres;
    NSegment   seg;
@@ -2609,25 +2568,12 @@ SysRes VG_(am_mmap_file_float_valgrind_flags) ( SizeT length, UInt prot,
    return sres;
 }
 
-/* Map privately a file at an unconstrained address for V, and update the
-   segment array accordingly.  This is used by V for transiently
-   mapping in object files to read their debug info.  */
-
-SysRes VG_(am_mmap_file_float_valgrind) ( SizeT length, UInt prot, 
-                                          Int fd, Off64T offset )
-{
-   return VG_(am_mmap_file_float_valgrind_flags) (length, prot,
-                                                  VKI_MAP_FIXED|VKI_MAP_PRIVATE,
-                                                  fd, offset );
+SysRes VG_(am_mmap_file_float_valgrind) ( SizeT length, UInt prot,
+                                          Int fd, Off64T offset ) {
+  return VG_(am_mmap_file_float_valgrind_with_flags) (
+      length, prot, VKI_MAP_FIXED|VKI_MAP_PRIVATE, fd, offset);
 }
 
-extern SysRes VG_(am_shared_mmap_file_float_valgrind)
-   ( SizeT length, UInt prot, Int fd, Off64T offset )
-{
-   return VG_(am_mmap_file_float_valgrind_flags) (length, prot,
-                                                  VKI_MAP_FIXED|VKI_MAP_SHARED,
-                                                  fd, offset );
-}
 
 /* --- --- munmap helper --- --- */
 

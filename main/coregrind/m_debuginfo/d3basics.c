@@ -8,7 +8,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2008-2011 OpenWorks LLP
+   Copyright (C) 2008-2010 OpenWorks LLP
       info@open-works.co.uk
 
    This program is free software; you can redistribute it and/or
@@ -407,9 +407,8 @@ static Bool get_Dwarf_Reg( /*OUT*/Addr* a, Word regno, RegSummary* regs )
 #  elif defined(VGP_arm_linux)
    if (regno == 13) { *a = regs->sp; return True; }
    if (regno == 11) { *a = regs->fp; return True; } 
-#  elif defined(VGP_s390x_linux)
-   if (regno == 15) { *a = regs->sp; return True; }
-   if (regno == 11) { *a = regs->fp; return True; }
+#  elif defined(VGP_ppc32_aix5) || defined(VGP_ppc64_aix5)
+   vg_assert(0); /* this function should never be called */
 #  else
 #    error "Unknown platform"
 #  endif
@@ -558,7 +557,7 @@ GXResult ML_(evaluate_Dwarf3_Expr) ( UChar* expr, UWord exprszB,
             /* Presumably what is given in the Dwarf3 is a SVMA (how
                could it be otherwise?)  So we add the appropriate bias
                on before pushing the result. */
-            a1 = ML_(read_Addr)(expr);
+            a1 = *(Addr*)expr;
             if (bias_address(&a1, di)) {
                PUSH( a1 ); 
                expr += sizeof(Addr);
@@ -660,7 +659,7 @@ GXResult ML_(evaluate_Dwarf3_Expr) ( UChar* expr, UWord exprszB,
             POP(uw1);
             if (VG_(am_is_valid_for_client)( (Addr)uw1, sizeof(Addr),
                                              VKI_PROT_READ )) {
-               uw1 = ML_(read_UWord)((void *)uw1);
+               uw1 = *(UWord*)uw1;
                PUSH(uw1);
             } else {
                FAIL("warning: evaluate_Dwarf3_Expr: DW_OP_deref: "
@@ -673,10 +672,10 @@ GXResult ML_(evaluate_Dwarf3_Expr) ( UChar* expr, UWord exprszB,
             if (VG_(am_is_valid_for_client)( (Addr)uw1, uw2,
                                              VKI_PROT_READ )) {
                switch (uw2) {
-                 case 1: uw1 = ML_(read_UChar)((void*)uw1); break;
-                 case 2: uw1 = ML_(read_UShort)((void*)uw1); break;
-                 case 4: uw1 = ML_(read_UInt)((void*)uw1); break;
-                 case 8: uw1 = ML_(read_ULong)((void*)uw1); break;
+                 case 1: uw1 = *(UChar*)uw1; break;
+                 case 2: uw1 = *(UShort*)uw1; break;
+                 case 4: uw1 = *(UInt*)uw1; break;
+                 case 8: uw1 = *(ULong*)uw1; break;
                  default:
                     FAIL("warning: evaluate_Dwarf3_Expr: unhandled "
                          "DW_OP_deref_size size");
@@ -695,17 +694,17 @@ GXResult ML_(evaluate_Dwarf3_Expr) ( UChar* expr, UWord exprszB,
 	    PUSH(uw1);
             break;
          case DW_OP_const2u:
-	    uw1 = ML_(read_UShort)(expr);
+	    uw1 = *(UShort *)expr;
 	    expr += 2;
 	    PUSH(uw1);
 	    break;
          case DW_OP_const4u:
-	    uw1 = ML_(read_UInt)(expr);
+	    uw1 = *(UInt *)expr;
 	    expr += 4;
 	    PUSH(uw1);
 	    break;
          case DW_OP_const8u:
-	    uw1 = ML_(read_ULong)(expr);
+	    uw1 = *(ULong *)expr;
 	    expr += 8;
 	    PUSH(uw1);
 	    break;
@@ -719,17 +718,17 @@ GXResult ML_(evaluate_Dwarf3_Expr) ( UChar* expr, UWord exprszB,
 	    PUSH(uw1);
             break;
          case DW_OP_const2s:
-	    uw1 = ML_(read_Short)(expr);
+	    uw1 = *(Short *)expr;
 	    expr += 2;
 	    PUSH(uw1);
 	    break;
          case DW_OP_const4s:
-	    uw1 = ML_(read_Int)(expr);
+	    uw1 = *(Int *)expr;
 	    expr += 4;
 	    PUSH(uw1);
 	    break;
          case DW_OP_const8s:
-	    uw1 = ML_(read_Long)(expr);
+	    uw1 = *(Long *)expr;
 	    expr += 8;
 	    PUSH(uw1);
 	    break;
@@ -826,7 +825,7 @@ GXResult ML_(evaluate_Dwarf3_Expr) ( UChar* expr, UWord exprszB,
 #undef UNARY
 #undef BINARY
          case DW_OP_skip:
-            sw1 = ML_(read_Short)(expr);
+            sw1 = *(Short *)expr;
             expr += 2;
             if (expr + sw1 < limit - exprszB)
                FAIL("evaluate_Dwarf3_Expr: DW_OP_skip before start of expr");
@@ -835,7 +834,7 @@ GXResult ML_(evaluate_Dwarf3_Expr) ( UChar* expr, UWord exprszB,
             expr += sw1;
             break;
          case DW_OP_bra:
-            sw1 = ML_(read_Short)(expr);
+            sw1 = *(Short *)expr;
             expr += 2;
             if (expr + sw1 < limit - exprszB)
                FAIL("evaluate_Dwarf3_Expr: DW_OP_bra before start of expr");
@@ -853,7 +852,7 @@ GXResult ML_(evaluate_Dwarf3_Expr) ( UChar* expr, UWord exprszB,
                     "DW_OP_call_frame_cfa but no reg info");
 #if defined(VGP_ppc32_linux) || defined(VGP_ppc64_linux)
             /* Valgrind on ppc32/ppc64 currently doesn't use unwind info. */
-            uw1 = ML_(read_Addr)((UChar*)regs->sp);
+            uw1 = *(Addr *)(regs->sp);
 #else
             uw1 = ML_(get_CFA)(regs->ip, regs->sp, regs->fp, 0, ~(UWord) 0);
 #endif
@@ -869,19 +868,19 @@ GXResult ML_(evaluate_Dwarf3_Expr) ( UChar* expr, UWord exprszB,
             uw1 = 0;
             switch (sw1) {
                case 1:
-                  uw1 = ML_(read_UChar)(expr);
+                  uw1 = *(UChar *)expr;
                   expr += 1;
                   break;
                case 2:
-                  uw1 = ML_(read_UShort)(expr);
+                  uw1 = *(UShort *)expr;
                   expr += 2;
                   break;
                case 4:
-                  uw1 = ML_(read_UInt)(expr);
+                  uw1 = *(UInt *)expr;
                   expr += 4;
                   break;
                case 8:
-                  uw1 = ML_(read_ULong)(expr);
+                  uw1 = *(ULong *)expr;
                   expr += 8;
                   break;
                default:
@@ -950,9 +949,9 @@ GXResult ML_(evaluate_GX)( GExpr* gx, GExpr* fbGX,
          return res;
       }
       vg_assert(uc == 0);
-      aMin   = ML_(read_Addr)(p);   p += sizeof(Addr);
-      aMax   = ML_(read_Addr)(p);   p += sizeof(Addr);
-      nbytes = ML_(read_UShort)(p); p += sizeof(UShort);
+      aMin   = * (Addr*)p;   p += sizeof(Addr);
+      aMax   = * (Addr*)p;   p += sizeof(Addr);
+      nbytes = * (UShort*)p; p += sizeof(UShort);
       nGuards++;
       if (0) VG_(printf)("           guard %d: %#lx %#lx\n",
                          (Int)nGuards, aMin,aMax);
@@ -1027,9 +1026,9 @@ GXResult ML_(evaluate_trivial_GX)( GExpr* gx, const DebugInfo* di )
       if (uc == 1) /*isEnd*/
          break;
       vg_assert(uc == 0);
-      aMin   = ML_(read_Addr)(p);   p += sizeof(Addr);
-      aMax   = ML_(read_Addr)(p);   p += sizeof(Addr);
-      nbytes = ML_(read_UShort)(p); p += sizeof(UShort);
+      aMin   = * (Addr*)p;   p += sizeof(Addr);
+      aMax   = * (Addr*)p;   p += sizeof(Addr);
+      nbytes = * (UShort*)p; p += sizeof(UShort);
       nGuards++;
       if (0) VG_(printf)("           guard %ld: %#lx %#lx\n", 
                          nGuards, aMin,aMax);
@@ -1041,7 +1040,7 @@ GXResult ML_(evaluate_trivial_GX)( GExpr* gx, const DebugInfo* di )
          obviously a constant. */
       if (nbytes == 1 + sizeof(Addr) && *p == DW_OP_addr) {
          /* DW_OP_addr a */
-         Addr a = ML_(read_Addr)((p+1));
+         Addr a = *(Addr*)(p+1);
          if (bias_address(&a, di)) {
             thisResult.b = True;
             thisResult.ul = (ULong)a;
@@ -1061,7 +1060,7 @@ GXResult ML_(evaluate_trivial_GX)( GExpr* gx, const DebugInfo* di )
           && p[0] == DW_OP_addr
           && p[1 + sizeof(Addr)] == DW_OP_plus_uconst 
           && p[1 + sizeof(Addr) + 1] < 0x80 /*1-byte ULEB*/) {
-         Addr a = ML_(read_Addr)(&p[1]);
+         Addr a = *(Addr*)&p[1];
          if (bias_address(&a, di)) {
             thisResult.b = True;
             thisResult.ul = (ULong)a + (ULong)p[1 + sizeof(Addr) + 1];
@@ -1189,9 +1188,9 @@ void ML_(pp_GX) ( GExpr* gx ) {
       if (uc == 1)
          break; /*isEnd*/
       vg_assert(uc == 0);
-      aMin   = ML_(read_Addr)(p);  p += sizeof(Addr);
-      aMax   = ML_(read_Addr)(p);  p += sizeof(Addr);
-      nbytes = ML_(read_UShort)(p); p += sizeof(UShort);
+      aMin   = * (Addr*)p;  p += sizeof(Addr);
+      aMax   = * (Addr*)p;  p += sizeof(Addr);
+      nbytes = * (UShort*)p; p += sizeof(UShort);
       VG_(printf)("[%#lx,%#lx]=", aMin, aMax);
       while (nbytes > 0) {
          VG_(printf)("%02x", (UInt)*p++);

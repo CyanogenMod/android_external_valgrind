@@ -2162,7 +2162,7 @@ typedef union CValue {
     unsigned long long ull;
     struct CString *cstr;
     void *ptr;
-    int tab[sizeof(long double) / sizeof(int)];
+    int tab[1];
 } CValue;
 
 /* value on stack */
@@ -7305,7 +7305,7 @@ char *get_tok_str(int v, CValue *cv)
     case TOK_CLLONG:
     case TOK_CULLONG:
         /* XXX: not quite exact, but only useful for testing  */
-        sprintf(p, "%llu", cv->ull);
+        sprintf(p, "%Lu", cv->ull);
         break;
     case TOK_CCHAR:
     case TOK_LCHAR:
@@ -17975,8 +17975,7 @@ static void asm_instr(void)
 {
     CString astr, astr1;
     ASMOperand operands[MAX_ASM_OPERANDS];
-    int nb_inputs __attribute__((unused));
-    int nb_outputs, nb_operands, i, must_subst, out_reg;
+    int nb_inputs, nb_outputs, nb_operands, i, must_subst, out_reg;
     uint8_t clobber_regs[NB_ASM_REGS];
 
     next();
@@ -18917,7 +18916,7 @@ static void put_got_entry(TCCState *s1,
 /* build GOT and PLT entries */
 static void build_got_entries(TCCState *s1)
 {
-    Section *s, *symtab __attribute__((unused));
+    Section *s, *symtab;
     Elf32_Rel *rel, *rel_end;
     Elf32_Sym *sym;
     int i, type, reloc_type, sym_index;
@@ -20591,7 +20590,7 @@ static void rt_printline(unsigned long wanted_pc)
 static int rt_get_caller_pc(unsigned long *paddr, 
                             ucontext_t *uc, int level)
 {
-    unsigned long fp __attribute__((unused));
+    unsigned long fp;
     //int i;
 
     if (level == 0) {
@@ -20758,7 +20757,7 @@ TCCState *tcc_new(void)
 {
     const char *p, *r;
     TCCState *s;
-    TokenSym *ts __attribute__((unused));
+    TokenSym *ts;
     int i, c;
 
     s = tcc_mallocz(sizeof(TCCState));
@@ -21285,7 +21284,7 @@ static int64_t getclock_us(void)
 
 void help(void)
 {
-    printf("tcc version " TCC_VERSION " - Tiny C Compiler - Copyright (C) 2001-2011 Fabrice Bellard\n"
+    printf("tcc version " TCC_VERSION " - Tiny C Compiler - Copyright (C) 2001-2010 Fabrice Bellard\n"
            "usage: tcc [-v] [-c] [-o outfile] [-Bdir] [-bench] [-Idir] [-Dsym[=val]] [-Usym]\n"
            "           [-Wwarn] [-g] [-b] [-bt N] [-Ldir] [-llib] [-shared] [-static]\n"
            "           [infile1 infile2...] [-run infile args...]\n"

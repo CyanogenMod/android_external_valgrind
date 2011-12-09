@@ -7,7 +7,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2004-2011 OpenWorks LLP
+   Copyright (C) 2004-2010 OpenWorks LLP
       info@open-works.net
 
    This program is free software; you can redistribute it and/or
@@ -1989,9 +1989,7 @@ static UChar* push_word_from_tags ( UChar* p, UShort tags )
    imperative to emit position-independent code. */
 
 Int emit_X86Instr ( UChar* buf, Int nbuf, X86Instr* i, 
-                    Bool mode64,
-                    void* dispatch_unassisted,
-                    void* dispatch_assisted )
+                    Bool mode64, void* dispatch )
 {
    UInt irno, opc, opc_rr, subopc_imm, opc_imma, opc_cl, opc_imm, subopc;
 
@@ -2306,11 +2304,7 @@ Int emit_X86Instr ( UChar* buf, Int nbuf, X86Instr* i,
       *p++ = toUChar(0xD0 + irno);
       goto done;
 
-   case Xin_Goto: {
-      void* dispatch_to_use = NULL;
-      vassert(dispatch_unassisted != NULL);
-      vassert(dispatch_assisted != NULL);
-
+   case Xin_Goto:
       /* Use ptmp for backpatching conditional jumps. */
       ptmp = NULL;
 
@@ -2324,10 +2318,7 @@ Int emit_X86Instr ( UChar* buf, Int nbuf, X86Instr* i,
       }
 
       /* If a non-boring, set %ebp (the guest state pointer)
-         appropriately.  Also, decide which dispatcher we need to
-         use. */
-      dispatch_to_use = dispatch_assisted;
-
+         appropriately. */
       /* movl $magic_number, %ebp */
       switch (i->Xin.Goto.jk) {
          case Ijk_ClientReq: 
@@ -2375,7 +2366,6 @@ Int emit_X86Instr ( UChar* buf, Int nbuf, X86Instr* i,
          case Ijk_Ret:
 	 case Ijk_Call:
          case Ijk_Boring:
-            dispatch_to_use = dispatch_unassisted;
             break;
          default: 
             ppIRJumpKind(i->Xin.Goto.jk);
@@ -2400,10 +2390,10 @@ Int emit_X86Instr ( UChar* buf, Int nbuf, X86Instr* i,
          after the load of %eax since %edx might be carrying the value
          destined for %eax immediately prior to this Xin_Goto. */
       vassert(sizeof(UInt) == sizeof(void*));
-      vassert(dispatch_to_use != NULL);
+      vassert(dispatch != NULL);
       /* movl $imm32, %edx */
       *p++ = 0xBA;
-      p = emit32(p, (UInt)Ptr_to_ULong(dispatch_to_use));
+      p = emit32(p, (UInt)Ptr_to_ULong(dispatch));
 
       /* jmp *%edx */
       *p++ = 0xFF;
@@ -2416,7 +2406,6 @@ Int emit_X86Instr ( UChar* buf, Int nbuf, X86Instr* i,
          *ptmp = toUChar(delta-1);
       }
       goto done;
-   }
 
    case Xin_CMov32:
       vassert(i->Xin.CMov32.cond != Xcc_ALWAYS);

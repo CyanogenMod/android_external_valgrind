@@ -25,7 +25,7 @@ char * touch_realloc (char * ptr, int size)
 
 int main ( void )
 {
-  char *a1, *b1, *a2 __attribute__((unused)), *b2 __attribute__((unused));
+  char *a1, *b1, *a2, *b2;
   printf("started\n");
   a1 = touch_malloc(1600000) ;
   b1 = touch_malloc(200000) ;

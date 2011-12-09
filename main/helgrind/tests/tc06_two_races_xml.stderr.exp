@@ -6,10 +6,10 @@
 <protocoltool>helgrind</protocoltool>
 
 <preamble>
-  <line>Helgrind, a thread error detector</line>
-  <line>Copyright (C) XXXX-YYYY, and GNU GPL'd, by OpenWorks LLP et al.</line>
-  <line>Using Valgrind-X.Y.X and LibVEX; rerun with -h for copyright info</line>
-  <line>Command: ./tc06_two_races</line>
+  <line>...</line>
+  <line>...</line>
+  <line>...</line>
+  <line>...</line>
 </preamble>
 
 <pid>...</pid>
@@ -17,18 +17,9 @@
 <tool>helgrind</tool>
 
 <args>
-  <vargv>
-    <exe>...</exe>
-    <arg>--command-line-only=yes</arg>
-    <arg>--memcheck:leak-check=no</arg>
-    <arg>--tool=helgrind</arg>
-    <arg>--read-var-info=yes</arg>
-    <arg>--xml=yes</arg>
-    <arg>--xml-fd=2</arg>
-    <arg>--log-file=/dev/null</arg>
-  </vargv>
+  <vargv>...</vargv>
   <argv>
-    <exe>...</exe>
+    <exe>./tc06_two_races</exe>
   </argv>
 </args>
 
@@ -45,7 +36,21 @@
 <announcethread>
   <hthreadid>2</hthreadid>
   <stack>
-    <frame>...</frame>
+    <frame>
+      <ip>0x........</ip>
+      <obj>...</obj>
+      <fn>clone</fn>
+    </frame>
+    <frame>
+      <ip>0x........</ip>
+      <obj>...</obj>
+      <fn>do_clone</fn>
+    </frame>
+    <frame>
+      <ip>0x........</ip>
+      <obj>...</obj>
+      <fn>pthread_create@@GLIBC_2.2.5</fn>
+    </frame>
     <frame>
       <ip>0x........</ip>
       <obj>...</obj>
@@ -68,13 +73,13 @@
       <fn>main</fn>
       <dir>...</dir>
       <file>tc06_two_races.c</file>
-      <line>26</line>
+      <line>...</line>
     </frame>
   </stack>
 </announcethread>
 
 <error>
-  <unique>...</unique>
+  <unique>0x........</unique>
   <tid>...</tid>
   <kind>Race</kind>
   <xwhat>
@@ -88,7 +93,7 @@
       <fn>main</fn>
       <dir>...</dir>
       <file>tc06_two_races.c</file>
-      <line>31</line>
+      <line>...</line>
     </frame>
   </stack>
   <xauxwhat>
@@ -102,7 +107,7 @@
       <fn>child_fn</fn>
       <dir>...</dir>
       <file>tc06_two_races.c</file>
-      <line>14</line>
+      <line>...</line>
     </frame>
     <frame>
       <ip>0x........</ip>
@@ -112,14 +117,23 @@
       <file>hg_intercepts.c</file>
       <line>...</line>
     </frame>
-    <frame>...</frame>
+    <frame>
+      <ip>0x........</ip>
+      <obj>...</obj>
+      <fn>start_thread</fn>
+    </frame>
+    <frame>
+      <ip>0x........</ip>
+      <obj>...</obj>
+      <fn>clone</fn>
+    </frame>
   </stack>
   <auxwhat>Location 0x........ is 0 bytes inside global var "unprot1"</auxwhat>
-  <xauxwhat><text>declared at tc06_two_races.c:9</text> <file>tc06_two_races.c</file> <line>9</line> </xauxwhat>
+  <xauxwhat><text>declared at tc06_two_races.c:9</text> <file>tc06_two_races.c</file> <line>...</line> </xauxwhat>
 </error>
 
 <error>
-  <unique>...</unique>
+  <unique>0x........</unique>
   <tid>...</tid>
   <kind>Race</kind>
   <xwhat>
@@ -133,7 +147,7 @@
       <fn>main</fn>
       <dir>...</dir>
       <file>tc06_two_races.c</file>
-      <line>31</line>
+      <line>...</line>
     </frame>
   </stack>
   <xauxwhat>
@@ -147,7 +161,7 @@
       <fn>child_fn</fn>
       <dir>...</dir>
       <file>tc06_two_races.c</file>
-      <line>14</line>
+      <line>...</line>
     </frame>
     <frame>
       <ip>0x........</ip>
@@ -157,14 +171,23 @@
       <file>hg_intercepts.c</file>
       <line>...</line>
     </frame>
-    <frame>...</frame>
+    <frame>
+      <ip>0x........</ip>
+      <obj>...</obj>
+      <fn>start_thread</fn>
+    </frame>
+    <frame>
+      <ip>0x........</ip>
+      <obj>...</obj>
+      <fn>clone</fn>
+    </frame>
   </stack>
   <auxwhat>Location 0x........ is 0 bytes inside global var "unprot1"</auxwhat>
-  <xauxwhat><text>declared at tc06_two_races.c:9</text> <file>tc06_two_races.c</file> <line>9</line> </xauxwhat>
+  <xauxwhat><text>declared at tc06_two_races.c:9</text> <file>tc06_two_races.c</file> <line>...</line> </xauxwhat>
 </error>
 
 <error>
-  <unique>...</unique>
+  <unique>0x........</unique>
   <tid>...</tid>
   <kind>Race</kind>
   <xwhat>
@@ -178,7 +201,7 @@
       <fn>main</fn>
       <dir>...</dir>
       <file>tc06_two_races.c</file>
-      <line>35</line>
+      <line>...</line>
     </frame>
   </stack>
   <xauxwhat>
@@ -192,7 +215,7 @@
       <fn>child_fn</fn>
       <dir>...</dir>
       <file>tc06_two_races.c</file>
-      <line>18</line>
+      <line>...</line>
     </frame>
     <frame>
       <ip>0x........</ip>
@@ -202,14 +225,23 @@
       <file>hg_intercepts.c</file>
       <line>...</line>
     </frame>
-    <frame>...</frame>
+    <frame>
+      <ip>0x........</ip>
+      <obj>...</obj>
+      <fn>start_thread</fn>
+    </frame>
+    <frame>
+      <ip>0x........</ip>
+      <obj>...</obj>
+      <fn>clone</fn>
+    </frame>
   </stack>
   <auxwhat>Location 0x........ is 0 bytes inside global var "unprot2"</auxwhat>
-  <xauxwhat><text>declared at tc06_two_races.c:9</text> <file>tc06_two_races.c</file> <line>9</line> </xauxwhat>
+  <xauxwhat><text>declared at tc06_two_races.c:9</text> <file>tc06_two_races.c</file> <line>...</line> </xauxwhat>
 </error>
 
 <error>
-  <unique>...</unique>
+  <unique>0x........</unique>
   <tid>...</tid>
   <kind>Race</kind>
   <xwhat>
@@ -223,7 +255,7 @@
       <fn>main</fn>
       <dir>...</dir>
       <file>tc06_two_races.c</file>
-      <line>35</line>
+      <line>...</line>
     </frame>
   </stack>
   <xauxwhat>
@@ -237,7 +269,7 @@
       <fn>child_fn</fn>
       <dir>...</dir>
       <file>tc06_two_races.c</file>
-      <line>18</line>
+      <line>...</line>
     </frame>
     <frame>
       <ip>0x........</ip>
@@ -247,10 +279,19 @@
       <file>hg_intercepts.c</file>
       <line>...</line>
     </frame>
-    <frame>...</frame>
+    <frame>
+      <ip>0x........</ip>
+      <obj>...</obj>
+      <fn>start_thread</fn>
+    </frame>
+    <frame>
+      <ip>0x........</ip>
+      <obj>...</obj>
+      <fn>clone</fn>
+    </frame>
   </stack>
   <auxwhat>Location 0x........ is 0 bytes inside global var "unprot2"</auxwhat>
-  <xauxwhat><text>declared at tc06_two_races.c:9</text> <file>tc06_two_races.c</file> <line>9</line> </xauxwhat>
+  <xauxwhat><text>declared at tc06_two_races.c:9</text> <file>tc06_two_races.c</file> <line>...</line> </xauxwhat>
 </error>
 
 
@@ -259,7 +300,24 @@
   <time>...</time>
 </status>
 
-<errorcounts>...</errorcounts>
+<errorcounts>
+  <pair>
+    <count>...</count>
+    <unique>0x........</unique>
+  </pair>
+  <pair>
+    <count>...</count>
+    <unique>0x........</unique>
+  </pair>
+  <pair>
+    <count>...</count>
+    <unique>0x........</unique>
+  </pair>
+  <pair>
+    <count>...</count>
+    <unique>0x........</unique>
+  </pair>
+</errorcounts>
 
 <suppcounts>...</suppcounts>
 

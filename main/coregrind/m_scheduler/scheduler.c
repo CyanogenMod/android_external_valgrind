@@ -7,7 +7,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2000-2011 Julian Seward 
+   Copyright (C) 2000-2010 Julian Seward 
       jseward@acm.org
 
    This program is free software; you can redistribute it and/or
@@ -61,13 +61,11 @@
 #include "pub_core_debuglog.h"
 #include "pub_core_vki.h"
 #include "pub_core_vkiscnums.h"    // __NR_sched_yield
-#include "pub_core_libcsetjmp.h"   // to keep _threadstate.h happy
 #include "pub_core_threadstate.h"
 #include "pub_core_aspacemgr.h"
 #include "pub_core_clreq.h"         // for VG_USERREQ__*
 #include "pub_core_dispatch.h"
 #include "pub_core_errormgr.h"      // For VG_(get_n_errs_found)()
-#include "pub_core_gdbserver.h"     // for VG_(gdbserver) and VG_(gdbserver_activity)
 #include "pub_core_libcbase.h"
 #include "pub_core_libcassert.h"
 #include "pub_core_libcprint.h"
@@ -114,13 +112,6 @@ UInt VG_(dispatch_ctr);
 /* 64-bit counter for the number of basic blocks done. */
 static ULong bbs_done = 0;
 
-/* Counter to see if vgdb activity is to be verified.
-   When nr of bbs done reaches vgdb_next_poll, scheduler will
-   poll for gdbserver activity. VG_(force_vgdb_poll) and 
-   VG_(disable_vgdb_poll) allows the valgrind core (e.g. m_gdbserver)
-   to control when the next poll will be done. */
-static ULong vgdb_next_poll;
-
 /* Forwards */
 static void do_client_request ( ThreadId tid );
 static void scheduler_sanity ( ThreadId tid );
@@ -149,11 +140,6 @@ void VG_(print_scheduler_stats)(void)
 /* CPU semaphore, so that threads can run exclusively */
 static vg_sema_t the_BigLock;
 
-// Base address of the NaCl sandbox.
-UWord nacl_head;
-
-// Path to NaCl nexe.
-char *nacl_file;
 
 /* ---------------------------------------------------------------------
    Helper functions for the scheduler.
@@ -163,21 +149,6 @@ static
 void print_sched_event ( ThreadId tid, Char* what )
 {
    VG_(message)(Vg_DebugMsg, "  SCHED[%d]: %s\n", tid, what );
-}
-
-/* For showing SB counts, if the user asks to see them. */
-#define SHOW_SBCOUNT_EVERY (20ULL * 1000 * 1000)
-static ULong bbs_done_lastcheck = 0;
-
-static
-void maybe_show_sb_counts ( void )
-{
-   Long delta = bbs_done - bbs_done_lastcheck;
-   vg_assert(delta >= 0);
-   if (UNLIKELY(delta >= SHOW_SBCOUNT_EVERY)) {
-      VG_(umsg)("%'lld superblocks executed\n", bbs_done);
-      bbs_done_lastcheck = bbs_done;
-   }
 }
 
 static
@@ -434,6 +405,10 @@ static void os_state_clear(ThreadState *tst)
    tst->os_state.threadgroup = 0;
 #  if defined(VGO_linux)
    /* no other fields to clear */
+#  elif defined(VGO_aix5)
+   tst->os_state.cancel_async    = False;
+   tst->os_state.cancel_disabled = False;
+   tst->os_state.cancel_progress = Canc_NoRequest;
 #  elif defined(VGO_darwin)
    tst->os_state.post_mach_trap_fn = NULL;
    tst->os_state.pthread           = 0;
@@ -555,7 +530,6 @@ ThreadId VG_(scheduler_init_phase1) ( void )
       VG_(threads)[i].status                    = VgTs_Empty;
       VG_(threads)[i].client_stack_szB          = 0;
       VG_(threads)[i].client_stack_highest_word = (Addr)NULL;
-      VG_(threads)[i].err_disablement_level     = 0;
    }
 
    tid_main = VG_(alloc_ThreadState)();
@@ -603,19 +577,18 @@ void VG_(scheduler_init_phase2) ( ThreadId tid_main,
    ------------------------------------------------------------------ */
 
 /* Use gcc's built-in setjmp/longjmp.  longjmp must not restore signal
-   mask state, but does need to pass "val" through.  jumped must be a
-   volatile UWord. */
+   mask state, but does need to pass "val" through. */
 #define SCHEDSETJMP(tid, jumped, stmt)					\
    do {									\
       ThreadState * volatile _qq_tst = VG_(get_ThreadState)(tid);	\
 									\
-      (jumped) = VG_MINIMAL_SETJMP(_qq_tst->sched_jmpbuf);              \
-      if ((jumped) == ((UWord)0)) {                                     \
+      (jumped) = __builtin_setjmp(_qq_tst->sched_jmpbuf);               \
+      if ((jumped) == 0) {						\
 	 vg_assert(!_qq_tst->sched_jmpbuf_valid);			\
 	 _qq_tst->sched_jmpbuf_valid = True;				\
 	 stmt;								\
       }	else if (VG_(clo_trace_sched))					\
-	 VG_(printf)("SCHEDSETJMP(line %d) tid %d, jumped=%ld\n",       \
+	 VG_(printf)("SCHEDSETJMP(line %d) tid %d, jumped=%d\n",        \
                      __LINE__, tid, jumped);                            \
       vg_assert(_qq_tst->sched_jmpbuf_valid);				\
       _qq_tst->sched_jmpbuf_valid = False;				\
@@ -685,13 +658,13 @@ static void do_pre_run_checks ( ThreadState* tst )
 #  if defined(VGA_ppc32) || defined(VGA_ppc64)
    /* ppc guest_state vector regs must be 16 byte aligned for
       loads/stores.  This is important! */
-   vg_assert(VG_IS_16_ALIGNED(& tst->arch.vex.guest_VSR0));
-   vg_assert(VG_IS_16_ALIGNED(& tst->arch.vex_shadow1.guest_VSR0));
-   vg_assert(VG_IS_16_ALIGNED(& tst->arch.vex_shadow2.guest_VSR0));
+   vg_assert(VG_IS_16_ALIGNED(& tst->arch.vex.guest_VR0));
+   vg_assert(VG_IS_16_ALIGNED(& tst->arch.vex_shadow1.guest_VR0));
+   vg_assert(VG_IS_16_ALIGNED(& tst->arch.vex_shadow2.guest_VR0));
    /* be extra paranoid .. */
-   vg_assert(VG_IS_16_ALIGNED(& tst->arch.vex.guest_VSR1));
-   vg_assert(VG_IS_16_ALIGNED(& tst->arch.vex_shadow1.guest_VSR1));
-   vg_assert(VG_IS_16_ALIGNED(& tst->arch.vex_shadow2.guest_VSR1));
+   vg_assert(VG_IS_16_ALIGNED(& tst->arch.vex.guest_VR1));
+   vg_assert(VG_IS_16_ALIGNED(& tst->arch.vex_shadow1.guest_VR1));
+   vg_assert(VG_IS_16_ALIGNED(& tst->arch.vex_shadow2.guest_VR1));
 #  endif
 
 #  if defined(VGA_arm)
@@ -705,32 +678,14 @@ static void do_pre_run_checks ( ThreadState* tst )
    vg_assert(VG_IS_8_ALIGNED(& tst->arch.vex_shadow1.guest_D1));
    vg_assert(VG_IS_8_ALIGNED(& tst->arch.vex_shadow2.guest_D1));
 #  endif
-
-#  if defined(VGA_s390x)
-   /* no special requirements */
-#  endif
 }
 
-// NO_VGDB_POLL value ensures vgdb is not polled, while
-// VGDB_POLL_ASAP ensures that the next scheduler call
-// will cause a poll.
-#define NO_VGDB_POLL    0xffffffffffffffffULL
-#define VGDB_POLL_ASAP  0x0ULL
-
-void VG_(disable_vgdb_poll) (void )
-{
-   vgdb_next_poll = NO_VGDB_POLL;
-}
-void VG_(force_vgdb_poll) ( void )
-{
-   vgdb_next_poll = VGDB_POLL_ASAP;
-}
 
 /* Run the thread tid for a while, and return a VG_TRC_* value
    indicating why VG_(run_innerloop) stopped. */
 static UInt run_thread_for_a_while ( ThreadId tid )
 {
-   volatile UWord        jumped;
+   volatile Int          jumped;
    volatile ThreadState* tst = NULL; /* stop gcc complaining */
    volatile UInt         trc;
    volatile Int          dispatch_ctr_SAVED;
@@ -747,6 +702,22 @@ static UInt run_thread_for_a_while ( ThreadId tid )
 
    trc = 0;
    dispatch_ctr_SAVED = VG_(dispatch_ctr);
+
+#  if defined(VGP_ppc32_aix5) || defined(VGP_ppc64_aix5)
+   /* On AIX, we need to get a plausible value for SPRG3 for this
+      thread, since it's used I think as a thread-state pointer.  It
+      is presumably set by the kernel for each dispatched thread and
+      cannot be changed by user space.  It therefore seems safe enough
+      to copy the host's value of it into the guest state at the point
+      the thread is dispatched.
+      (Later): Hmm, looks like SPRG3 is only used in 32-bit mode.
+      Oh well. */
+   { UWord host_sprg3;
+     __asm__ __volatile__( "mfspr %0,259\n" : "=b"(host_sprg3) );
+    VG_(threads)[tid].arch.vex.guest_SPRG3_RO = host_sprg3;
+    vg_assert(sizeof(VG_(threads)[tid].arch.vex.guest_SPRG3_RO) == sizeof(void*));
+   }
+#  endif
 
    /* there should be no undealt-with signals */
    //vg_assert(VG_(threads)[tid].siginfo.si_signo == 0);
@@ -778,7 +749,7 @@ static UInt run_thread_for_a_while ( ThreadId tid )
    vg_assert(VG_(in_generated_code) == True);
    VG_(in_generated_code) = False;
 
-   if (jumped != (UWord)0) {
+   if (jumped) {
       /* We get here if the client took a fault that caused our signal
          handler to longjmp. */
       vg_assert(trc == 0);
@@ -794,16 +765,6 @@ static UInt run_thread_for_a_while ( ThreadId tid )
    // Tell the tool this thread has stopped running client code
    VG_TRACK( stop_client_code, tid, bbs_done );
 
-   if (bbs_done >= vgdb_next_poll) {
-      if (VG_(clo_vgdb_poll))
-         vgdb_next_poll = bbs_done + (ULong)VG_(clo_vgdb_poll);
-      else
-         /* value was changed due to gdbserver invocation via ptrace */
-         vgdb_next_poll = NO_VGDB_POLL;
-      if (VG_(gdbserver_activity) (tid))
-         VG_(gdbserver) (tid);
-   }
-
    return trc;
 }
 
@@ -812,7 +773,7 @@ static UInt run_thread_for_a_while ( ThreadId tid )
    VG_TRC_* value. */
 static UInt run_noredir_translation ( Addr hcode, ThreadId tid )
 {
-   volatile UWord        jumped;
+   volatile Int          jumped;
    volatile ThreadState* tst; 
    volatile UWord        argblock[4];
    volatile UInt         retval;
@@ -864,7 +825,7 @@ static UInt run_noredir_translation ( Addr hcode, ThreadId tid )
 
    VG_(in_generated_code) = False;
 
-   if (jumped != (UWord)0) {
+   if (jumped) {
       /* We get here if the client took a fault that caused our signal
          handler to longjmp. */
       vg_assert(argblock[2] == 0); /* next guest IP was not written */
@@ -922,7 +883,7 @@ static void handle_tt_miss ( ThreadId tid )
 static void handle_syscall(ThreadId tid, UInt trc)
 {
    ThreadState * volatile tst = VG_(get_ThreadState)(tid);
-   volatile UWord jumped; 
+   Bool jumped; 
 
    /* Syscall may or may not block; either way, it will be
       complete by the time this call returns, and we'll be
@@ -942,7 +903,7 @@ static void handle_syscall(ThreadId tid, UInt trc)
 		  tid, VG_(running_tid), tid, tst->status);
    vg_assert(VG_(is_running_thread)(tid));
    
-   if (jumped != (UWord)0) {
+   if (jumped) {
       block_signals();
       VG_(poll_signals)(tid);
    }
@@ -992,59 +953,11 @@ static UInt/*trc*/ handle_noredir_jump ( ThreadId tid )
  */
 VgSchedReturnCode VG_(scheduler) ( ThreadId tid )
 {
-   UInt     trc = VG_TRC_BORING;
+   UInt     trc;
    ThreadState *tst = VG_(get_ThreadState)(tid);
-   static Bool vgdb_startup_action_done = False;
 
    if (VG_(clo_trace_sched))
       print_sched_event(tid, "entering VG_(scheduler)");      
-
-   /* Do vgdb initialization (but once). Only the first (main) task
-      starting up will do the below.
-      Initialize gdbserver earlier than at the first 
-      thread VG_(scheduler) is causing problems:
-      * at the end of VG_(scheduler_init_phase2) :
-        The main thread is in VgTs_Init state, but in a not yet
-        consistent state => the thread cannot be reported to gdb
-        (e.g. causes an assert in LibVEX_GuestX86_get_eflags when giving
-        back the guest registers to gdb).
-      * at end of valgrind_main, just
-        before VG_(main_thread_wrapper_NORETURN)(1) :
-        The main thread is still in VgTs_Init state but in a
-        more advanced state. However, the thread state is not yet
-        completely initialized : a.o., the os_state is not yet fully
-        set => the thread is then not properly reported to gdb,
-        which is then confused (causing e.g. a duplicate thread be
-        shown, without thread id).
-      * it would be possible to initialize gdbserver "lower" in the
-        call stack (e.g. in VG_(main_thread_wrapper_NORETURN)) but
-        these are platform dependent and the place at which
-        the thread state is completely initialized is not
-        specific anymore to the main thread (so a similar "do it only
-        once" would be needed).
-
-        => a "once only" initialization here is the best compromise. */
-   if (!vgdb_startup_action_done) {
-      vg_assert(tid == 1); // it must be the main thread.
-      vgdb_startup_action_done = True;
-      if (VG_(clo_vgdb) != Vg_VgdbNo) {
-         /* If we have to poll, ensures we do an initial poll at first
-            scheduler call. Otherwise, ensure no poll (unless interrupted
-            by ptrace). */
-         if (VG_(clo_vgdb_poll))
-            VG_(force_vgdb_poll) ();
-         else
-            VG_(disable_vgdb_poll) ();
-
-         vg_assert (VG_(dyn_vgdb_error) == VG_(clo_vgdb_error));
-         /* As we are initializing, VG_(dyn_vgdb_error) can't have been
-            changed yet. */
-
-         VG_(gdbserver_prerun_action) (1);
-      } else {
-         VG_(disable_vgdb_poll) ();
-      }
-   }
 
    /* set the proper running signal mask */
    block_signals();
@@ -1057,9 +970,17 @@ VgSchedReturnCode VG_(scheduler) ( ThreadId tid )
 
       if (VG_(dispatch_ctr) == 1) {
 
+#        if defined(VGP_ppc32_aix5) || defined(VGP_ppc64_aix5)
+         /* Note: count runnable threads before dropping The Lock. */
+         Int rt = VG_(count_runnable_threads)();
+#        endif
+
 	 /* Our slice is done, so yield the CPU to another thread.  On
             Linux, this doesn't sleep between sleeping and running,
-            since that would take too much time. */
+            since that would take too much time.  On AIX, we have to
+            prod the scheduler to get it consider other threads; not
+            doing so appears to cause very long delays before other
+            runnable threads get rescheduled. */
 
 	 /* 4 July 06: it seems that a zero-length nsleep is needed to
             cause async thread cancellation (canceller.c) to terminate
@@ -1077,6 +998,20 @@ VgSchedReturnCode VG_(scheduler) ( ThreadId tid )
 	 VG_(release_BigLock)(tid, VgTs_Yielding, 
                                    "VG_(scheduler):timeslice");
 	 /* ------------ now we don't have The Lock ------------ */
+
+#        if defined(VGP_ppc32_aix5) || defined(VGP_ppc64_aix5)
+         { static Int ctr=0;
+           vg_assert(__NR_AIX5__nsleep != __NR_AIX5_UNKNOWN);
+           vg_assert(__NR_AIX5_yield   != __NR_AIX5_UNKNOWN);
+           if (1 && rt > 0 && ((++ctr % 3) == 0)) { 
+              //struct vki_timespec ts;
+              //ts.tv_sec = 0;
+              //ts.tv_nsec = 0*1000*1000;
+              //VG_(do_syscall2)(__NR_AIX5__nsleep, (UWord)&ts, (UWord)NULL);
+	      VG_(do_syscall0)(__NR_AIX5_yield);
+           }
+         }
+#        endif
 
          VG_(do_syscall0)(__NR_sched_yield);
 
@@ -1260,7 +1195,6 @@ VgSchedReturnCode VG_(scheduler) ( ThreadId tid )
          VG_(umsg)(
             "valgrind: Unrecognised instruction at address %#lx.\n",
             VG_(get_IP)(tid));
-         VG_(get_and_pp_StackTrace)(tid, 50);
 #define M(a) VG_(umsg)(a "\n");
    M("Your program just tried to execute an instruction that Valgrind" );
    M("did not recognise.  There are two possible reasons for this."    );
@@ -1333,9 +1267,6 @@ VgSchedReturnCode VG_(scheduler) ( ThreadId tid )
 	 break;
 
       } /* switch (trc) */
-
-      if (0)
-         maybe_show_sb_counts();
    }
 
    if (VG_(clo_trace_sched))
@@ -1390,9 +1321,6 @@ void VG_(nuke_all_threads_except) ( ThreadId me, VgSchedReturnCode src )
 #elif defined(VGA_arm)
 #  define VG_CLREQ_ARGS       guest_R4
 #  define VG_CLREQ_RET        guest_R3
-#elif defined (VGA_s390x)
-#  define VG_CLREQ_ARGS       guest_r2
-#  define VG_CLREQ_RET        guest_r3
 #else
 #  error Unknown arch
 #endif
@@ -1658,24 +1586,7 @@ void do_client_request ( ThreadId tid )
          break;
       }
 
-      case VG_USERREQ__CHANGE_ERR_DISABLEMENT: {
-         Word delta = arg[1];
-         vg_assert(delta == 1 || delta == -1);
-         ThreadState* tst = VG_(get_ThreadState)(tid);
-         vg_assert(tst);
-         if (delta == 1 && tst->err_disablement_level < 0xFFFFFFFF) {
-            tst->err_disablement_level++;
-         }
-         else
-         if (delta == -1 && tst->err_disablement_level > 0) {
-            tst->err_disablement_level--;
-         }
-         SET_CLREQ_RETVAL( tid, 0 ); /* return value is meaningless */
-         break;
-      }
-
       case VG_USERREQ__MALLOCLIKE_BLOCK:
-      case VG_USERREQ__RESIZEINPLACE_BLOCK:
       case VG_USERREQ__FREELIKE_BLOCK:
          // Ignore them if the addr is NULL;  otherwise pass onto the tool.
          if (!arg[1]) {
@@ -1686,64 +1597,17 @@ void do_client_request ( ThreadId tid )
          }
 
       case VG_USERREQ__NACL_MEM_START: {
-         Addr mem_start = arg[1];
-         nacl_head = mem_start;
-         VG_(printf)("*********************** NaCl mem_start: %p\n", (void*)mem_start);
-
-         // At this point all segments in the sandbox belong to nacl_file (the
-         // first untrusted binary loaded by sel_ldr), and have correct
-         // permissions. Read its debug info.
-         NSegment* seg = VG_(am_find_nsegment)(mem_start);
-         int fnIdx = -1;
-         while (seg) {
-           if (seg->kind == SkFileC) {
-             if (fnIdx == seg->fnIdx || fnIdx == -1) {
-               fnIdx = seg->fnIdx;
-               VG_(printf)("Segment at %p belongs to the loader\n", (void*)seg->start);
-               VG_(di_notify_mmap)(seg->start, False, /*glider: don't use fd*/-1);
-             }
-           }
-           seg = VG_(am_next_nsegment)((NSegment*)seg, True);
-         }
+         extern void LoadNaClDebugInfo(Addr a);
+         VG_(printf)("*********************** NaCl mem_start: %p\n", (void*)arg[1]);
+         if (arg[1])
+           LoadNaClDebugInfo(arg[1]);
          goto my_default;
       }
 
       case VG_USERREQ__NACL_FILE: {
+         extern char *nacl_file;
          VG_(printf)("*********************** NaCl nacl_file: %s\n", (void*)arg[1]);
          nacl_file = (char*) arg[1];
-         goto my_default;
-      }
-
-      case VG_USERREQ__NACL_MMAP: {
-         // Simulate an mmap().
-         UWord vma = arg[1]; // Base VMA of the mapping.
-         UWord size = arg[2]; // Size of the mapping.
-         UWord file_offset = arg[3]; // File offset.
-         UWord access = arg[4]; // Access.
-         UWord clone_vma = arg[5]; // Another mapping of the same; only used to find the file name.
-         if (!access)
-           access = VKI_PROT_READ | VKI_PROT_EXEC;
-         VG_(printf)("*********************** NaCl nacl_mmap: %lx %lx %lx %lx\n", vma, size, file_offset, clone_vma);
-
-         char* file_name = NULL;
-         if (clone_vma) {
-           NSegment* seg = VG_(am_find_nsegment)(clone_vma);
-           file_name = VG_(am_get_filename)(seg);
-           VG_(printf)("*********************** NaCl DSO file_name: %s\n", file_name);
-         }
-
-         UWord vma_end = vma + size;
-         UWord vma_aligned = VG_PGROUNDDN(vma);
-         UWord vma_end_aligned = VG_PGROUNDUP(vma_end);
-         size = vma_end_aligned - vma_aligned;
-         file_offset -= vma - vma_aligned;
-         VG_(am_notify_fake_client_mmap)(vma_aligned, size, access,
-             0, file_name ? file_name : (VG_(clo_nacl_file) ? VG_(clo_nacl_file) : nacl_file), file_offset);
-         // If file_name == NULL, then this is the main (sel_ldr-mapped) nexe,
-         // and has incorrect permissions at this point. In that case, wait for
-         // NACL_MEM_START to read the debug info.
-         if (file_name)
-           VG_(di_notify_mmap)(vma_aligned, False, /*glider: don't use fd*/-1);
          goto my_default;
       }
 

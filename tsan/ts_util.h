@@ -44,21 +44,14 @@ extern void ThreadSanitizerDumpAllStacks();
    Printf("Assertion failed: %s (%s:%d) %s\n", \
           __FUNCTION__, __FILE__, __LINE__, #x); \
    ThreadSanitizerDumpAllStacks(); \
-   exit(1); }} while ((void)0, 0)
+   exit(1); }} while (0)
 #elif defined(TS_OFFLINE)
 extern unsigned long offline_line_n;
 # define CHECK(x) do { if (!(x)) { \
     Printf("ASSERT on line %ld\n", offline_line_n); \
-     assert(x);}} while ((void)0, 0)
+     assert(x);}} while (0)
 #else
 # define CHECK assert
-#endif
-
-// support for stlport in stlp_std:: namespace (or other custom ns)
-#ifdef TS_STL_NS
-# define STD TS_STL_NS 
-#else
-# define STD std
 #endif
 
 #if defined(TS_VALGRIND)
@@ -79,7 +72,7 @@ extern unsigned long offline_line_n;
 #endif // TS_VALGRIND && !__WORDSIZE
 
 #elif defined(TS_LLVM)
-#  define TS_USE_STLPORT
+# define TS_USE_STLPORT
 # include <assert.h>
 # include <fcntl.h>
 # include <time.h>
@@ -115,8 +108,7 @@ extern unsigned long offline_line_n;
 #include <algorithm>
 #include <string>
 #include <bitset>
-#include <new>
-#include <ext/algorithm>
+#include "ext/algorithm"
 
 #ifdef __APPLE__
 // Apple's unordered_map in gcc 4.0 does not support -fno-exceptions.
@@ -127,8 +119,8 @@ extern unsigned long offline_line_n;
 #else
 #include "tr1/unordered_map"
 #include "tr1/unordered_set"
-using STD::tr1::unordered_map;
-using STD::tr1::unordered_set;
+using std::tr1::unordered_map;
+using std::tr1::unordered_set;
 #endif
 
 #elif defined(TS_USE_STLPORT)  // ------------- STLport ----------
@@ -143,12 +135,11 @@ using STD::tr1::unordered_set;
 #include "string"
 #include "bitset"
 #include "algorithm"
-#include "new"
 
 #include "unordered_map"
 #include "unordered_set"
-using STD::tr1::unordered_map;
-using STD::tr1::unordered_set;
+using std::tr1::unordered_map;
+using std::tr1::unordered_set;
 
 #elif defined(TS_USE_WIN_STL)  // ------------- MSVC STL ---------
 #include <string.h>
@@ -161,7 +152,6 @@ using STD::tr1::unordered_set;
 #include <algorithm>
 #include <string>
 #include <bitset>
-#include <new>
 
 // No such thing in VC 2005
 //#include <unordered_map>
@@ -177,29 +167,22 @@ using STD::tr1::unordered_set;
 # error "Unknown STL"
 #endif  // TS_USE_STANDARD_STL
 
-using STD::string;
-using STD::set;
-using STD::multiset;
-using STD::multimap;
-using STD::map;
-using STD::deque;
-using STD::stack;
-using STD::vector;
-using STD::bitset;
-using STD::nothrow_t;
-using STD::nothrow;
+using std::set;
+using std::multiset;
+using std::multimap;
+using std::map;
+using std::deque;
+using std::stack;
+using std::string;
+using std::vector;
+using std::bitset;
 
-using STD::min;
-using STD::max;
-using STD::sort;
-using STD::pair;
-using STD::make_pair;
-using STD::unique_copy;
-using STD::count;
-using STD::set_intersection;
-using STD::lower_bound;
-using STD::copy;
-using STD::binary_search;
+using std::min;
+using std::max;
+using std::sort;
+using std::pair;
+using std::make_pair;
+using std::unique_copy;
 
 #ifdef TS_LLVM
 # include "tsan_rtl_wrap.h"
@@ -260,18 +243,16 @@ int getpid();
   #define DCHECK(a) CHECK(a)
   #define DEBUG_MODE (1)
 #else
-  #define DCHECK(a) do { if (0) { if (a) {} } } while((void)0, 0)
+  #define DCHECK(a) do { if (0) { if (a) {} } } while(0)
   #define DEBUG_MODE (0)
 #endif
 
-#ifndef ALWAYS_INLINE
-  #if defined (__GNUC__)
-    #define ALWAYS_INLINE  inline __attribute__ ((always_inline))
-  #elif defined(_MSC_VER)
-    #define ALWAYS_INLINE __forceinline
-  #else
-    #error "Unknown Configuration"
-  #endif
+#if defined (__GNUC__)
+  #define ALWAYS_INLINE  inline __attribute__ ((always_inline))
+#elif defined(_MSC_VER)
+  #define ALWAYS_INLINE __forceinline
+#else
+  #error "Unknown Configuration"
 #endif
 
 #if defined(DEBUG) && DEBUG >= 1
@@ -299,8 +280,6 @@ int getpid();
 #elif defined(TS_PIN)
 # define TS_SERIALIZED 1
 #elif defined(TS_LLVM)
-# define TS_SERIALIZED 0
-#elif defined(TS_GO)
 # define TS_SERIALIZED 0
 #else
 # define TS_SERIALIZED 1
@@ -351,7 +330,6 @@ class ThreadSanitizerReport;
 // Time since some moment before the program start.
 extern size_t TimeInMilliSeconds();
 extern void YIELD();
-extern void PROCESSOR_YIELD();
 
 extern "C" long my_strtol(const char *str, char **end, int base);
 extern void Printf(const char *format, ...);
@@ -417,13 +395,6 @@ inline unsigned u32_log2(unsigned x) {
 }
 #endif
 
-typedef unsigned prng_t;
-
-/// Simple stand-alone pseudorandom number generator.
-/// Current algorithm is ANSI C linear congruential PRNG.
-inline unsigned tsan_prng(prng_t* state) {
-  return (*state = *state * 1103515245 + 12345) >> 16;
-}
 
 
 #endif  // TS_UTIL_H_

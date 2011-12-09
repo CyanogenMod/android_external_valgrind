@@ -41,12 +41,10 @@ endif
 
 CACHEGRIND_SOURCES_COMMON = \
 	cg_main.c \
-	cg-arch.c \
 	cg-x86-amd64.c \
 	cg-ppc32.c \
 	cg-ppc64.c \
-	cg-arm.c   \
-	cg-s390x.c
+	cg-arm.c
 
 cachegrind_@VGCONF_ARCH_PRI@_@VGCONF_OS@_SOURCES      = \
 	$(CACHEGRIND_SOURCES_COMMON)

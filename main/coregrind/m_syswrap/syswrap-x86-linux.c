@@ -7,7 +7,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2000-2011 Nicholas Nethercote
+   Copyright (C) 2000-2010 Nicholas Nethercote
       njn@valgrind.org
 
    This program is free software; you can redistribute it and/or
@@ -38,7 +38,6 @@
 #include "pub_core_basics.h"
 #include "pub_core_vki.h"
 #include "pub_core_vkiscnums.h"
-#include "pub_core_libcsetjmp.h"    // to keep _threadstate.h happy
 #include "pub_core_threadstate.h"
 #include "pub_core_aspacemgr.h"
 #include "pub_core_debuglog.h"
@@ -804,7 +803,6 @@ DECL_TEMPLATE(x86_linux, sys_modify_ldt);
 DECL_TEMPLATE(x86_linux, sys_set_thread_area);
 DECL_TEMPLATE(x86_linux, sys_get_thread_area);
 DECL_TEMPLATE(x86_linux, sys_ptrace);
-DECL_TEMPLATE(x86_linux, sys_sigsuspend);
 DECL_TEMPLATE(x86_linux, old_select);
 DECL_TEMPLATE(x86_linux, sys_vm86old);
 DECL_TEMPLATE(x86_linux, sys_vm86);
@@ -1404,7 +1402,6 @@ POST(sys_lstat64)
 
 PRE(sys_stat64)
 {
-   FUSE_COMPATIBLE_MAY_BLOCK();
    PRINT("sys_stat64 ( %#lx(%s), %#lx )",ARG1,(char*)ARG1,ARG2);
    PRE_REG_READ2(long, "stat64", char *, file_name, struct stat64 *, buf);
    PRE_MEM_RASCIIZ( "stat64(file_name)", ARG1 );
@@ -1418,7 +1415,6 @@ POST(sys_stat64)
 
 PRE(sys_fstatat64)
 {
-   FUSE_COMPATIBLE_MAY_BLOCK();
    PRINT("sys_fstatat64 ( %ld, %#lx(%s), %#lx )",ARG1,ARG2,(char*)ARG2,ARG3);
    PRE_REG_READ3(long, "fstatat64",
                  int, dfd, char *, file_name, struct stat64 *, buf);
@@ -1709,26 +1705,6 @@ POST(sys_socketcall)
 #  undef ARG2_5
 }
 
-/* NB: arm-linux has a clone of this one, and ppc32-linux has an almost
-   identical version. */
-PRE(sys_sigsuspend)
-{
-   /* The C library interface to sigsuspend just takes a pointer to
-      a signal mask but this system call has three arguments - the first
-      two don't appear to be used by the kernel and are always passed as
-      zero by glibc and the third is the first word of the signal mask
-      so only 32 signals are supported.
-     
-      In fact glibc normally uses rt_sigsuspend if it is available as
-      that takes a pointer to the signal mask so supports more signals.
-    */
-   *flags |= SfMayBlock;
-   PRINT("sys_sigsuspend ( %ld, %ld, %ld )", ARG1,ARG2,ARG3 );
-   PRE_REG_READ3(int, "sigsuspend",
-                 int, history0, int, history1,
-                 vki_old_sigset_t, mask);
-}
-
 PRE(sys_vm86old)
 {
    PRINT("sys_vm86old ( %#lx )", ARG1);
@@ -1898,7 +1874,7 @@ static SyscallTableEntry syscall_table[] = {
 //zz 
    LINX_(__NR_setreuid,          sys_setreuid16),     // 70
    LINX_(__NR_setregid,          sys_setregid16),     // 71
-   PLAX_(__NR_sigsuspend,        sys_sigsuspend),     // 72
+   LINX_(__NR_sigsuspend,        sys_sigsuspend),     // 72
    LINXY(__NR_sigpending,        sys_sigpending),     // 73
 //zz    //   (__NR_sethostname,       sys_sethostname),    // 74 */*
 //zz 
@@ -2218,19 +2194,7 @@ static SyscallTableEntry syscall_table[] = {
    LINX_(__NR_pwritev,           sys_pwritev),          // 334
 
    LINXY(__NR_rt_tgsigqueueinfo, sys_rt_tgsigqueueinfo),// 335
-   LINXY(__NR_perf_event_open,   sys_perf_event_open),  // 336
-//   LINX_(__NR_recvmmsg,          sys_ni_syscall),       // 337
-//   LINX_(__NR_fanotify_init,     sys_ni_syscall),       // 338
-//   LINX_(__NR_fanotify_mark,     sys_ni_syscall),       // 339
-
-   LINXY(__NR_prlimit64,         sys_prlimit64)         // 340
-//   LINX_(__NR_name_to_handle_at, sys_ni_syscall),       // 341
-//   LINX_(__NR_open_by_handle_at, sys_ni_syscall),       // 342
-//   LINX_(__NR_clock_adjtime,     sys_ni_syscall),       // 343
-//   LINX_(__NR_syncfs,            sys_ni_syscall),       // 344
-
-//   LINX_(__NR_sendmmsg,          sys_ni_syscall),       // 345
-//   LINX_(__NR_setns,             sys_ni_syscall),       // 346
+   LINXY(__NR_perf_counter_open, sys_perf_counter_open) // 336
 };
 
 SyscallTableEntry* ML_(get_linux_syscall_entry) ( UInt sysno )

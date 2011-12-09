@@ -42,7 +42,6 @@
 #include "coregrind/pub_core_basics.h"
 #include "coregrind/pub_core_machine.h"
 #include "coregrind/pub_core_clreq.h"
-#include "pub_tool_libcsetjmp.h"
 #include "coregrind/pub_core_threadstate.h"
 #include "pub_tool_libcproc.h"
 
@@ -67,10 +66,6 @@ extern "C" void *malloc(size_t size) {
 
 extern "C" void free(void *ptr) {
   VG_(free)(ptr);
-}
-
-extern "C" void* realloc(void *ptr, size_t size) {
-  return VG_(realloc)((HChar*)g_malloc_stack.Top(), ptr, size);
 }
 
 
@@ -203,7 +198,7 @@ const size_t kMaxMopsPerTrace = 2048;
 
 struct ValgrindThread {
   int32_t zero_based_uniq_tid;
-  TSanThread *ts_thread;
+  Thread *ts_thread;
   uint32_t literace_sampling;
   vector<CallStackRecord> call_stack;
 
@@ -584,8 +579,8 @@ Bool ts_handle_client_request(ThreadId vg_tid, UWord* args, UWord* ret) {
   // Ignore almost everything in race verifier mode.
   if (g_race_verifier_active) {
     if (args[0] == TSREQ_EXPECT_RACE) {
-      Put(EXPECT_RACE, ts_tid, /*descr=*/args[2],
-          /*p=*/args[1], 0);
+      Put(EXPECT_RACE, ts_tid, /*descr=*/args[3],
+          /*p=*/args[1], /*size*/args[2]);
     }
     *ret = 0;
     return True;
@@ -643,7 +638,8 @@ Bool ts_handle_client_request(ThreadId vg_tid, UWord* args, UWord* ret) {
           /*p=*/args[1], /*size=*/args[2]);
       break;
     case TSREQ_EXPECT_RACE:
-      Put(EXPECT_RACE, ts_tid, /*descr=*/args[2], /*p=*/args[1], 0);
+      Put(EXPECT_RACE, ts_tid, /*descr=*/args[3],
+          /*p=*/args[1], /*size*/args[2]);
       break;
     case TSREQ_FLUSH_EXPECTED_RACES:
       Put(FLUSH_EXPECTED_RACES, ts_tid, 0, 0, 0);
@@ -721,13 +717,9 @@ Bool ts_handle_client_request(ThreadId vg_tid, UWord* args, UWord* ret) {
     case TSREQ_PTH_API_ERROR:
       break;
     case TSREQ_PTHREAD_RWLOCK_CREATE_POST:
-      if (ignoring_sync(vg_tid, args[1]))
-        break;
       Put(LOCK_CREATE, ts_tid, pc, /*lock=*/args[1], 0);
       break;
     case TSREQ_PTHREAD_RWLOCK_DESTROY_PRE:
-      if (ignoring_sync(vg_tid, args[1]))
-        break;
       Put(LOCK_DESTROY, ts_tid, pc, /*lock=*/args[1], 0);
       break;
     case TSREQ_PTHREAD_RWLOCK_LOCK_POST:

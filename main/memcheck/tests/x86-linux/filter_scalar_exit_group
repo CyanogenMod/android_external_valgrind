@@ -6,6 +6,7 @@
 
 perl -p -e "s/exit_group/EXIT_GROUP/" |
 
-../filter_stderr "$@" |
+../filter_stderr |
 
 perl -p -e "s/EXIT_GROUP/exit_group/"
+

@@ -66,21 +66,7 @@ static NOINLINE char *Replace_strchr(EXTRA_REPLACE_PARAMS const char *s,
     }
     if (s[i] == 0) break;
   }
-  REPORT_READ_RANGE(s, i + 1);
-  return ret;
-}
-
-static NOINLINE char *Replace_strchrnul(EXTRA_REPLACE_PARAMS const char *s,
-                                        int c) {
-  size_t i;
-  char *ret;
-  for (i = 0; ; i++) {
-    if (s[i] == (char)c || s[i] == 0) {
-      ret = (char*)(&s[i]);
-      break;
-    }
-  }
-  REPORT_READ_RANGE(s, i + 1);
+  REPORT_READ_RANGE(s, ret ? i + 1 : i);
   return ret;
 }
 
@@ -94,7 +80,7 @@ static NOINLINE char *Replace_strrchr(EXTRA_REPLACE_PARAMS const char *s,
     }
     if (s[i] == 0) break;
   }
-  REPORT_READ_RANGE(s, i + 1);
+  REPORT_READ_RANGE(s, i);
   return ret;
 }
 
@@ -102,7 +88,7 @@ static NOINLINE size_t Replace_strlen(EXTRA_REPLACE_PARAMS const char *s) {
   size_t i = 0;
   for (i = 0; s[i]; i++) {
   }
-  REPORT_READ_RANGE(s, i + 1);
+  REPORT_READ_RANGE(s, i);
   return i;
 }
 
@@ -142,11 +128,12 @@ static NOINLINE int Replace_memcmp(EXTRA_REPLACE_PARAMS const unsigned char *s1,
   for (i = 0; i < len; i++) {
     if (s1[i] != s2[i]) {
       res = (int)s1[i] - (int)s2[i];
+      i++;
       break;
     }
   }
-  REPORT_READ_RANGE(s1, min(i + 1, len));
-  REPORT_READ_RANGE(s2, min(i + 1, len));
+  REPORT_READ_RANGE(s1, i);
+  REPORT_READ_RANGE(s2, i);
   return res;
 }
 
@@ -181,12 +168,8 @@ static NOINLINE char *Replace_strncpy(EXTRA_REPLACE_PARAMS char *dst,
     dst[i] = src[i];
     if (src[i] == 0) break;
   }
-  REPORT_READ_RANGE(src, min(i + 1, n));
-  while (i < n) {
-    dst[i] = 0;
-    i++;
-  }
-  REPORT_WRITE_RANGE(dst, n);
+  REPORT_READ_RANGE(src, i < n ? i+1 : n);
+  REPORT_WRITE_RANGE(dst, i < n ? i+1 : n);
   return dst;
 }
 
@@ -220,8 +203,8 @@ static NOINLINE int Replace_strncmp(EXTRA_REPLACE_PARAMS const char *s1,
     if (c1 != c2) break;
     if (c1 == 0) break;
   }
-  REPORT_READ_RANGE(s1, min(i + 1, n));
-  REPORT_READ_RANGE(s2, min(i + 1, n));
+  REPORT_READ_RANGE(s1, i < n ? i+1 : n);
+  REPORT_READ_RANGE(s2, i < n ? i+1 : n);
   if (c1 < c2) return -1;
   if (c1 > c2) return 1;
   return 0;

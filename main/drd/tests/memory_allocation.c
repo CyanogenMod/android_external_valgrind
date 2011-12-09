@@ -26,7 +26,7 @@ int main()
      * is zero, while Darwin's C library returns a non-NULL pointer. Both are
      * allowed by POSIX.
      */
-#if defined(VGO_darwin)
+#if defined(__APPLE__)
     if (p)
       free(p);
 #else

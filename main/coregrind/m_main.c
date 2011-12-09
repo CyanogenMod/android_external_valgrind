@@ -7,7 +7,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2000-2011 Julian Seward 
+   Copyright (C) 2000-2010 Julian Seward 
       jseward@acm.org
 
    This program is free software; you can redistribute it and/or
@@ -31,7 +31,6 @@
 #include "pub_core_basics.h"
 #include "pub_core_vki.h"
 #include "pub_core_vkiscnums.h"
-#include "pub_core_libcsetjmp.h"    // to keep _threadstate.h happy
 #include "pub_core_threadstate.h"
 #include "pub_core_xarray.h"
 #include "pub_core_clientstate.h"
@@ -41,7 +40,6 @@
 #include "pub_core_debuglog.h"
 #include "pub_core_errormgr.h"
 #include "pub_core_execontext.h"
-#include "pub_core_gdbserver.h"
 #include "pub_core_initimg.h"
 #include "pub_core_libcbase.h"
 #include "pub_core_libcassert.h"
@@ -65,6 +63,15 @@
 #include "pub_core_translate.h"     // For VG_(translate)
 #include "pub_core_trampoline.h"
 #include "pub_core_transtab.h"
+
+/* Stuff for reading AIX5 /proc/<pid>/sysent files */
+#if defined(VGO_aix5)
+   /* --- !!! --- EXTERNAL HEADERS start --- !!! --- */
+#  include <sys/procfs.h>  /* prsysent_t */
+   /* --- !!! --- EXTERNAL HEADERS end --- !!! --- */
+#  define VG_AIX5_SYSENT_SIZE 100000
+   static UChar aix5_sysent_buf[VG_AIX5_SYSENT_SIZE];
+#endif
 
 
 /*====================================================================*/
@@ -100,10 +107,8 @@ static void print_all_stats ( void )
 
 static void usage_NORETURN ( Bool debug_help )
 {
-   /* 'usage1' contains a %s 
-      - for the name of the GDB executable
-      - for the name of vgdb's path prefix
-      which must be supplied when they are VG_(printf)'d. */
+   /* 'usage1' contains a %s for the name of the GDB executable, which
+      must be supplied when it is VG_(printf)'d. */
    Char* usage1 = 
 "usage: valgrind [options] prog-and-args\n"
 "\n"
@@ -119,15 +124,7 @@ static void usage_NORETURN ( Bool debug_help )
 "    --trace-children=no|yes   Valgrind-ise child processes (follow execve)? [no]\n"
 "    --trace-children-skip=patt1,patt2,...    specifies a list of executables\n"
 "                              that --trace-children=yes should not trace into\n"
-"    --trace-children-skip-by-arg=patt1,patt2,...   same as --trace-children-skip=\n"
-"                              but check the argv[] entries for children, rather\n"
-"                              than the exe name, to make a follow/no-follow decision\n"
 "    --child-silent-after-fork=no|yes omit child output between fork & exec? [no]\n"
-"    --vgdb=no|yes|full        activate gdbserver? [yes]\n"
-"                              full is slower but provides precise watchpoint/step\n"
-"    --vgdb-error=<number>     invoke gdbserver after <number> errors [%d]\n"
-"                              to get started quickly, use --vgdb-error=0\n"
-"                              and follow the on-screen directions\n"
 "    --track-fds=no|yes        track open file descriptors? [no]\n"
 "    --time-stamp=no|yes       add timestamps to log messages? [no]\n"
 "    --log-fd=<number>         log messages to file descriptor [2=stderr]\n"
@@ -166,20 +163,15 @@ static void usage_NORETURN ( Bool debug_help )
 "                              part of the path after 'string'.  Allows removal\n"
 "                              of path prefixes.  Use this flag multiple times\n"
 "                              to specify a set of prefixes to remove.\n"
-"    --smc-check=none|stack|all|all-non-file [stack]\n"
-"                              checks for self-modifying code: none, only for\n"
-"                              code found in stacks, for all code, or for all\n"
-"                              code except that from file-backed mappings\n"
+"    --smc-check=none|stack|all  checks for self-modifying code: none,\n"
+"                              only for code found in stacks, or all [stack]\n"
 "    --read-var-info=yes|no    read debug info on stack and global variables\n"
 "                              and use it to print better error messages in\n"
 "                              tools that make use of it (Memcheck, Helgrind,\n"
 "                              DRD) [no]\n"
-"    --vgdb-poll=<number>      gdbserver poll max every <number> basic blocks [%d] \n"
-"    --vgdb-shadow-registers=no|yes   let gdb see the shadow registers [no]\n"
-"    --vgdb-prefix=<prefix>    prefix for vgdb FIFOs [%s]\n"
 "    --run-libc-freeres=no|yes free up glibc memory at exit on Linux? [yes]\n"
 "    --sim-hints=hint1,hint2,...  known hints:\n"
-"                                 lax-ioctls, enable-outer, fuse-compatible [none]\n"
+"                                 lax-ioctls, enable-outer [none]\n"
 "    --kernel-variant=variant1,variant2,...  known variants: bproc [none]\n"
 "                              handle non-standard kernel variants\n"
 "    --show-emwarns=no|yes     show warnings about emulation limits? [no]\n"
@@ -244,8 +236,8 @@ static void usage_NORETURN ( Bool debug_help )
 "  Extra options read from ~/.valgrindrc, $VALGRIND_OPTS, ./.valgrindrc\n"
 "\n"
 "  %s is %s\n"
-"  Valgrind is Copyright (C) 2000-2011, and GNU GPL'd, by Julian Seward et al.\n"
-"  LibVEX is Copyright (C) 2004-2011, and GNU GPL'd, by OpenWorks LLP et al.\n"
+"  Valgrind is Copyright (C) 2000-2010, and GNU GPL'd, by Julian Seward et al.\n"
+"  LibVEX is Copyright (C) 2004-2010, and GNU GPL'd, by OpenWorks LLP et al.\n"
 "\n"
 "  Bug reports, feedback, admiration, abuse, etc, to: %s.\n"
 "\n";
@@ -256,10 +248,8 @@ static void usage_NORETURN ( Bool debug_help )
    VG_(log_output_sink).fd = 1;
    VG_(log_output_sink).is_socket = False;
 
-   /* 'usage1' expects two int, two char* argument, and one SizeT argument. */
-   VG_(printf)(usage1, 
-               VG_(clo_vgdb_error), gdb_path, VG_MIN_MALLOC_SZB,
-               VG_(clo_vgdb_poll), VG_(vgdb_prefix_default)()); 
+   /* 'usage1' expects one char* argument and one SizeT argument. */
+   VG_(printf)(usage1, gdb_path, VG_MIN_MALLOC_SZB);
    if (VG_(details).name) {
       VG_(printf)("  user options for %s:\n", VG_(details).name);
       if (VG_(needs).command_line_options)
@@ -449,7 +439,7 @@ void main_process_cmd_line_options ( /*OUT*/Bool* logging_to_fd,
    /* Check for sane path in ./configure --prefix=... */
    if (VG_LIBDIR[0] != '/') 
       VG_(err_config_error)("Please use absolute paths in "
-                            "./configure --prefix=... or --libdir=...\n");
+                            "./configure --prefix=... or --libdir=...");
 
    vg_assert( VG_(args_for_valgrind) );
 
@@ -518,17 +508,7 @@ void main_process_cmd_line_options ( /*OUT*/Bool* logging_to_fd,
          VG_(clo_verbosity)--;
 
       else if VG_BOOL_CLO(arg, "--stats",          VG_(clo_stats)) {}
-      else if VG_BOOL_CLO(arg, "--xml",            VG_(clo_xml))
-         VG_(debugLog_setXml)(VG_(clo_xml));
-
-      else if VG_XACT_CLO(arg, "--vgdb=no",        VG_(clo_vgdb), Vg_VgdbNo) {}
-      else if VG_XACT_CLO(arg, "--vgdb=yes",       VG_(clo_vgdb), Vg_VgdbYes) {}
-      else if VG_XACT_CLO(arg, "--vgdb=full",      VG_(clo_vgdb), Vg_VgdbFull) {}
-      else if VG_INT_CLO (arg, "--vgdb-poll",      VG_(clo_vgdb_poll)) {}
-      else if VG_INT_CLO (arg, "--vgdb-error",     VG_(clo_vgdb_error)) {}
-      else if VG_STR_CLO (arg, "--vgdb-prefix",    VG_(clo_vgdb_prefix)) {}
-      else if VG_BOOL_CLO(arg, "--vgdb-shadow-registers",
-                            VG_(clo_vgdb_shadow_registers)) {}
+      else if VG_BOOL_CLO(arg, "--xml",            VG_(clo_xml)) {}
       else if VG_BOOL_CLO(arg, "--db-attach",      VG_(clo_db_attach)) {}
       else if VG_BOOL_CLO(arg, "--demangle",       VG_(clo_demangle)) {}
       else if VG_BOOL_CLO(arg, "--error-limit",    VG_(clo_error_limit)) {}
@@ -574,9 +554,6 @@ void main_process_cmd_line_options ( /*OUT*/Bool* logging_to_fd,
                                                     Vg_SmcStack);
       else if VG_XACT_CLO(arg, "--smc-check=all",   VG_(clo_smc_check),
                                                     Vg_SmcAll);
-      else if VG_XACT_CLO(arg, "--smc-check=all-non-file",
-                                                    VG_(clo_smc_check),
-                                                    Vg_SmcAllNonFile);
 
       else if VG_STR_CLO (arg, "--memfs-malloc-path",  VG_(clo_memfs_malloc_path)) {}
       else if VG_INT_CLO (arg, "--memfs-page-size",   VG_(clo_memfs_page_size))   {}
@@ -584,10 +561,7 @@ void main_process_cmd_line_options ( /*OUT*/Bool* logging_to_fd,
 
       else if VG_BOOL_CLO(arg, "--dsymutil",        VG_(clo_dsymutil)) {}
 
-      else if VG_STR_CLO (arg, "--trace-children-skip",
-                               VG_(clo_trace_children_skip)) {}
-      else if VG_STR_CLO (arg, "--trace-children-skip-by-arg",
-                               VG_(clo_trace_children_skip_by_arg)) {}
+      else if VG_STR_CLO (arg, "--trace-children-skip",   VG_(clo_trace_children_skip)) {}
 
       else if VG_BINT_CLO(arg, "--vex-iropt-verbosity",
                        VG_(clo_vex_control).iropt_verbosity, 0, 10) {}
@@ -729,8 +703,6 @@ void main_process_cmd_line_options ( /*OUT*/Bool* logging_to_fd,
       else if VG_XACT_CLO(arg, "--gen-suppressions=all",
                                VG_(clo_gen_suppressions), 2) {}
 
-      else if VG_STR_CLO(arg, "--nacl-file", VG_(clo_nacl_file)) {}
-
       else if ( ! VG_(needs).command_line_options
              || ! VG_TDICT_CALL(tool_process_cmd_line_option, arg) ) {
          VG_(fmsg_bad_option)(arg, "");
@@ -738,10 +710,6 @@ void main_process_cmd_line_options ( /*OUT*/Bool* logging_to_fd,
    }
 
    /* END command-line processing loop */
-
-   /* Determine the path prefix for vgdb */
-   if (VG_(clo_vgdb_prefix) == NULL)
-     VG_(clo_vgdb_prefix) = VG_(vgdb_prefix_default)();
 
    /* Make VEX control parameters sane */
 
@@ -757,8 +725,6 @@ void main_process_cmd_line_options ( /*OUT*/Bool* logging_to_fd,
 
    if (VG_(clo_verbosity) < 0)
       VG_(clo_verbosity) = 0;
-
-   VG_(dyn_vgdb_error) = VG_(clo_vgdb_error);
 
    /* If XML output is requested, check that the tool actually
       supports it. */
@@ -999,9 +965,9 @@ static void print_file_vars(Char* format)
                   i++;
                }
 
-               VG_(printf_xml)(
-                  "<logfilequalifier> <var>%pS</var> "
-                  "<value>%pS</value> </logfilequalifier>\n",
+               VG_(printf_xml_no_f_c)(
+                  "<logfilequalifier> <var>%t</var> "
+                  "<value>%t</value> </logfilequalifier>\n",
                   qualname,qual
                );
 	       format[i] = '}';
@@ -1020,22 +986,18 @@ static void print_file_vars(Char* format)
 /*====================================================================*/
 
 // Print the command, escaping any chars that require it.
-static void umsg_arg(const Char* arg)
+static void umsg_or_xml_arg(const Char* arg,
+                            UInt (*umsg_or_xml)( const HChar*, ... ) )
 {
    SizeT len = VG_(strlen)(arg);
    Char* special = " \\<>";
    Int i;
    for (i = 0; i < len; i++) {
       if (VG_(strchr)(special, arg[i])) {
-        VG_(umsg)("\\");   // escape with a backslash if necessary
+         umsg_or_xml("\\");   // escape with a backslash if necessary
       }
-      VG_(umsg)("%c", arg[i]);
+      umsg_or_xml("%c", arg[i]);
    }
-}
-
-// Send output to the XML-stream and escape any XML meta-characters.
-static void xml_arg(const Char* arg) {
-  VG_(printf_xml)("%t", arg);
 }
 
 /* Ok, the logging sink is running now.  Print a suitable preamble.
@@ -1056,9 +1018,6 @@ void print_preamble ( Bool logging_to_fd, const HChar* toolname )
    HChar* xpost = VG_(clo_xml) ? "</line>" : "";
    UInt (*umsg_or_xml)( const HChar*, ... )
       = VG_(clo_xml) ? VG_(printf_xml) : VG_(umsg);
-
-   void (*umsg_or_xml_arg)( const Char* )
-      = VG_(clo_xml) ? xml_arg : umsg_arg;
 
    static const char* last_toolname = NULL;
    vg_assert( VG_(args_for_client) );
@@ -1086,7 +1045,7 @@ void print_preamble ( Bool logging_to_fd, const HChar* toolname )
          VG_(printf_xml)("<preamble>\n");
 
       /* Tool details */
-      umsg_or_xml( VG_(clo_xml) ? "%s%pS%pS%pS, %pS%s\n" : "%s%s%s%s, %s%s\n",
+      umsg_or_xml( VG_(clo_xml) ? "%s%t%t%t, %t%s\n" : "%s%s%s%s, %s%s\n",
                    xpre,
                    VG_(details).name, 
                    NULL == VG_(details).version ? "" : "-",
@@ -1102,7 +1061,7 @@ void print_preamble ( Bool logging_to_fd, const HChar* toolname )
          );
       }
 
-      umsg_or_xml( VG_(clo_xml) ? "%s%pS%s\n" : "%s%s%s\n",
+      umsg_or_xml( VG_(clo_xml) ? "%s%t%s\n" : "%s%s%s\n",
                    xpre, VG_(details).copyright_author, xpost );
 
       /* Core details */
@@ -1117,12 +1076,11 @@ void print_preamble ( Bool logging_to_fd, const HChar* toolname )
       // favour utility and simplicity over aesthetics.
       umsg_or_xml("%sCommand: ", xpre);
       if (VG_(args_the_exename))
-          umsg_or_xml_arg(VG_(args_the_exename));
-          
+         umsg_or_xml_arg(VG_(args_the_exename), umsg_or_xml);
       for (i = 0; i < VG_(sizeXA)( VG_(args_for_client) ); i++) {
          HChar* s = *(HChar**)VG_(indexXA)( VG_(args_for_client), i );
          umsg_or_xml(" ");
-         umsg_or_xml_arg(s);
+         umsg_or_xml_arg(s, umsg_or_xml);
       }
       umsg_or_xml("%s\n", xpost);
 
@@ -1140,13 +1098,13 @@ void print_preamble ( Bool logging_to_fd, const HChar* toolname )
       VG_(printf_xml)("\n");
       VG_(printf_xml)("<pid>%d</pid>\n", VG_(getpid)());
       VG_(printf_xml)("<ppid>%d</ppid>\n", VG_(getppid)());
-      VG_(printf_xml)("<tool>%pS</tool>\n", toolname);
+      VG_(printf_xml_no_f_c)("<tool>%t</tool>\n", toolname);
       if (xml_fname_unexpanded)
          print_file_vars(xml_fname_unexpanded);
       if (VG_(clo_xml_user_comment)) {
          /* Note: the user comment itself is XML and is therefore to
             be passed through verbatim (%s) rather than escaped
-            (%pS). */
+            (%t). */
          VG_(printf_xml)("<usercomment>%s</usercomment>\n",
                          VG_(clo_xml_user_comment));
       }
@@ -1155,14 +1113,14 @@ void print_preamble ( Bool logging_to_fd, const HChar* toolname )
 
       VG_(printf_xml)("  <vargv>\n");
       if (VG_(name_of_launcher))
-         VG_(printf_xml)("    <exe>%pS</exe>\n",
+         VG_(printf_xml_no_f_c)("    <exe>%t</exe>\n",
                                 VG_(name_of_launcher));
       else
-         VG_(printf_xml)("    <exe>%pS</exe>\n",
+         VG_(printf_xml_no_f_c)("    <exe>%t</exe>\n",
                                 "(launcher name unknown)");
       for (i = 0; i < VG_(sizeXA)( VG_(args_for_valgrind) ); i++) {
-         VG_(printf_xml)(
-            "    <arg>%pS</arg>\n",
+         VG_(printf_xml_no_f_c)(
+            "    <arg>%t</arg>\n",
             * (HChar**) VG_(indexXA)( VG_(args_for_valgrind), i )
          );
       }
@@ -1170,11 +1128,11 @@ void print_preamble ( Bool logging_to_fd, const HChar* toolname )
 
       VG_(printf_xml)("  <argv>\n");
       if (VG_(args_the_exename))
-         VG_(printf_xml)("    <exe>%pS</exe>\n",
+         VG_(printf_xml_no_f_c)("    <exe>%t</exe>\n",
                                 VG_(args_the_exename));
       for (i = 0; i < VG_(sizeXA)( VG_(args_for_client) ); i++) {
-         VG_(printf_xml)(
-            "    <arg>%pS</arg>\n",
+         VG_(printf_xml_no_f_c)(
+            "    <arg>%t</arg>\n",
             * (HChar**) VG_(indexXA)( VG_(args_for_client), i )
          );
       }
@@ -1270,9 +1228,15 @@ static void setup_file_descriptors(void)
       VG_(printf)("fd limits: host, before: cur %lu max %lu\n", 
                   (UWord)rl.rlim_cur, (UWord)rl.rlim_max);
 
-   /* kcc: workaround for a Linux Kernel bug */
-   if (rl.rlim_cur > 1000000)  
-      rl.rlim_cur = 1000000;
+#  if defined(VGP_ppc32_aix5) || defined(VGP_ppc64_aix5)
+   /* I don't know why this kludge is needed; however if rl.rlim_cur
+      is RLIM_INFINITY, then VG_(safe_fd)'s attempts using VG_(fcntl)
+      to lift V's file descriptors above the threshold RLIM_INFINITY -
+      N_RESERVED_FDS fail.  So just use a relatively conservative
+      value in this case. */
+   if (rl.rlim_cur > 1024)
+      rl.rlim_cur = 1024;
+#  endif
 
    /* Work out where to move the soft limit to. */
    if (rl.rlim_cur + N_RESERVED_FDS <= rl.rlim_max) {
@@ -1487,6 +1451,60 @@ Int valgrind_main ( Int argc, HChar **argv, HChar **envp )
                             VERSION " debug logging\n");
 
    //--------------------------------------------------------------
+   // AIX5 only: register the system call numbers
+   //   p: logging
+   //   p: that the initial few syscall numbers stated in the
+   //      bootblock have been installed (else we can't 
+   //      open/read/close).
+   //--------------------------------------------------------------
+#  if defined(VGO_aix5)
+   VG_(debugLog)(1, "main", "aix5: registering syscalls ..\n");
+   { UChar  sysent_name[50];
+     SysRes fd;
+     Bool   ok;
+     Int    n_unregd, sysent_used = 0;
+     prsysent_t* sysent_hdr;
+
+     VG_(sprintf)(sysent_name, "/proc/%d/sysent", VG_(getpid)());
+     fd = VG_(open)(sysent_name, VKI_O_RDONLY, 0);
+     if (fd.isError)
+        VG_(err_config_error)("aix5: can't open /proc/<pid>/sysent");
+
+     sysent_used = VG_(read)(fd.res, aix5_sysent_buf, VG_AIX5_SYSENT_SIZE);
+     if (sysent_used < 0)
+        VG_(err_config_error)("aix5: error reading /proc/<pid>/sysent");
+     if (sysent_used >= VG_AIX5_SYSENT_SIZE)
+        VG_(err_config_error)("aix5: VG_AIX5_SYSENT_SIZE is too low; "
+                              "increase and recompile");
+     VG_(close)(fd.res);
+
+     vg_assert(sysent_used > 0 && sysent_used < VG_AIX5_SYSENT_SIZE);
+
+     sysent_hdr = (prsysent_t*)&aix5_sysent_buf[0];
+
+     n_unregd = 0;
+     for (i = 0; i < sysent_hdr->pr_nsyscalls; i++) {
+        UChar* name = &aix5_sysent_buf[ sysent_hdr
+                                        ->pr_syscall[i].pr_nameoff ];
+        UInt   nmbr = sysent_hdr->pr_syscall[i].pr_number;
+        VG_(debugLog)(3, "main", "aix5: bind syscall %d to \"%s\"\n", 
+                                 nmbr, name);
+        ok = VG_(aix5_register_syscall)(nmbr, name);
+        if (!ok)
+           n_unregd++;
+	if (!ok)
+           VG_(debugLog)(3, "main", 
+                            "aix5: bind FAILED: %d to \"%s\"\n", 
+                            nmbr, name);
+     }
+     VG_(debugLog)(1, "main", "aix5: .. %d syscalls known, %d unknown\n",
+                      sysent_hdr->pr_nsyscalls - n_unregd, n_unregd );
+     VG_(debugLog)(1, "main", "aix5: __NR_AIX5_FAKE_SIGRETURN = %d\n",
+                      __NR_AIX5_FAKE_SIGRETURN );
+   }
+#  endif
+
+   //--------------------------------------------------------------
    // Ensure we're on a plausible stack.
    //   p: logging
    //--------------------------------------------------------------
@@ -1604,7 +1622,6 @@ Int valgrind_main ( Int argc, HChar **argv, HChar **envp )
                     "AMD Athlon or above)\n");
         VG_(printf)("   * AMD Athlon64/Opteron\n");
         VG_(printf)("   * PowerPC (most; ppc405 and above)\n");
-        VG_(printf)("   * System z (64bit only - s390x; z900 and above)\n");
         VG_(printf)("\n");
         VG_(exit)(1);
      }
@@ -1618,12 +1635,12 @@ Int valgrind_main ( Int argc, HChar **argv, HChar **envp )
 
    //--------------------------------------------------------------
    // Record the working directory at startup
-   //   p: none
+   //   p: none (Linux), getenv and sys_getpid work (AIX)
    VG_(debugLog)(1, "main", "Getting the working directory at startup\n");
    { Bool ok = VG_(record_startup_wd)();
      if (!ok) 
         VG_(err_config_error)( "Can't establish current working "
-                               "directory at startup\n");
+                               "directory at startup");
    }
    { Char buf[VKI_PATH_MAX+1];
      Bool ok = VG_(get_startup_wd)( buf, sizeof(buf) );
@@ -1662,6 +1679,18 @@ Int valgrind_main ( Int argc, HChar **argv, HChar **envp )
             * (HChar**) VG_(indexXA)( VG_(args_for_client), i )
          );
    }
+
+#  if defined(VGO_aix5)
+   /* Tolerate ptraced-based launchers.  They can't run 'no program'
+      if the user types "valgrind --help", so they run a do-nothing
+      program $prefix/bin/no_op_client_for_valgrind, and we catch that
+      here and turn it the exe name back into NULL.  Then --help,
+      --version etc work as they should. */
+   if (VG_(args_the_exename) 
+       && VG_(strstr)( VG_(args_the_exename), "/no_op_client_for_valgrind" )) {
+      VG_(args_the_exename) = NULL;
+   }
+#  endif
 
    //--------------------------------------------------------------
    // Extract tool name and whether help has been requested.
@@ -1705,12 +1734,37 @@ Int valgrind_main ( Int argc, HChar **argv, HChar **envp )
       the_iicii.argv              = argv;
       the_iicii.envp              = envp;
       the_iicii.toolname          = toolname;
+#     elif defined(VGO_aix5)
+      /* the_iicii.intregs37      already set up */
+      /* the_iicii.bootblock      already set up */
+      /* the_iicii.adler32_exp    already set up */
+      /* the_iicii.sp_at_startup  is irrelevant */
+      /* the_iicii.clstack_top    is irrelevant */
+      the_iicii.toolname          = toolname;
 #     else
 #       error "Unknown platform"
 #     endif
 
       /* NOTE: this call reads VG_(clo_main_stacksize). */
       the_iifii = VG_(ii_create_image)( the_iicii );
+
+#     if defined(VGO_aix5)
+      /* Tell aspacem where the initial client stack is, so that it
+         can later produce a faked-up NSegment in response to
+         VG_(am_find_nsegment) for that address range, if asked. */
+      /* NOTE: this call reads VG_(clo_main_stacksize). */
+      VG_(am_aix5_set_initial_client_sp)( the_iifii.initial_client_SP );
+      /* Now have a look at said fake segment, so we can find out
+         the size of it. */
+      { SizeT sz;
+        NSegment const* seg 
+           = VG_(am_find_nsegment)( the_iifii.initial_client_SP );
+        vg_assert(seg);
+        sz = seg->end - seg->start + 1;
+        vg_assert(sz >= 0 && sz <= (256+1)*1024*1024); /* stay sane */
+        the_iifii.clstack_max_size = sz;
+      }
+#     endif
    }
 
    //==============================================================
@@ -1747,12 +1801,13 @@ Int valgrind_main ( Int argc, HChar **argv, HChar **envp )
       VG_(sprintf)(buf, "proc_%d_cmdline", VG_(getpid)());
       fd = VG_(mkstemp)( buf, buf2 );
       if (fd == -1)
-         VG_(err_config_error)("Can't create client cmdline file in %s\n", buf2);
+         VG_(err_config_error)("Can't create client cmdline file in " VG_TMPDIR);
 
       nul[0] = 0;
       exename = VG_(args_the_exename) ? VG_(args_the_exename)
                                       : "unknown_exename";
-      VG_(write)(fd, exename, VG_(strlen)( exename ));
+      VG_(write)(fd, VG_(args_the_exename), 
+                     VG_(strlen)( VG_(args_the_exename) ));
       VG_(write)(fd, nul, 1);
 
       for (i = 0; i < VG_(sizeXA)( VG_(args_for_client) ); i++) {
@@ -1768,7 +1823,7 @@ Int valgrind_main ( Int argc, HChar **argv, HChar **envp )
       /* Now delete it, but hang on to the fd. */
       r = VG_(unlink)( buf2 );
       if (r)
-         VG_(err_config_error)("Can't delete client cmdline file in %s\n", buf2);
+         VG_(err_config_error)("Can't delete client cmdline file in " VG_TMPDIR);
 
       VG_(cl_cmdline_fd) = fd;
    }
@@ -1864,7 +1919,8 @@ Int valgrind_main ( Int argc, HChar **argv, HChar **envp )
    /* Hook to delay things long enough so we can get the pid and
       attach GDB in another shell. */
    if (VG_(clo_wait_for_gdb)) {
-      ULong iters, q;
+      Long iters;
+      volatile Long q;
       VG_(debugLog)(1, "main", "Wait for GDB\n");
       VG_(printf)("pid=%d, entering delay loop\n", VG_(getpid)());
 
@@ -1876,17 +1932,17 @@ Int valgrind_main ( Int argc, HChar **argv, HChar **envp )
       iters = 5;
 #     elif defined(VGP_arm_linux)
       iters = 1;
-#     elif defined(VGP_s390x_linux)
-      iters = 10;
+#     elif defined(VGP_ppc32_aix5) || defined(VGP_ppc64_aix5)
+      iters = 4;
 #     elif defined(VGO_darwin)
       iters = 3;
 #     else
 #       error "Unknown plat"
 #     endif
 
-      iters *= 1000ULL * 1000 * 1000;
+      iters *= 1000*1000*1000;
       for (q = 0; q < iters; q++) 
-         __asm__ __volatile__("" ::: "memory","cc");
+         ;
    }
 
    //--------------------------------------------------------------
@@ -1906,7 +1962,7 @@ Int valgrind_main ( Int argc, HChar **argv, HChar **envp )
    //   p: initialise m_debuginfo
    //
    // While doing this, make a note of the debuginfo-handles that
-   // come back from VG_(di_notify_mmap).
+   // come back from VG_(di_notify_mmap)/VG_(di_aix5_notify_segchange).
    // Later, in "Tell the tool about the initial client memory permissions"
    // (just below) we can then hand these handles off to the tool in
    // calls to VG_TRACK(new_mem_startup, ...).  This gives the tool the
@@ -1935,8 +1991,7 @@ Int valgrind_main ( Int argc, HChar **argv, HChar **envp )
         be True here so that we read info from the valgrind executable
         itself. */
      for (i = 0; i < n_seg_starts; i++) {
-        anu.ull = VG_(di_notify_mmap)( seg_starts[i], True/*allow_SkFileV*/,
-                                       -1/*Don't use_fd*/);
+        anu.ull = VG_(di_notify_mmap)( seg_starts[i], True/*allow_SkFileV*/ );
         /* anu.ull holds the debuginfo handle returned by di_notify_mmap,
            if any. */
         if (anu.ull > 0) {
@@ -1947,6 +2002,42 @@ Int valgrind_main ( Int argc, HChar **argv, HChar **envp )
 
      VG_(free)( seg_starts );
    }
+#  elif defined(VGO_aix5)
+   { AixCodeSegChange* changes;
+     Int changes_size, changes_used;
+     Addr_n_ULong anu;
+
+     /* Find out how many AixCodeSegChange records we will need,
+	and acquire them. */
+     changes_size = VG_(am_aix5_reread_procmap_howmany_directives)(); 
+     changes = VG_(malloc)("main.vm.3", changes_size * sizeof(AixCodeSegChange));
+     vg_assert(changes);
+
+     /* Now re-read /proc/<pid>/map and acquire a change set */
+     VG_(am_aix5_reread_procmap)( changes, &changes_used );
+     vg_assert(changes_used >= 0 && changes_used <= changes_size);
+
+     /* And notify m_debuginfo of the changes. */
+     for (i = 0; i < changes_used; i++) {
+        anu.ull = VG_(di_aix5_notify_segchange)(
+                     changes[i].code_start,
+                     changes[i].code_len,
+                     changes[i].data_start,
+                     changes[i].data_len,
+                     changes[i].file_name,
+                     changes[i].mem_name,
+                     changes[i].is_mainexe,
+                     changes[i].acquire
+                  );
+        if (anu.ull > 0) {
+           tl_assert(changes[i].acquire);
+           anu.a = changes[i].code_start; /* is this correct? */
+           VG_(addToXA)( addr2dihandle, &anu );
+        }
+     }
+
+     VG_(free)(changes);
+   }
 #  elif defined(VGO_darwin)
    { Addr* seg_starts;
      Int   n_seg_starts;
@@ -1956,10 +2047,8 @@ Int valgrind_main ( Int argc, HChar **argv, HChar **envp )
      /* show them all to the debug info reader.  
         Don't read from V segments (unlike Linux) */
      // GrP fixme really?
-     for (i = 0; i < n_seg_starts; i++) {
-        VG_(di_notify_mmap)( seg_starts[i], False/*don't allow_SkFileV*/,
-                             -1/*don't use_fd*/);
-     }
+     for (i = 0; i < n_seg_starts; i++)
+        VG_(di_notify_mmap)( seg_starts[i], False/*don't allow_SkFileV*/ );
 
      VG_(free)( seg_starts );
    }
@@ -1984,17 +2073,6 @@ Int valgrind_main ( Int argc, HChar **argv, HChar **envp )
      change_ownership_v_c_OK 
         = VG_(am_change_ownership_v_to_c)( co_start, co_endPlus - co_start );
      vg_assert(change_ownership_v_c_OK);
-   }
-
-   if (VG_(clo_xml)) {
-      HChar buf[50];
-      VG_(elapsed_wallclock_time)(buf);
-      VG_(printf_xml)( "<status>\n"
-                       "  <state>RUNNING</state>\n"
-                       "  <time>%pS</time>\n"
-                       "</status>\n",
-                       buf );
-      VG_(printf_xml)( "\n" );
    }
 
    //--------------------------------------------------------------
@@ -2102,6 +2180,10 @@ Int valgrind_main ( Int argc, HChar **argv, HChar **envp )
        vg_assert(seg->kind == SkAnonC);
        vg_assert(the_iifii.initial_client_SP >= seg->start);
        vg_assert(the_iifii.initial_client_SP <= seg->end);
+#      if defined(VGO_aix5)
+       VG_(clstk_base) = seg->start;
+       VG_(clstk_end) = seg->end;
+#      endif
 
        /* Stuff below the initial SP is unaddressable.  Take into
 	  account any ABI-mandated space below the stack pointer that
@@ -2198,6 +2280,17 @@ Int valgrind_main ( Int argc, HChar **argv, HChar **envp )
    //--------------------------------------------------------------
    // Run!
    //--------------------------------------------------------------
+   if (VG_(clo_xml)) {
+      HChar buf[50];
+      VG_(elapsed_wallclock_time)(buf);
+      VG_(printf_xml_no_f_c)( "<status>\n"
+                              "  <state>RUNNING</state>\n"
+                              "  <time>%t</time>\n"
+                              "</status>\n",
+                              buf );
+      VG_(printf_xml_no_f_c)( "\n" );
+   }
+
    VG_(debugLog)(1, "main", "Running thread 1\n");
 
    /* As a result of the following call, the last thread standing
@@ -2222,7 +2315,7 @@ Int valgrind_main ( Int argc, HChar **argv, HChar **envp )
 }
 
 /* Do everything which needs doing when the last thread exits or when
-   a thread exits requesting a complete process exit.
+   a thread exits requesting a complete process exit (exit on AIX).
 
    We enter here holding The Lock.  For the case VgSrc_ExitProcess we
    must never release it, because to do so would allow other threads
@@ -2300,9 +2393,9 @@ void shutdown_actions_NORETURN( ThreadId tid,
    if (VG_(clo_xml)) {
       HChar buf[50];
       VG_(elapsed_wallclock_time)(buf);
-      VG_(printf_xml)( "<status>\n"
+      VG_(printf_xml_no_f_c)( "<status>\n"
                               "  <state>FINISHED</state>\n"
-                              "  <time>%pS</time>\n"
+                              "  <time>%t</time>\n"
                               "</status>\n"
                               "\n",
                               buf);
@@ -2325,7 +2418,7 @@ void shutdown_actions_NORETURN( ThreadId tid,
 
    /* In XML mode, this merely prints the used suppressions. */
    if (VG_(needs).core_errors || VG_(needs).tool_errors)
-      VG_(show_all_errors)(VG_(clo_verbosity), VG_(clo_xml));
+      VG_(show_all_errors)();
 
    if (VG_(clo_xml)) {
       VG_(printf_xml)("\n");
@@ -2360,10 +2453,6 @@ void shutdown_actions_NORETURN( ThreadId tid,
    /* Flush any output cached by previous calls to VG_(message). */
    VG_(message_flush)();
 
-   /* terminate gdbserver if ever it was started. We terminate it here so that it get
-      the output above if output was redirected to gdb */
-   VG_(gdbserver) (0);
-
    /* Ok, finally exit in the os-specific way, according to the scheduler's
       return code.  In short, if the (last) thread exited by calling
       sys_exit, do likewise; if the (last) thread stopped due to a fatal
@@ -2373,7 +2462,7 @@ void shutdown_actions_NORETURN( ThreadId tid,
 
    switch (tids_schedretcode) {
    case VgSrc_ExitThread:  /* the normal way out (Linux) */
-   case VgSrc_ExitProcess: /* the normal way out (AIX) -- still needed? */
+   case VgSrc_ExitProcess: /* the normal way out (AIX) */
       /* Change the application return code to user's return code,
          if an error was found */
       if (VG_(clo_error_exitcode) > 0 
@@ -2428,6 +2517,9 @@ static void final_tidyup(ThreadId tid)
         !VG_(clo_run_libc_freeres) ||
         0 == __libc_freeres_wrapper )
       return;			/* can't/won't do it */
+#  if defined(VGO_aix5)
+   return; /* inapplicable on non-Linux platforms */
+#  endif
 
 #  if defined(VGP_ppc64_linux)
    r2 = VG_(get_tocptr)( __libc_freeres_wrapper );
@@ -2680,47 +2772,6 @@ asm("\n"
     "\tnop\n"
     "\ttrap\n"
 );
-#elif defined(VGP_s390x_linux)
-/*
-    This is the canonical entry point, usually the first thing in the text
-    segment. Most registers' values are unspecified, except for:
-
-    %r14         Contains a function pointer to be registered with `atexit'.
-                 This is how the dynamic linker arranges to have DT_FINI
-                 functions called for shared libraries that have been loaded
-                 before this code runs.
-
-    %r15         The stack contains the arguments and environment:
-                 0(%r15)              argc
-                 8(%r15)              argv[0]
-                 ...
-                 (8*argc)(%r15)       NULL
-                 (8*(argc+1))(%r15)   envp[0]
-                 ...
-                                      NULL
-*/
-asm("\n\t"
-    ".text\n\t"
-    ".globl _start\n\t"
-    ".type  _start,@function\n\t"
-    "_start:\n\t"
-    /* set up the new stack in %r1 */
-    "larl   %r1,  vgPlain_interim_stack\n\t"
-    "larl   %r5,  1f\n\t"
-    "ag     %r1,  0(%r5)\n\t"
-    "ag     %r1,  2f-1f(%r5)\n\t"
-    "nill   %r1,  0xFFF0\n\t"
-    /* install it, and collect the original one */
-    "lgr    %r2,  %r15\n\t"
-    "lgr    %r15, %r1\n\t"
-    /* call _start_in_C_linux, passing it the startup %r15 */
-    "brasl  %r14, _start_in_C_linux\n\t"
-    /* trigger execution of an invalid opcode -> halt machine */
-    "j      .+2\n\t"
-    "1:   .quad "VG_STRINGIFY(VG_STACK_GUARD_SZB)"\n\t"
-    "2:   .quad "VG_STRINGIFY(VG_STACK_ACTIVE_SZB)"\n\t"
-    ".previous\n"
-);
 #elif defined(VGP_arm_linux)
 asm("\n"
     "\t.text\n"
@@ -2792,6 +2843,121 @@ void _start_in_C_linux ( UWord* pArgc )
    /* NOTREACHED */
    VG_(exit)(r);
 }
+
+
+/*====================================================================*/
+/*=== Getting to main() alive: AIX5                                ===*/
+/*====================================================================*/
+
+#elif defined(VGO_aix5)
+
+/* This is somewhat simpler than the Linux case.  _start_valgrind
+   receives control from the magic piece of code created in this
+   process' address space by the launcher, via use of ptrace().  At
+   the point of entry:
+
+   - the initial client process image is in memory and ready to roll,
+     except that we've partially trashed its integer register state
+     in order to get this far.   So ..
+
+   - intregs37 holds the client's initial integer register state, so
+     we can restore it before starting the client on the VCPU.
+
+   - we're on the client's stack.  This is not good; therefore the
+     first order of business is to switch to our temporary stack.  
+
+   - the client's initial argc/v/envp is in r3/r4/r5 (32 bit mode) or
+     r14/r15/r16 (64 bit mode).  They are pulled out of the stashed
+     integer register state and passed to our main().
+
+   The launcher will have played some games with argv.  If the launcher
+   ($prefix/bin/valgrind) was started like this
+
+      valgrind [args-for-V] app [args-for-app]
+
+   then the launcher will have started the client as
+
+      app [args-for-V] app [args-for-app]
+
+   m_initimg will have to mess with the client's initial r4/r5
+   (32-bit) or r15/r16 (64-bit) so that it believes it was execd as
+   "app [args-for-app]".  Well, that's no big deal.
+*/
+
+#include "launcher-aix5-bootblock.h"
+
+void _start_in_C_aix5 ( AIX5Bootblock* bootblock );
+void _start_in_C_aix5 ( AIX5Bootblock* bootblock )
+{
+   Int     r;
+   ULong* intregs37;
+   UWord   argc, argv, envp;
+   __NR_getpid = bootblock->__NR_getpid;
+   __NR_write  = bootblock->__NR_write;
+   __NR_exit   = bootblock->__NR_exit;
+   __NR_open   = bootblock->__NR_open;
+   __NR_read   = bootblock->__NR_read;
+   __NR_close  = bootblock->__NR_close;
+
+   VG_(memset)( &the_iicii, 0, sizeof(the_iicii) );
+   VG_(memset)( &the_iifii, 0, sizeof(the_iifii) );
+
+   intregs37 = &bootblock->iregs_pc_cr_lr_ctr_xer[0];
+   the_iicii.intregs37   = intregs37;
+   the_iicii.bootblock   = (void*)bootblock;
+   the_iicii.adler32_exp = bootblock->adler32;
+
+   /* Not important on AIX. */
+   the_iicii.sp_at_startup = (Addr)0x31415927ULL;
+
+#  if defined(VGP_ppc32_aix5)
+   argc = (UWord)intregs37[3];  /* client's r3 == argc */
+   argv = (UWord)intregs37[4];
+   envp = (UWord)intregs37[5];
+#  else /* defined(VGP_ppc64_aix5) */
+   argc = (UWord)intregs37[14];  /* client's r14 == argc */
+   argv = (UWord)intregs37[15];
+   envp = (UWord)intregs37[16];
+#  endif
+
+   r = valgrind_main( (Int)argc, (HChar**)argv, (HChar**)envp );
+
+   /* NOTREACHED */
+   VG_(exit)(r);
+}
+
+/* THE ENTRY POINT */
+void _start_valgrind ( AIX5Bootblock* bootblock );
+void _start_valgrind ( AIX5Bootblock* bootblock )
+{
+   /* Switch immediately to our temporary stack, and continue.  This
+      is pretty dodgy in that it assumes that gcc does not place on
+      the stack, anything needed to form the _start_in_C_aix5 call,
+      since it will be on the old stack. */
+   register UWord new_r1;
+   new_r1  = (UWord)&VG_(interim_stack);
+   new_r1 += VG_STACK_GUARD_SZB;  /* step over lower guard page */
+   new_r1 += VG_STACK_ACTIVE_SZB; /* step to top of active area */
+   new_r1 -= 512; /* paranoia */
+   __asm__ __volatile__("mr 1,%0" :/*wr*/ 
+                                  :/*rd*/ "b"(new_r1) 
+                                  :/*trash*/"r1","memory");
+   _start_in_C_aix5(bootblock);
+   /*NOTREACHED*/
+   VG_(exit)(0);
+}
+
+/* At some point in Oct 2008, static linking appeared to stop working
+   on AIX 5.3.  This breaks the build since we link statically.  The
+   linking fails citing absence of the following five symbols as the
+   reason.  In the absence of a better solution, here are stand-ins
+   for them.  Kludge appears to work; presumably said functions,
+   assuming they are indeed functions, are never called. */
+void encrypted_pw_passlen ( void ) { vg_assert(0); }
+void crypt_r              ( void ) { vg_assert(0); }
+void max_history_size     ( void ) { vg_assert(0); }
+void getpass_auto         ( void ) { vg_assert(0); }
+void max_pw_passlen       ( void ) { vg_assert(0); }
 
 
 /*====================================================================*/
@@ -3233,104 +3399,6 @@ Long __moddi3 (Long u, Long v)
   Long r = u - q * v;
   return r;
 }
-
-/* ------------------------------------------------
-   ld_classic: Undefined symbols:
-      ___fixunsdfdi
-   ------------------------------------------------
-*/
-
-/* ===-- fixunsdfdi.c - Implement __fixunsdfdi -----------------------------===
- *
- *                     The LLVM Compiler Infrastructure
- *
- * This file is dual licensed under the MIT and the University of Illinois Open
- * Source Licenses. See LICENSE.TXT for details.
- *
- * ===----------------------------------------------------------------------===
- *
- * This file implements __fixunsdfdi for the compiler_rt library.
- *
- * ===----------------------------------------------------------------------===
- */
-
-/* As per http://www.gnu.org/licenses/license-list.html#GPLCompatibleLicenses,
-
-   the "NCSA/University of Illinois Open Source License" is compatible
-   with the GPL (both version 2 and 3).  What is claimed to be
-   compatible is this
-
-   http://www.opensource.org/licenses/UoI-NCSA.php
-
-   and the LLVM documentation at
-
-   http://www.llvm.org/docs/DeveloperPolicy.html#license
-
-   says all the code in LLVM is available under the University of
-   Illinois/NCSA Open Source License, at this URL
-
-   http://www.opensource.org/licenses/UoI-NCSA.php
-
-   viz, the same one that the FSF pages claim is compatible.  So I
-   think it's OK to include it.
-*/
-
-/* Returns: convert a to a unsigned long long, rounding toward zero.
- *          Negative values all become zero.
- */
-
-/* Assumption: double is a IEEE 64 bit floating point type 
- *             du_int is a 64 bit integral type
- *             value in double is representable in du_int or is negative 
- *                 (no range checking performed)
- */
-
-/* seee eeee eeee mmmm mmmm mmmm mmmm mmmm | mmmm mmmm mmmm mmmm mmmm mmmm mmmm mmmm */
-
-typedef unsigned long long du_int;
-typedef unsigned su_int;
-
-typedef union
-{
-    du_int all;
-    struct
-    {
-#if VG_LITTLEENDIAN
-        su_int low;
-        su_int high;
-#else
-        su_int high;
-        su_int low;
-#endif /* VG_LITTLEENDIAN */
-    }s;
-} udwords;
-
-typedef union
-{
-    udwords u;
-    double  f;
-} double_bits;
-
-du_int __fixunsdfdi(double a);
-
-du_int
-__fixunsdfdi(double a)
-{
-    double_bits fb;
-    fb.f = a;
-    int e = ((fb.u.s.high & 0x7FF00000) >> 20) - 1023;
-    if (e < 0 || (fb.u.s.high & 0x80000000))
-        return 0;
-    udwords r;
-    r.s.high = (fb.u.s.high & 0x000FFFFF) | 0x00100000;
-    r.s.low = fb.u.s.low;
-    if (e > 52)
-        r.all <<= (e - 52);
-    else
-        r.all >>= (52 - e);
-    return r.all;
-}
-
 
 #endif
 

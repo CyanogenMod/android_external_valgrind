@@ -8,7 +8,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2006-2011 OpenWorks LLP
+   Copyright (C) 2006-2010 OpenWorks LLP
       info@open-works.co.uk
 
    This program is free software; you can redistribute it and/or
@@ -121,7 +121,7 @@ Bool ML_(am_get_fd_d_i_m)( Int fd,
 extern
 Bool ML_(am_resolve_filename) ( Int fd, /*OUT*/HChar* buf, Int nbuf );
 
-/* ------ Implemented separately in aspacemgr-linux.c ------ */
+/* ------ Implemented seperately in aspacemgr-{linux,aix5}.c ------ */
 
 /* Do a sanity check (/proc/self/maps sync check) */
 extern void ML_(am_do_sanity_check)( void );

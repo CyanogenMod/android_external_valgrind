@@ -33,27 +33,14 @@ int main ( void )
     "\tpush %rcx\n"
     "\tpush %rdx\n"
     "\txor %rax, %rax\n" // get eflags in a known state
-#ifndef VGP_amd64_darwin
     "\tmov " VG_SYM(rax) ",%rax\n"
     "\tmov " VG_SYM(rbx) ",%rbx\n"
     "\tmov " VG_SYM(rcx) ",%rcx\n"
     "\tmov " VG_SYM(rdx) ",%rdx\n"
-#else
-    "\tmov " VG_SYM(rax) "(%rip),%rax\n"
-    "\tmov " VG_SYM(rbx) "(%rip),%rbx\n"
-    "\tmov " VG_SYM(rcx) "(%rip),%rcx\n"
-    "\tmov " VG_SYM(rdx) "(%rip),%rdx\n"
-#endif
     "\tcmpxchg %bl,%cl \n"
-#ifndef VGP_amd64_darwin
     "\tmov %rax," VG_SYM(rax_out) "\n"
     "\tmov %rbx," VG_SYM(rbx_out) "\n"
     "\tmov %rcx," VG_SYM(rcx_out) "\n"
-#else
-    "\tmov %rax," VG_SYM(rax_out) "(%rip)\n"
-    "\tmov %rbx," VG_SYM(rbx_out) "(%rip)\n"
-    "\tmov %rcx," VG_SYM(rcx_out) "(%rip)\n"
-#endif
     "\tpop %rdx\n"
     "\tpop %rcx\n"
     "\tpop %rbx\n"
@@ -77,27 +64,14 @@ int main ( void )
     "\tpush %rcx\n"
     "\tpush %rdx\n"
     "\txor %rax, %rax\n" // get eflags in a known state
-#ifndef VGP_amd64_darwin
     "\tmov " VG_SYM(rax) ",%rax\n"
     "\tmov " VG_SYM(rbx) ",%rbx\n"
     "\tmov " VG_SYM(rcx) ",%rcx\n"
     "\tmov " VG_SYM(rdx) ",%rdx\n"
-#else
-    "\tmov " VG_SYM(rax) "(%rip),%rax\n"
-    "\tmov " VG_SYM(rbx) "(%rip),%rbx\n"
-    "\tmov " VG_SYM(rcx) "(%rip),%rcx\n"
-    "\tmov " VG_SYM(rdx) "(%rip),%rdx\n"
-#endif
     "\tcmpxchg %bl,%cl \n"
-#ifndef VGP_amd64_darwin
     "\tmov %rax," VG_SYM(rax_out) "\n"
     "\tmov %rbx," VG_SYM(rbx_out) "\n"
     "\tmov %rcx," VG_SYM(rcx_out) "\n"
-#else
-    "\tmov %rax," VG_SYM(rax_out) "(%rip)\n"
-    "\tmov %rbx," VG_SYM(rbx_out) "(%rip)\n"
-    "\tmov %rcx," VG_SYM(rcx_out) "(%rip)\n"
-#endif
     "\tpop %rdx\n"
     "\tpop %rcx\n"
     "\tpop %rbx\n"
@@ -121,27 +95,14 @@ int main ( void )
     "\tpush %rcx\n"
     "\tpush %rdx\n"
     "\txor %rax, %rax\n" // get eflags in a known state
-#ifndef VGP_amd64_darwin
     "\tmov " VG_SYM(rax) ",%rax\n"
     "\tmov " VG_SYM(rbx) ",%rbx\n"
     "\tmov " VG_SYM(rcx) ",%rcx\n"
     "\tmov " VG_SYM(rdx) ",%rdx\n"
-#else
-    "\tmov " VG_SYM(rax) "(%rip),%rax\n"
-    "\tmov " VG_SYM(rbx) "(%rip),%rbx\n"
-    "\tmov " VG_SYM(rcx) "(%rip),%rcx\n"
-    "\tmov " VG_SYM(rdx) "(%rip),%rdx\n"
-#endif
     "\tcmpxchg %bx,%cx \n"
-#ifndef VGP_amd64_darwin
     "\tmov %rax," VG_SYM(rax_out) "\n"
     "\tmov %rbx," VG_SYM(rbx_out) "\n"
     "\tmov %rcx," VG_SYM(rcx_out) "\n"
-#else
-    "\tmov %rax," VG_SYM(rax_out) "(%rip)\n"
-    "\tmov %rbx," VG_SYM(rbx_out) "(%rip)\n"
-    "\tmov %rcx," VG_SYM(rcx_out) "(%rip)\n"
-#endif
     "\tpop %rdx\n"
     "\tpop %rcx\n"
     "\tpop %rbx\n"
@@ -165,27 +126,14 @@ int main ( void )
     "\tpush %rcx\n"
     "\tpush %rdx\n"
     "\txor %rax, %rax\n" // get eflags in a known state
-#ifndef VGP_amd64_darwin
     "\tmov " VG_SYM(rax) ",%rax\n"
     "\tmov " VG_SYM(rbx) ",%rbx\n"
     "\tmov " VG_SYM(rcx) ",%rcx\n"
     "\tmov " VG_SYM(rdx) ",%rdx\n"
-#else
-    "\tmov " VG_SYM(rax) "(%rip),%rax\n"
-    "\tmov " VG_SYM(rbx) "(%rip),%rbx\n"
-    "\tmov " VG_SYM(rcx) "(%rip),%rcx\n"
-    "\tmov " VG_SYM(rdx) "(%rip),%rdx\n"
-#endif
     "\tcmpxchg %bx,%cx \n"
-#ifndef VGP_amd64_darwin
     "\tmov %rax," VG_SYM(rax_out) "\n"
     "\tmov %rbx," VG_SYM(rbx_out) "\n"
     "\tmov %rcx," VG_SYM(rcx_out) "\n"
-#else
-    "\tmov %rax," VG_SYM(rax_out) "(%rip)\n"
-    "\tmov %rbx," VG_SYM(rbx_out) "(%rip)\n"
-    "\tmov %rcx," VG_SYM(rcx_out) "(%rip)\n"
-#endif
     "\tpop %rdx\n"
     "\tpop %rcx\n"
     "\tpop %rbx\n"
@@ -210,27 +158,14 @@ int main ( void )
     "\tpush %rcx\n"
     "\tpush %rdx\n"
     "\txor %rax, %rax\n" // get eflags in a known state
-#ifndef VGP_amd64_darwin
     "\tmov " VG_SYM(rax) ",%rax\n"
     "\tmov " VG_SYM(rbx) ",%rbx\n"
     "\tmov " VG_SYM(rcx) ",%rcx\n"
     "\tmov " VG_SYM(rdx) ",%rdx\n"
-#else
-    "\tmov " VG_SYM(rax) "(%rip),%rax\n"
-    "\tmov " VG_SYM(rbx) "(%rip),%rbx\n"
-    "\tmov " VG_SYM(rcx) "(%rip),%rcx\n"
-    "\tmov " VG_SYM(rdx) "(%rip),%rdx\n"
-#endif
     "\tcmpxchg %ebx,%ecx \n"
-#ifndef VGP_amd64_darwin
     "\tmov %rax," VG_SYM(rax_out) "\n"
     "\tmov %rbx," VG_SYM(rbx_out) "\n"
     "\tmov %rcx," VG_SYM(rcx_out) "\n"
-#else
-    "\tmov %rax," VG_SYM(rax_out) "(%rip)\n"
-    "\tmov %rbx," VG_SYM(rbx_out) "(%rip)\n"
-    "\tmov %rcx," VG_SYM(rcx_out) "(%rip)\n"
-#endif
     "\tpop %rdx\n"
     "\tpop %rcx\n"
     "\tpop %rbx\n"
@@ -254,27 +189,14 @@ int main ( void )
     "\tpush %rcx\n"
     "\tpush %rdx\n"
     "\txor %rax, %rax\n" // get eflags in a known state
-#ifndef VGP_amd64_darwin
     "\tmov " VG_SYM(rax) ",%rax\n"
     "\tmov " VG_SYM(rbx) ",%rbx\n"
     "\tmov " VG_SYM(rcx) ",%rcx\n"
     "\tmov " VG_SYM(rdx) ",%rdx\n"
-#else
-    "\tmov " VG_SYM(rax) "(%rip),%rax\n"
-    "\tmov " VG_SYM(rbx) "(%rip),%rbx\n"
-    "\tmov " VG_SYM(rcx) "(%rip),%rcx\n"
-    "\tmov " VG_SYM(rdx) "(%rip),%rdx\n"
-#endif
     "\tcmpxchg %ebx,%ecx \n"
-#ifndef VGP_amd64_darwin
     "\tmov %rax," VG_SYM(rax_out) "\n"
     "\tmov %rbx," VG_SYM(rbx_out) "\n"
     "\tmov %rcx," VG_SYM(rcx_out) "\n"
-#else
-    "\tmov %rax," VG_SYM(rax_out) "(%rip)\n"
-    "\tmov %rbx," VG_SYM(rbx_out) "(%rip)\n"
-    "\tmov %rcx," VG_SYM(rcx_out) "(%rip)\n"
-#endif
     "\tpop %rdx\n"
     "\tpop %rcx\n"
     "\tpop %rbx\n"
@@ -299,27 +221,14 @@ int main ( void )
     "\tpush %rcx\n"
     "\tpush %rdx\n"
     "\txor %rax, %rax\n" // get eflags in a known state
-#ifndef VGP_amd64_darwin
     "\tmov " VG_SYM(rax) ",%rax\n"
     "\tmov " VG_SYM(rbx) ",%rbx\n"
     "\tmov " VG_SYM(rcx) ",%rcx\n"
     "\tmov " VG_SYM(rdx) ",%rdx\n"
-#else
-    "\tmov " VG_SYM(rax) "(%rip),%rax\n"
-    "\tmov " VG_SYM(rbx) "(%rip),%rbx\n"
-    "\tmov " VG_SYM(rcx) "(%rip),%rcx\n"
-    "\tmov " VG_SYM(rdx) "(%rip),%rdx\n"
-#endif
     "\tcmpxchg %rbx,%rcx \n"
-#ifndef VGP_amd64_darwin
     "\tmov %rax," VG_SYM(rax_out) "\n"
     "\tmov %rbx," VG_SYM(rbx_out) "\n"
     "\tmov %rcx," VG_SYM(rcx_out) "\n"
-#else
-    "\tmov %rax," VG_SYM(rax_out) "(%rip)\n"
-    "\tmov %rbx," VG_SYM(rbx_out) "(%rip)\n"
-    "\tmov %rcx," VG_SYM(rcx_out) "(%rip)\n"
-#endif
     "\tpop %rdx\n"
     "\tpop %rcx\n"
     "\tpop %rbx\n"
@@ -343,27 +252,14 @@ int main ( void )
     "\tpush %rcx\n"
     "\tpush %rdx\n"
     "\txor %rax, %rax\n" // get eflags in a known state
-#ifndef VGP_amd64_darwin
     "\tmov " VG_SYM(rax) ",%rax\n"
     "\tmov " VG_SYM(rbx) ",%rbx\n"
     "\tmov " VG_SYM(rcx) ",%rcx\n"
     "\tmov " VG_SYM(rdx) ",%rdx\n"
-#else
-    "\tmov " VG_SYM(rax) "(%rip),%rax\n"
-    "\tmov " VG_SYM(rbx) "(%rip),%rbx\n"
-    "\tmov " VG_SYM(rcx) "(%rip),%rcx\n"
-    "\tmov " VG_SYM(rdx) "(%rip),%rdx\n"
-#endif
     "\tcmpxchg %rbx,%rcx \n"
-#ifndef VGP_amd64_darwin
     "\tmov %rax," VG_SYM(rax_out) "\n"
     "\tmov %rbx," VG_SYM(rbx_out) "\n"
     "\tmov %rcx," VG_SYM(rcx_out) "\n"
-#else
-    "\tmov %rax," VG_SYM(rax_out) "(%rip)\n"
-    "\tmov %rbx," VG_SYM(rbx_out) "(%rip)\n"
-    "\tmov %rcx," VG_SYM(rcx_out) "(%rip)\n"
-#endif
     "\tpop %rdx\n"
     "\tpop %rcx\n"
     "\tpop %rbx\n"

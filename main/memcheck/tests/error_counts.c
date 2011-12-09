@@ -8,9 +8,9 @@ int main(void)
 {
    int  x;
    int  y = 0;
-   int* reachable __attribute__((unused));
+   int* reachable;
    int* dubious;
-   int* leaked __attribute__((unused));
+   int* leaked;
    DECLARE_LEAK_COUNTERS;
 
    /* we require these longs to have same size as a machine word */

@@ -7,7 +7,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2000-2011 Julian Seward
+   Copyright (C) 2000-2010 Julian Seward
       jseward@acm.org
 
    This program is free software; you can redistribute it and/or
@@ -28,15 +28,13 @@
    The GNU General Public License is contained in the file COPYING.
 */
 
+#if defined(VGO_linux) || defined(VGO_darwin)
+
 /*
    Stabs reader greatly improved by Nick Nethercote, Apr 02.
    This module was also extensively hacked on by Jeremy Fitzhardinge
    and Tom Hughes.
 */
-
-/* "on Linux (except android), or on Darwin" */
-#if (defined(VGO_linux) && !defined(VGPV_arm_linux_android)) \
-    || defined(VGO_darwin)
 
 #include "pub_core_basics.h"
 #include "pub_core_debuginfo.h"
@@ -52,7 +50,11 @@
 
 /* --- !!! --- EXTERNAL HEADERS start --- !!! --- */
 #if defined(VGO_linux)
+#ifdef ANDROID
+#  include <linux/a.out.h>
+#else
 #  include <a.out.h> /* stabs defns */
+#endif
 #elif defined(VGO_darwin)
 #  include <mach-o/nlist.h>
 #  define n_other n_sect
@@ -328,11 +330,13 @@ void ML_(read_debuginfo_stabs) ( DebugInfo* di,
 
          case N_FUN: {                /* function start/end */
             Addr addr = 0;        /* end address for prev line/scope */
+            Bool newfunc = False;
 
             /* if this the end of the function or we haven't
                previously finished the previous function... */
             if (*string == '\0' || func.start != 0) {
                /* end of function */
+               newfunc = False;
                line.first = False;
 
                /* end line at end of function */
@@ -346,6 +350,7 @@ void ML_(read_debuginfo_stabs) ( DebugInfo* di,
 
             if (*string != '\0') {
                /* new function */
+               newfunc = True;
                line.first = True;
 
                /* line ends at start of next function */
@@ -388,8 +393,7 @@ void ML_(read_debuginfo_stabs) ( DebugInfo* di,
    }
 }
 
-#endif /* (defined(VGO_linux) && !defined(VGPV_arm_linux_android)) \
-          || defined(VGO_darwin) */
+#endif // defined(VGO_linux) || defined(VGO_darwin)
 
 /*--------------------------------------------------------------------*/
 /*--- end                                                          ---*/

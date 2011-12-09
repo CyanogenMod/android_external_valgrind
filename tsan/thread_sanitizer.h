@@ -31,9 +31,9 @@
 #define THREAD_SANITIZER_H_
 
 #include "ts_util.h"
-#include "ts_atomic.h"
 
 //--------- Utils ------------------- {{{1
+#include "ts_util.h"
 
 void Report(const char *format, ...);
 void PcToStrings(uintptr_t pc, bool demangle,
@@ -131,11 +131,6 @@ struct FLAGS {
   bool nacl_untrusted;
 
   bool threaded_analysis;
-
-  bool sched_shake;
-  bool api_ambush;
-
-  bool enable_atomic;
 };
 
 extern FLAGS *G_flags;
@@ -200,56 +195,26 @@ struct CallStack: public CallStackPod {
 #include "ts_events.h"
 #include "ts_trace_info.h"
 
-struct TSanThread;
-void ThreadSanitizerInit();
-void ThreadSanitizerFini();
+struct Thread;
+extern void ThreadSanitizerInit();
+extern void ThreadSanitizerFini();
 // TODO(glider): this is a temporary solution to avoid deadlocks after fork().
 #ifdef TS_LLVM
-void ThreadSanitizerLockAcquire();
-void ThreadSanitizerLockRelease();
+extern void ThreadSanitizerLockAcquire();
+extern void ThreadSanitizerLockRelease();
 #endif
-void ThreadSanitizerHandleOneEvent(Event *event);
-TSanThread *ThreadSanitizerGetThreadByTid(int32_t tid);
-void ThreadSanitizerHandleTrace(int32_t tid, TraceInfo *trace_info,
+extern void ThreadSanitizerHandleOneEvent(Event *event);
+extern Thread *ThreadSanitizerGetThreadByTid(int32_t tid);
+extern void ThreadSanitizerHandleTrace(int32_t tid, TraceInfo *trace_info,
                                        uintptr_t *tleb);
-void ThreadSanitizerHandleTrace(TSanThread *thr, TraceInfo *trace_info,
+extern void ThreadSanitizerHandleTrace(Thread *thr, TraceInfo *trace_info,
                                        uintptr_t *tleb);
-void ThreadSanitizerHandleOneMemoryAccess(TSanThread *thr, MopInfo mop,
+extern void ThreadSanitizerHandleOneMemoryAccess(Thread *thr, MopInfo mop,
                                                  uintptr_t addr);
-void ThreadSanitizerParseFlags(vector<string>* args);
-bool ThreadSanitizerWantToInstrumentSblock(uintptr_t pc);
-bool ThreadSanitizerWantToCreateSegmentsOnSblockEntry(uintptr_t pc);
-bool ThreadSanitizerIgnoreAccessesBelowFunction(uintptr_t pc);
-
-typedef int (*ThreadSanitizerUnwindCallback)(uintptr_t* stack, int size, uintptr_t pc);
-void ThreadSanitizerSetUnwindCallback(ThreadSanitizerUnwindCallback cb);
-
-/** Atomic operation handler.
- *  @param tid ID of a thread that issues the operation.
- *  @param pc Program counter that should be associated with the operation.
- *  @param op Type of the operation (load, store, etc).
- *  @param mo Memory ordering associated with the operation
- *      (relaxed, acquire, release, etc). NB there are some restrictions on
- *      what memory orderings can be used with what types of operations.
- *      E.g. a store can't have an acquire semantics
- *      (see C++0x standard draft for details).
- *  @param fail_mo Memory ordering the operation has if it fails,
- *      applicable only to compare_exchange oprations.
- *  @param size Size of the memory access in bytes (1, 2, 4 or 8).
- *  @param a Address of the memory access.
- *  @param v Operand for the operation (e.g. a value to store).
- *  @param cmp Comparand for compare_exchange oprations.
- *  @return Result of the operation (e.g. loaded value).
- */
-uint64_t ThreadSanitizerHandleAtomicOp(int32_t tid,
-                                       uintptr_t pc,
-                                       tsan_atomic_op op,
-                                       tsan_memory_order mo,
-                                       tsan_memory_order fail_mo,
-                                       size_t size,
-                                       void volatile* a,
-                                       uint64_t v,
-                                       uint64_t cmp);
+extern void ThreadSanitizerParseFlags(vector<string>* args);
+extern bool ThreadSanitizerWantToInstrumentSblock(uintptr_t pc);
+extern bool ThreadSanitizerWantToCreateSegmentsOnSblockEntry(uintptr_t pc);
+extern bool ThreadSanitizerIgnoreAccessesBelowFunction(uintptr_t pc);
 
 enum IGNORE_BELOW_RTN {
   IGNORE_BELOW_RTN_UNKNOWN,
@@ -257,15 +222,15 @@ enum IGNORE_BELOW_RTN {
   IGNORE_BELOW_RTN_YES
 };
 
-void ThreadSanitizerHandleRtnCall(int32_t tid, uintptr_t call_pc,
+extern void ThreadSanitizerHandleRtnCall(int32_t tid, uintptr_t call_pc,
                                          uintptr_t target_pc,
                                          IGNORE_BELOW_RTN ignore_below);
 
-void ThreadSanitizerHandleRtnExit(int32_t tid);
+extern void ThreadSanitizerHandleRtnExit(int32_t tid);
 
-void ThreadSanitizerPrintUsage();
+extern void ThreadSanitizerPrintUsage();
 extern "C" const char *ThreadSanitizerQuery(const char *query);
-bool PhaseDebugIsOn(const char *phase_name);
+extern bool PhaseDebugIsOn(const char *phase_name);
 
 extern bool g_has_entered_main;
 extern bool g_has_exited_main;

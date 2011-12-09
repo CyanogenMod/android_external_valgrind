@@ -7,7 +7,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2000-2011 Julian Seward 
+   Copyright (C) 2000-2010 Julian Seward 
       jseward@acm.org
 
    This program is free software; you can redistribute it and/or
@@ -31,7 +31,6 @@
 #include "pub_core_basics.h"
 #include "pub_core_vki.h"
 #include "pub_core_debuglog.h"
-#include "pub_core_gdbserver.h"
 #include "pub_core_libcbase.h"
 #include "pub_core_libcassert.h"
 #include "pub_core_libcfile.h"   // VG_(write)(), VG_(write_socket)()
@@ -48,10 +47,7 @@
 /* The destination sinks for normal and XML output.  These have their
    initial values here; they are set to final values by
    m_main.main_process_cmd_line_options().  See comment at the top of
-   that function for the associated logic. 
-   After startup, the gdbserver monitor command might temporarily
-   set the fd of log_output_sink to -2 to indicate that output is
-   to be given to gdb rather than output to the startup fd */
+   that function for the associated logic. */
 OutputSink VG_(log_output_sink) = {  2, False }; /* 2 = stderr */
 OutputSink VG_(xml_output_sink) = { -1, False }; /* disabled */
  
@@ -74,8 +70,6 @@ void send_bytes_to_logging_sink ( OutputSink* sink, Char* msg, Int nbytes )
          any more output. */
       if (sink->fd >= 0)
          VG_(write)( sink->fd, msg, nbytes );
-      else if (sink->fd == -2)
-         VG_(gdb_printf)("%s", msg);
    }
 }
 
@@ -113,7 +107,7 @@ static UInt vprintf_to_buf ( printf_buf_t* b,
                              const HChar *format, va_list vargs )
 {
    UInt ret = 0;
-   if (b->sink->fd >= 0 || b->sink->fd == -2) {
+   if (b->sink->fd >= 0) {
       ret = VG_(debugLog_vprintf) 
                ( add_to__printf_buf, b, format, vargs );
    }
@@ -157,6 +151,17 @@ UInt VG_(vprintf_xml) ( const HChar *format, va_list vargs )
 }
 
 UInt VG_(printf_xml) ( const HChar *format, ... )
+{
+   UInt ret;
+   va_list vargs;
+   va_start(vargs, format);
+   ret = VG_(vprintf_xml)(format, vargs);
+   va_end(vargs);
+   return ret;
+}
+
+/* An exact clone of VG_(printf_xml), unfortunately. */
+UInt VG_(printf_xml_no_f_c) ( const HChar *format, ... )
 {
    UInt ret;
    va_list vargs;
@@ -228,13 +233,14 @@ static void add_to__snprintf_buf ( HChar c, void* p )
 
 UInt VG_(vsnprintf) ( Char* buf, Int size, const HChar *format, va_list vargs )
 {
+   Int ret;
    snprintf_buf_t b;
    b.buf      = buf;
    b.buf_size = size < 0 ? 0 : size;
    b.buf_used = 0;
 
-   (void) VG_(debugLog_vprintf) 
-             ( add_to__snprintf_buf, &b, format, vargs );
+   ret = VG_(debugLog_vprintf) 
+            ( add_to__snprintf_buf, &b, format, vargs );
 
    return b.buf_used;
 }
@@ -488,6 +494,17 @@ UInt VG_(vmessage) ( VgMsgKind kind, const HChar* format, va_list vargs )
    return ret;
 }
 
+/* Send a simple single-part XML message. */
+UInt VG_(message_no_f_c) ( VgMsgKind kind, const HChar* format, ... )
+{
+   UInt count;
+   va_list vargs;
+   va_start(vargs,format);
+   count = VG_(vmessage) ( kind, format, vargs );
+   va_end(vargs);
+   return count;
+}
+
 /* Send a simple single-part message. */
 UInt VG_(message) ( VgMsgKind kind, const HChar* format, ... )
 {
@@ -568,16 +585,12 @@ void VG_(err_missing_prog) ( void  )
 }
 
 __attribute__((noreturn))
-void VG_(err_config_error) ( Char* format, ... )
+void VG_(err_config_error) ( Char* msg )
 {
-   va_list vargs;
-   va_start(vargs,format);
    revert_to_stderr();
-   VG_(message) (Vg_FailMsg, "Startup or configuration error:\n   ");
-   VG_(vmessage)(Vg_FailMsg, format, vargs );
-   VG_(message) (Vg_FailMsg, "Unable to start up properly.  Giving up.\n");
+   VG_(fmsg)("Startup or configuration error:\n   %s\n", msg);
+   VG_(fmsg)("Unable to start up properly.  Giving up.\n");
    VG_(exit)(1);
-   va_end(vargs);
 }
 
 

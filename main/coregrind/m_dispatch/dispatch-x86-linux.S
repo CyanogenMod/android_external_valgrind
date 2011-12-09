@@ -8,7 +8,7 @@
   This file is part of Valgrind, a dynamic binary instrumentation
   framework.
 
-  Copyright (C) 2000-2011 Julian Seward 
+  Copyright (C) 2000-2010 Julian Seward 
      jseward@acm.org
 
   This program is free software; you can redistribute it and/or
@@ -96,8 +96,8 @@ L1:
 	
 	/* fall into main loop (the right one) */
 	cmpl	$0, 32(%esp) /* do_profiling */
-	je	VG_(run_innerloop__dispatch_unassisted_unprofiled)
-	jmp	VG_(run_innerloop__dispatch_unassisted_profiled)
+	je	VG_(run_innerloop__dispatch_unprofiled)
+	jmp	VG_(run_innerloop__dispatch_profiled)
 	/*NOTREACHED*/
 
 /*----------------------------------------------------*/
@@ -105,10 +105,14 @@ L1:
 /*----------------------------------------------------*/
 
 .align	16
-.global	VG_(run_innerloop__dispatch_unassisted_unprofiled)
-VG_(run_innerloop__dispatch_unassisted_unprofiled):
-	/* AT ENTRY: %eax is next guest addr, %ebp is the
-           unmodified guest state ptr */
+.global	VG_(run_innerloop__dispatch_unprofiled)
+VG_(run_innerloop__dispatch_unprofiled):
+	/* AT ENTRY: %eax is next guest addr, %ebp is possibly
+           modified guest state ptr */
+
+	/* Has the guest state pointer been messed with?  If yes, exit. */
+	cmpl	28(%esp), %ebp
+	jnz	gsp_changed
 
 	/* save the jump address in the guest state */
 	movl	%eax, OFFSET_x86_EIP(%ebp)
@@ -128,20 +132,8 @@ VG_(run_innerloop__dispatch_unassisted_unprofiled):
 	/* Found a match.  Jump to .host. */
 	jmp 	*%edi
 	ud2	/* persuade insn decoders not to speculate past here */
-	/* generated code should run, then jump back to either
-	   VG_(run_innerloop__dispatch_unassisted_unprofiled) or
-	   VG_(run_innerloop__dispatch_assisted_unprofiled). */
-	/*NOTREACHED*/
-
-.align	16
-.global	VG_(run_innerloop__dispatch_assisted_unprofiled)
-VG_(run_innerloop__dispatch_assisted_unprofiled):
-	/* AT ENTRY: %eax is next guest addr, %ebp is the
-           modified guest state ptr */
-	/* We know the guest state pointer has been modified.
-	   So jump directly to gsp_changed. */
-	jmp	gsp_changed
-	ud2
+	/* generated code should run, then jump back to
+	   VG_(run_innerloop__dispatch_unprofiled). */
 	/*NOTREACHED*/
 
 /*----------------------------------------------------*/
@@ -149,10 +141,14 @@ VG_(run_innerloop__dispatch_assisted_unprofiled):
 /*----------------------------------------------------*/
 
 .align	16
-.global	VG_(run_innerloop__dispatch_unassisted_profiled)
-VG_(run_innerloop__dispatch_unassisted_profiled):
-	/* AT ENTRY: %eax is next guest addr, %ebp is the
-           unmodified guest state ptr */
+.global	VG_(run_innerloop__dispatch_profiled)
+VG_(run_innerloop__dispatch_profiled):
+	/* AT ENTRY: %eax is next guest addr, %ebp is possibly
+           modified guest state ptr */
+
+	/* Has the guest state pointer been messed with?  If yes, exit. */
+	cmpl	28(%esp), %ebp
+	jnz	gsp_changed
 
 	/* save the jump address in the guest state */
 	movl	%eax, OFFSET_x86_EIP(%ebp)
@@ -179,20 +175,8 @@ VG_(run_innerloop__dispatch_unassisted_profiled):
 	/* Found a match.  Jump to .host. */
 	jmp 	*%edi
 	ud2	/* persuade insn decoders not to speculate past here */
-	/* generated code should run, then jump back to either
-	   VG_(run_innerloop__dispatch_unassisted_profiled) or
-	   VG_(run_innerloop__dispatch_assisted_profiled). */
-	/*NOTREACHED*/
-
-.align	16
-.global	VG_(run_innerloop__dispatch_assisted_profiled)
-VG_(run_innerloop__dispatch_assisted_profiled):
-	/* AT ENTRY: %eax is next guest addr, %ebp is the
-           modified guest state ptr */
-	/* We know the guest state pointer has been modified.
-	   So jump directly to gsp_changed. */
-	jmp	gsp_changed
-	ud2
+	/* generated code should run, then jump back to
+	   VG_(run_innerloop__dispatch_profiled). */
 	/*NOTREACHED*/
 
 /*----------------------------------------------------*/

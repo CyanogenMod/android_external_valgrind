@@ -93,7 +93,7 @@ static inline void IGNORE_RETURN_VALUE(T v)
 #include <stdlib.h>
 #include <dirent.h>
 
-#ifndef VGO_darwin
+#ifndef __APPLE__
 #include <malloc.h>
 #endif
 
@@ -335,8 +335,6 @@ void Worker() {
 void Parent() {
   MyThread t(Worker);
   t.Start();
-  const timespec delay = { 0, 100 * 1000 * 1000 };
-  nanosleep(&delay, 0);
   GLOB = 2;
   t.Join();
 }
@@ -3471,7 +3469,7 @@ void Worker() {
   n %= Nlog;
 
   long t0 = clock();
-  long t __attribute__((unused)) = t0;
+  long t = t0;
 
   for (int it = 0; it < N_iter; it++) {
     if(n == 0) {
@@ -4788,7 +4786,7 @@ void Run() {
   // but the files are actually the same (symlinked).
   sprintf(out_name, "/tmp/racecheck_unittest_out.%d", getpid());
   fd_out = creat(out_name, O_WRONLY | S_IRWXU);
-#ifdef VGO_darwin
+#ifdef __APPLE__
   // symlink() is not supported on Darwin. Copy the output file name.
   strcpy(in_name, out_name);
 #else
@@ -5049,7 +5047,7 @@ namespace test105 {
 int     GLOB = 0;
 
 void F1() {
-  int ar[32] __attribute__((unused));
+  int ar[32];
 //  ANNOTATE_TRACE_MEMORY(&ar[0]);
 //  ANNOTATE_TRACE_MEMORY(&ar[31]);
   ar[0] = 1;
@@ -5057,7 +5055,7 @@ void F1() {
 }
 
 void Worker() {
-  int ar[32] __attribute__((unused));
+  int ar[32];
 //  ANNOTATE_TRACE_MEMORY(&ar[0]);
 //  ANNOTATE_TRACE_MEMORY(&ar[31]);
   ar[0] = 1;
@@ -7144,7 +7142,7 @@ BlockingCounter *blocking_counter;
 int     GLOB = 0;
 
 // Worker(N) will do 2^N increments of GLOB, each increment in a separate thread
-void Worker(long depth) {
+void Worker(int depth) {
   CHECK(depth >= 0);
   if (depth > 0) {
     ThreadPool pool(2);

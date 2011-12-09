@@ -7,7 +7,7 @@
    This file is part of MemCheck, a heavyweight Valgrind tool for
    detecting memory errors.
 
-   Copyright (C) 2000-2011 Julian Seward 
+   Copyright (C) 2000-2010 Julian Seward 
       jseward@acm.org
 
    This program is free software; you can redistribute it and/or
@@ -43,10 +43,11 @@
 #include "pub_tool_options.h"
 #include "pub_tool_oset.h"
 #include "pub_tool_signals.h"
-#include "pub_tool_libcsetjmp.h"    // setjmp facilities
 #include "pub_tool_tooliface.h"     // Needed for mc_include.h
 
 #include "mc_include.h"
+
+#include <setjmp.h>                 // For jmp_buf
 
 /*------------------------------------------------------------*/
 /*--- An overview of leak checking.                        ---*/
@@ -434,16 +435,6 @@ typedef
 static MC_Chunk** lc_chunks;
 // How many chunks we're dealing with.
 static Int        lc_n_chunks;
-// chunks will be converted and merged in loss record, maintained in lr_table
-// lr_table elements are kept from one leak_search to another to implement
-// the "print new/changed leaks" client request
-static OSet*        lr_table;
-
-// DeltaMode used the last time we called detect_memory_leaks.
-// The recorded leak errors must be output using a logic based on this delta_mode.
-// The below avoids replicating the delta_mode in each LossRecord.
-LeakCheckDeltaMode MC_(detect_memory_leaks_last_delta_mode);
-
 
 // This has the same number of entries as lc_chunks, and each entry
 // in lc_chunks corresponds with the entry here (ie. lc_chunks[i] and
@@ -548,62 +539,6 @@ static Bool lc_pop(Int* ret)
    }
 }
 
-// Partial fix for https://bugs.kde.org/show_bug.cgi?id=280271
-// Only used in valgrind-variant now.
-static Bool vv_lc_is_start_pointer(Addr ptr, MC_Chunk* chunk)
-{
-   // Pointers to the start of the chunk are indeed start-pointers
-   if (ptr == chunk->data)
-      return True;
-
-   // Below are a few heuristics to reduce the number of false positive
-   // "possibly lost" reports on C++ types by treating some interior-pointers
-   // as start-pointers (inspired by the Dr. Memory article at CGO2011).
-
-   // Shortcut: heuristics assume 'ptr' is word-aligned.
-   if (ptr != VG_ROUNDUP(ptr, sizeof(Addr)))
-      return False;
-
-   if (ptr == chunk->data + sizeof(Addr)) {
-      // Pointer to a new[]-allocated buffer?
-      SizeT sz_from_header = *(SizeT*)chunk->data,
-            expected_sz = chunk->szB - sizeof(Addr);
-      if (sz_from_header > 0 && sz_from_header <= expected_sz &&
-          expected_sz % sz_from_header == 0)
-         return True;
-   }
-
-   if (ptr == chunk->data + 3*sizeof(Addr)) {
-      // Pointer to std::string internals?
-      SizeT assumed_len = *(SizeT*)chunk->data,
-            assumed_capacity = *((SizeT*)chunk->data + 1);
-      if (assumed_len <= assumed_capacity) {
-         // std::string
-         if (chunk->szB - 3*sizeof(SizeT) == assumed_capacity + 1)
-            return True;
-
-         // std::basic_string<unsigned short> a.k.a. string16
-         if (chunk->szB - 3*sizeof(SizeT) == 2*(assumed_capacity + 1))
-            return True;
-
-         // std::basic_string<wchar_t> on Linux
-         if (chunk->szB - 3*sizeof(SizeT) == 4*(assumed_capacity + 1))
-            return True;
-      }
-   }
-
-   if (ptr == chunk->data + 2*sizeof(Addr)) {
-      // Pointer to a nss_ZAlloc-allocated buffer?
-      // It adds a header like this: 'struct { void *ptr; uint32 size };'
-      SizeT sz_from_header = *(UInt*)(chunk->data + sizeof(Addr)),
-            expected_sz = chunk->szB - 2*sizeof(Addr);
-      tl_assert(sizeof(UInt) == 4);
-      if (sz_from_header == expected_sz)
-         return True;
-   }
-
-   return False;
-}
 
 // If 'ptr' is pointing to a heap-allocated block which hasn't been seen
 // before, push it onto the mark stack.
@@ -621,8 +556,7 @@ lc_push_without_clique_if_a_chunk_ptr(Addr ptr, Bool is_prior_definite)
    // - Unreached --> Possible
    // - Unreached --> Reachable 
    // - Possible  --> Reachable
-   if (vv_lc_is_start_pointer(ptr, ch) &&
-       is_prior_definite && ex->state != Reachable) {
+   if (ptr == ch->data && is_prior_definite && ex->state != Reachable) {
       // 'ptr' points to the start of the block, and the prior node is
       // definite, which means that this block is definitely reachable.
       ex->state = Reachable;
@@ -680,11 +614,10 @@ lc_push_with_clique_if_a_chunk_ptr(Addr ptr, Int clique)
       if (VG_DEBUG_CLIQUE) {
          if (ex->indirect_szB > 0)
             VG_(printf)("  clique %d joining clique %d adding %lu+%lu\n", 
-                        ch_no, clique, (unsigned long)ch->szB,
-			(unsigned long)ex->indirect_szB);
+                        ch_no, clique, (SizeT)ch->szB, (SizeT)ex->indirect_szB);
          else
             VG_(printf)("  block %d joining clique %d adding %lu\n", 
-                        ch_no, clique, (unsigned long)ch->szB);
+                        ch_no, clique, (SizeT)ch->szB);
       }
 
       lc_extras[clique].indirect_szB += ch->szB;
@@ -703,7 +636,7 @@ lc_push_if_a_chunk_ptr(Addr ptr, Int clique, Bool is_prior_definite)
 }
 
 
-static VG_MINIMAL_JMP_BUF(memscan_jmpbuf);
+static jmp_buf memscan_jmpbuf;
 
 static
 void scan_all_valid_memory_catcher ( Int sigNo, Addr addr )
@@ -711,7 +644,7 @@ void scan_all_valid_memory_catcher ( Int sigNo, Addr addr )
    if (0)
       VG_(printf)("OUCH! sig=%d addr=%#lx\n", sigNo, addr);
    if (sigNo == VKI_SIGSEGV || sigNo == VKI_SIGBUS)
-      VG_MINIMAL_LONGJMP(memscan_jmpbuf);
+      __builtin_longjmp(memscan_jmpbuf, 1);
 }
 
 // Scan a block of memory between [start, start+len).  This range may
@@ -753,7 +686,7 @@ lc_scan_memory(Addr start, SizeT len, Bool is_prior_definite, Int clique)
          }
       }
 
-      if (VG_MINIMAL_SETJMP(memscan_jmpbuf) == 0) {
+      if (__builtin_setjmp(memscan_jmpbuf) == 0) {
          if ( MC_(is_valid_aligned_word)(ptr) ) {
             lc_scanned_szB += sizeof(Addr);
             addr = *(Addr *)ptr;
@@ -838,35 +771,20 @@ static Int cmp_LossRecords(void* va, void* vb)
    return 0;
 }
 
-static void print_results(ThreadId tid, LeakCheckParams lcp)
+static void print_results(ThreadId tid, Bool is_full_check)
 {
    Int          i, n_lossrecords;
+   OSet*        lr_table;
    LossRecord** lr_array;
    LossRecord*  lr;
    Bool         is_suppressed;
-   SizeT        old_bytes_leaked      = MC_(bytes_leaked); /* to report delta in summary */
-   SizeT        old_bytes_indirect    = MC_(bytes_indirect); 
-   SizeT        old_bytes_dubious     = MC_(bytes_dubious); 
-   SizeT        old_bytes_reachable   = MC_(bytes_reachable); 
-   SizeT        old_bytes_suppressed  = MC_(bytes_suppressed); 
-   SizeT        old_blocks_leaked     = MC_(blocks_leaked);
-   SizeT        old_blocks_indirect   = MC_(blocks_indirect);
-   SizeT        old_blocks_dubious    = MC_(blocks_dubious);
-   SizeT        old_blocks_reachable  = MC_(blocks_reachable);
-   SizeT        old_blocks_suppressed = MC_(blocks_suppressed);
 
-   if (lr_table == NULL)
-      // Create the lr_table, which holds the loss records.
-      // If the lr_table already exists, it means it contains
-      // loss_records from the previous leak search. The old_*
-      // values in these records are used to implement the
-      // leak check delta mode
-      lr_table =
-         VG_(OSetGen_Create)(offsetof(LossRecord, key),
-                             cmp_LossRecordKey_LossRecord,
-                             VG_(malloc), "mc.pr.1",
-                             VG_(free));
-
+   // Create the lr_table, which holds the loss records.
+   lr_table =
+      VG_(OSetGen_Create)(offsetof(LossRecord, key),
+                          cmp_LossRecordKey_LossRecord,
+                          VG_(malloc), "mc.pr.1",
+                          VG_(free)); 
 
    // Convert the chunks into loss records, merging them where appropriate.
    for (i = 0; i < lc_n_chunks; i++) {
@@ -893,9 +811,6 @@ static void print_results(ThreadId tid, LeakCheckParams lcp)
          lr->szB              = ch->szB;
          lr->indirect_szB     = ex->indirect_szB;
          lr->num_blocks       = 1;
-         lr->old_szB          = 0;
-         lr->old_indirect_szB = 0;
-         lr->old_num_blocks   = 0;
          VG_(OSetGen_Insert)(lr_table, lr);
       }
    }
@@ -923,7 +838,7 @@ static void print_results(ThreadId tid, LeakCheckParams lcp)
 
    // Print the loss records (in size order) and collect summary stats.
    for (i = 0; i < n_lossrecords; i++) {
-      Bool count_as_error, print_record, delta_considered;
+      Bool count_as_error, print_record;
       // Rules for printing:
       // - We don't show suppressed loss records ever (and that's controlled
       //   within the error manager).
@@ -937,45 +852,23 @@ static void print_results(ThreadId tid, LeakCheckParams lcp)
       // includes indirectly lost blocks!
       //
       lr = lr_array[i];
-      switch (lcp.deltamode) {
-         case LCD_Any: 
-            delta_considered = lr->num_blocks > 0;
-            break;
-         case LCD_Increased:
-            delta_considered 
-               = lr_array[i]->szB > lr_array[i]->old_szB
-                 || lr_array[i]->indirect_szB > lr_array[i]->old_indirect_szB
-                 || lr->num_blocks > lr->old_num_blocks;
-            break;
-         case LCD_Changed: 
-            delta_considered = lr_array[i]->szB != lr_array[i]->old_szB
-            || lr_array[i]->indirect_szB != lr_array[i]->old_indirect_szB
-            || lr->num_blocks != lr->old_num_blocks;
-            break;
-         default:
-            tl_assert(0);
-      }
-
-      print_record = lcp.mode == LC_Full && delta_considered &&
-                     ( lcp.show_reachable ||
+      print_record = is_full_check &&
+                     ( MC_(clo_show_reachable) ||
                        Unreached == lr->key.state || 
-                       ( lcp.show_possibly_lost && 
+                       ( MC_(clo_show_possibly_lost) && 
                          Possible  == lr->key.state ) );
-      // We don't count a leaks as errors with lcp.mode==LC_Summary.
+      // We don't count a leaks as errors with --leak-check=summary.
       // Otherwise you can get high error counts with few or no error
       // messages, which can be confusing.  Also, you could argue that
       // indirect leaks should be counted as errors, but it seems better to
       // make the counting criteria similar to the printing criteria.  So we
       // don't count them.
-      count_as_error = lcp.mode == LC_Full && delta_considered &&
+      count_as_error = is_full_check && 
                        ( Unreached == lr->key.state || 
                          Possible  == lr->key.state );
-      if ((Reachable == lr->key.state && !MC_(clo_show_reachable)) ||
-          (Possible  == lr->key.state && !MC_(clo_show_possibly_lost)))
-         is_suppressed = False;
-      else
-         is_suppressed = MC_(record_leak_error)(tid, i+1, n_lossrecords, lr,
-                                                print_record, count_as_error);
+      is_suppressed = 
+         MC_(record_leak_error) ( tid, i+1, n_lossrecords, lr, print_record,
+                                  count_as_error );
 
       if (is_suppressed) {
          MC_(blocks_suppressed) += lr->num_blocks;
@@ -1002,74 +895,31 @@ static void print_results(ThreadId tid, LeakCheckParams lcp)
       }
    }
 
-   for (i = 0; i < n_lossrecords; i++)
-      {
-         if (lr->num_blocks == 0)
-            // remove from lr_table the old loss_records with 0 bytes found
-            VG_(OSetGen_Remove) (lr_table, &lr_array[i]->key);
-         else
-            {
-               // move the leak sizes to old_* and zero the current sizes
-               // for next leak search
-               lr_array[i]->old_szB          = lr_array[i]->szB;
-               lr_array[i]->old_indirect_szB = lr_array[i]->indirect_szB;
-               lr_array[i]->old_num_blocks   = lr_array[i]->num_blocks;
-               lr_array[i]->szB              = 0;
-               lr_array[i]->indirect_szB     = 0;
-               lr_array[i]->num_blocks       = 0;
-            }
-      }
-   VG_(free)(lr_array); 
-
    if (VG_(clo_verbosity) > 0 && !VG_(clo_xml)) {
-      char d_bytes[20];
-      char d_blocks[20];
-
       VG_(umsg)("LEAK SUMMARY:\n");
-      VG_(umsg)("   definitely lost: %'lu%s bytes in %'lu%s blocks\n",
-                MC_(bytes_leaked), 
-                MC_(snprintf_delta) (d_bytes, 20, MC_(bytes_leaked), old_bytes_leaked, lcp.deltamode),
-                MC_(blocks_leaked),
-                MC_(snprintf_delta) (d_blocks, 20, MC_(blocks_leaked), old_blocks_leaked, lcp.deltamode));
-      VG_(umsg)("   indirectly lost: %'lu%s bytes in %'lu%s blocks\n",
-                MC_(bytes_indirect), 
-                MC_(snprintf_delta) (d_bytes, 20, MC_(bytes_indirect), old_bytes_indirect, lcp.deltamode),
-                MC_(blocks_indirect),
-                MC_(snprintf_delta) (d_blocks, 20, MC_(blocks_indirect), old_blocks_indirect, lcp.deltamode) );
-      VG_(umsg)("     possibly lost: %'lu%s bytes in %'lu%s blocks\n",
-                MC_(bytes_dubious), 
-                MC_(snprintf_delta) (d_bytes, 20, MC_(bytes_dubious), old_bytes_dubious, lcp.deltamode), 
-                MC_(blocks_dubious),
-                MC_(snprintf_delta) (d_blocks, 20, MC_(blocks_dubious), old_blocks_dubious, lcp.deltamode) );
-      VG_(umsg)("   still reachable: %'lu%s bytes in %'lu%s blocks\n",
-                MC_(bytes_reachable), 
-                MC_(snprintf_delta) (d_bytes, 20, MC_(bytes_reachable), old_bytes_reachable, lcp.deltamode), 
-                MC_(blocks_reachable),
-                MC_(snprintf_delta) (d_blocks, 20, MC_(blocks_reachable), old_blocks_reachable, lcp.deltamode) );
-      VG_(umsg)("        suppressed: %'lu%s bytes in %'lu%s blocks\n",
-                MC_(bytes_suppressed), 
-                MC_(snprintf_delta) (d_bytes, 20, MC_(bytes_suppressed), old_bytes_suppressed, lcp.deltamode), 
-                MC_(blocks_suppressed),
-                MC_(snprintf_delta) (d_blocks, 20, MC_(blocks_suppressed), old_blocks_suppressed, lcp.deltamode) );
-      if (lcp.mode != LC_Full &&
+      VG_(umsg)("   definitely lost: %'lu bytes in %'lu blocks\n",
+                MC_(bytes_leaked), MC_(blocks_leaked) );
+      VG_(umsg)("   indirectly lost: %'lu bytes in %'lu blocks\n",
+                MC_(bytes_indirect), MC_(blocks_indirect) );
+      VG_(umsg)("     possibly lost: %'lu bytes in %'lu blocks\n",
+                MC_(bytes_dubious), MC_(blocks_dubious) );
+      VG_(umsg)("   still reachable: %'lu bytes in %'lu blocks\n",
+                MC_(bytes_reachable), MC_(blocks_reachable) );
+      VG_(umsg)("        suppressed: %'lu bytes in %'lu blocks\n",
+                MC_(bytes_suppressed), MC_(blocks_suppressed) );
+      if (!is_full_check &&
           (MC_(blocks_leaked) + MC_(blocks_indirect) +
            MC_(blocks_dubious) + MC_(blocks_reachable)) > 0) {
-         if (lcp.requested_by_monitor_command)
-            VG_(umsg)("To see details of leaked memory, give 'full' arg to leak_check\n");
-         else
-            VG_(umsg)("Rerun with --leak-check=full to see details "
-                      "of leaked memory\n");
+         VG_(umsg)("Rerun with --leak-check=full to see details "
+                   "of leaked memory\n");
       }
-      if (lcp.mode == LC_Full &&
-          MC_(blocks_reachable) > 0 && !lcp.show_reachable)
+      if (is_full_check &&
+          MC_(blocks_reachable) > 0 && !MC_(clo_show_reachable))
       {
          VG_(umsg)("Reachable blocks (those to which a pointer "
                    "was found) are not shown.\n");
-         if (lcp.requested_by_monitor_command)
-            VG_(umsg)("To see them, add 'reachable any' args to leak_check\n");
-         else
-            VG_(umsg)("To see them, rerun with: --leak-check=full "
-                      "--show-reachable=yes\n");
+         VG_(umsg)("To see them, rerun with: --leak-check=full "
+                   "--show-reachable=yes\n");
       }
       VG_(umsg)("\n");
    }
@@ -1079,26 +929,16 @@ static void print_results(ThreadId tid, LeakCheckParams lcp)
 /*--- Top-level entry point.                               ---*/
 /*------------------------------------------------------------*/
 
-void MC_(detect_memory_leaks) ( ThreadId tid, LeakCheckParams lcp)
+void MC_(detect_memory_leaks) ( ThreadId tid, LeakCheckMode mode )
 {
    Int i, j;
    
-   tl_assert(lcp.mode != LC_Off);
-
-   MC_(detect_memory_leaks_last_delta_mode) = lcp.deltamode;
+   tl_assert(mode != LC_Off);
 
    // Get the chunks, stop if there were none.
    lc_chunks = find_active_chunks(&lc_n_chunks);
    if (lc_n_chunks == 0) {
       tl_assert(lc_chunks == NULL);
-      if (lr_table != NULL) {
-         // forget the previous recorded LossRecords as next leak search will in any case
-         // just create new leaks.
-         // Maybe it would be better to rather call print_result ?
-         // (at least when leak decrease are requested)
-         // This will then output all LossRecords with a size decreasing to 0
-         VG_(OSetGen_Destroy) (lr_table);
-      }
       if (VG_(clo_verbosity) >= 1 && !VG_(clo_xml)) {
          VG_(umsg)("All heap blocks were freed -- no leaks are possible\n");
          VG_(umsg)("\n");
@@ -1166,7 +1006,7 @@ void MC_(detect_memory_leaks) ( ThreadId tid, LeakCheckParams lcp)
 
       } else {
          VG_(umsg)("Block 0x%lx..0x%lx overlaps with block 0x%lx..0x%lx",
-                   start1, end1, start2, end2);
+                   start1, end1, start1, end2);
          VG_(umsg)("This is usually caused by using VALGRIND_MALLOCLIKE_BLOCK");
          VG_(umsg)("in an inappropriate way.");
          tl_assert (0);
@@ -1285,7 +1125,7 @@ void MC_(detect_memory_leaks) ( ThreadId tid, LeakCheckParams lcp)
       }
    }
       
-   print_results( tid, lcp);
+   print_results( tid, ( mode == LC_Full ? True : False ) );
 
    VG_(free) ( lc_chunks );
    VG_(free) ( lc_extras );
@@ -1295,3 +1135,4 @@ void MC_(detect_memory_leaks) ( ThreadId tid, LeakCheckParams lcp)
 /*--------------------------------------------------------------------*/
 /*--- end                                                          ---*/
 /*--------------------------------------------------------------------*/
+

@@ -605,12 +605,7 @@ while (<>)
 
     foreach my $result (@results)
     {
-        if ($result->{type} eq "xmm")
-        {
-            $result->{argnuml} = $argnum++;
-            $result->{argnumh} = $argnum++;
-        }
-        else
+        if ($result->{type} =~ /^(m(8|16|32|64|128)|st|eflags|fpu[cs]w)$/)
         {
             $result->{argnum} = $argnum++;
         }
@@ -620,15 +615,15 @@ while (<>)
     {
         if (defined($arg->{name}))
         {
-            if ($arg->{type} eq "xmm")
-            {
-                $arg->{argnuml} = $argnum++;
-                $arg->{argnumh} = $argnum++;
-            }
-            else
-            {
-                $arg->{argnum} = $argnum++;
-            }
+            $arg->{argnum} = $argnum++;
+        }
+    }
+    
+    foreach my $result (@results)
+    {
+        if ($result->{type} =~ /^(r(8|16|32)|mm|xmm)$/)
+        {
+            $result->{argnum} = $argnum++;
         }
     }
 
@@ -663,8 +658,8 @@ while (<>)
         }
         elsif ($arg->{type} eq "xmm")
         {
-            print qq|         \"movlps %$arg->{argnuml}, %%$arg->{register}\\n\"\n|;
-            print qq|         \"movhps %$arg->{argnumh}, %%$arg->{register}\\n\"\n|;
+            print qq|         \"movlps 0%$arg->{argnum}, %%$arg->{register}\\n\"\n|;
+            print qq|         \"movhps 8%$arg->{argnum}, %%$arg->{register}\\n\"\n|;
         }
         elsif ($arg->{type} eq "st")
         {
@@ -772,8 +767,8 @@ while (<>)
         }
         elsif ($result->{type} eq "xmm")
         {
-            print qq|         \"movlps %%$result->{register}, %$result->{argnuml}\\n\"\n|;
-            print qq|         \"movhps %%$result->{register}, %$result->{argnumh}\\n\"\n|;
+            print qq|         \"movlps %%$result->{register}, 0%$result->{argnum}\\n\"\n|;
+            print qq|         \"movhps %%$result->{register}, 8%$result->{argnum}\\n\"\n|;
         }
         elsif ($result->{type} eq "st")
         {
@@ -822,16 +817,11 @@ while (<>)
 
     foreach my $result (@results)
     {
-        if ($result->{type} eq "xmm")
-        {
-            print qq|$prefix\"=m\" \($result->{name}.uq[0]\), \"=m\" \($result->{name}.uq[1]\)|;
-        }
-        else
+        if ($result->{type} =~ /^(m(8|16|32|64|128)|st|eflags|fpu[cs]w)$/)
         {
             print qq|$prefix\"=m\" \($result->{name}\)|;
+            $prefix = ", ";
         }
-
-        $prefix = ", ";
     }
 
     print qq|\n|;
@@ -842,15 +832,16 @@ while (<>)
     {
         if (defined($arg->{name}))
         {
-            if ($arg->{type} eq "xmm")
-            {
-                print qq|$prefix\"m\" \($arg->{name}.uq[0]\), \"m\" \($arg->{name}.uq[1]\)|;
-            }
-            else
-            {
-                print qq|$prefix\"m\" \($arg->{name}\)|;
-            }
-
+            print qq|$prefix\"m\" \($arg->{name}\)|;
+            $prefix = ", ";
+        }
+    }
+    
+    foreach my $result (@results)
+    {
+        if ($result->{type} =~ /^(r(8|16|32)|mm|xmm)$/)
+        {
+            print qq|$prefix\"m\" \($result->{name}\)|;
             $prefix = ", ";
         }
     }

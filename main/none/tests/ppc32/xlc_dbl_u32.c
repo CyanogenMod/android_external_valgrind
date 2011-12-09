@@ -37,7 +37,6 @@ asm("\n"
 "        .long 0\n"
 "        .long 0x00000000\n"
 "        .long 0x00000000\n"
-".previous\n"
 "\n"
 "        .section        \".rodata\",\"a\"\n"
 "        .align  3\n"
@@ -49,7 +48,6 @@ asm("\n"
 "        .long 0x3fe66666\n"
 "        .long 0x66666666\n"
 "        .long 0x25640a00\n"
-".previous\n"
 );
 
 int main (int argc, char** argv)

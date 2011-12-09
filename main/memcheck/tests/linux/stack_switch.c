@@ -1,6 +1,5 @@
 #define _XOPEN_SOURCE 600
 #define _BSD_SOURCE
-#define _GNU_SOURCE
 
 #include <stdio.h>
 
@@ -33,7 +32,7 @@ static int thread_main(void *arg)
 int main(int argc, char **argv)
 {
    void *stack;
-   int stackid __attribute__((unused));
+   int stackid;
    pid_t pid;
 
    /* "2*" is a ppc64-linux hack */

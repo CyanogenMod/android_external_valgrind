@@ -7,8 +7,8 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2005-2011 Nicholas Nethercote <njn@valgrind.org>
-   Copyright (C) 2005-2011 Cerion Armour-Brown <cerion@open-works.co.uk>
+   Copyright (C) 2005-2010 Nicholas Nethercote <njn@valgrind.org>
+   Copyright (C) 2005-2010 Cerion Armour-Brown <cerion@open-works.co.uk>
 
    This program is free software; you can redistribute it and/or
    modify it under the terms of the GNU General Public License as
@@ -33,7 +33,6 @@
 #include "pub_core_basics.h"
 #include "pub_core_vki.h"
 #include "pub_core_vkiscnums.h"
-#include "pub_core_libcsetjmp.h"    // to keep _threadstate.h happy
 #include "pub_core_threadstate.h"
 #include "pub_core_aspacemgr.h"
 #include "pub_core_debuglog.h"
@@ -419,7 +418,6 @@ DECL_TEMPLATE(ppc32_linux, sys_ipc);
 DECL_TEMPLATE(ppc32_linux, sys_clone);
 DECL_TEMPLATE(ppc32_linux, sys_sigreturn);
 DECL_TEMPLATE(ppc32_linux, sys_rt_sigreturn);
-DECL_TEMPLATE(ppc32_linux, sys_sigsuspend);
 DECL_TEMPLATE(ppc32_linux, sys_spu_create);
 DECL_TEMPLATE(ppc32_linux, sys_spu_run);
 
@@ -1061,7 +1059,7 @@ PRE(sys_sigreturn)
    /* See comments on PRE(sys_rt_sigreturn) in syswrap-amd64-linux.c for
       an explanation of what follows. */
 
-   //ThreadState* tst;
+   ThreadState* tst;
    PRINT("sys_sigreturn ( )");
 
    vg_assert(VG_(is_valid_tid)(tid));
@@ -1070,7 +1068,7 @@ PRE(sys_sigreturn)
 
    ///* Adjust esp to point to start of frame; skip back up over
    //   sigreturn sequence's "popl %eax" and handler ret addr */
-   //tst = VG_(get_ThreadState)(tid);
+   tst = VG_(get_ThreadState)(tid);
    //tst->arch.vex.guest_ESP -= sizeof(Addr)+sizeof(Word);
    // Should we do something equivalent on ppc32?  Who knows.
 
@@ -1096,7 +1094,7 @@ PRE(sys_rt_sigreturn)
    /* See comments on PRE(sys_rt_sigreturn) in syswrap-amd64-linux.c for
       an explanation of what follows. */
 
-   //ThreadState* tst;
+   ThreadState* tst;
    PRINT("rt_sigreturn ( )");
 
    vg_assert(VG_(is_valid_tid)(tid));
@@ -1105,7 +1103,7 @@ PRE(sys_rt_sigreturn)
 
    ///* Adjust esp to point to start of frame; skip back up over handler
    //   ret addr */
-   //tst = VG_(get_ThreadState)(tid);
+   tst = VG_(get_ThreadState)(tid);
    //tst->arch.vex.guest_ESP -= sizeof(Addr);
    // Should we do something equivalent on ppc32?  Who knows.
 
@@ -1391,22 +1389,6 @@ PRE(sys_rt_sigreturn)
 //..    }
 //.. }
 
-/* NB: This is an almost identical clone of versions for x86-linux and
-   arm-linux, which are themselves literally identical. */
-PRE(sys_sigsuspend)
-{
-   /* The C library interface to sigsuspend just takes a pointer to
-      a signal mask but this system call only takes the first word of
-      the signal mask as an argument so only 32 signals are supported.
-     
-      In fact glibc normally uses rt_sigsuspend if it is available as
-      that takes a pointer to the signal mask so supports more signals.
-    */
-   *flags |= SfMayBlock;
-   PRINT("sys_sigsuspend ( %ld )", ARG1 );
-   PRE_REG_READ1(int, "sigsuspend", vki_old_sigset_t, mask);
-}
-
 PRE(sys_spu_create)
 {
    PRE_MEM_RASCIIZ("stat64(filename)", ARG1);
@@ -1535,7 +1517,7 @@ static SyscallTableEntry syscall_table[] = {
 //.. 
    GENX_(__NR_setreuid,          sys_setreuid),          // 70
    GENX_(__NR_setregid,          sys_setregid),          // 71
-   PLAX_(__NR_sigsuspend,        sys_sigsuspend),        // 72
+   LINX_(__NR_sigsuspend,        sys_sigsuspend),        // 72
    LINXY(__NR_sigpending,        sys_sigpending),        // 73
 //..    //   (__NR_sethostname,       sys_sethostname),       // 74 */*
 //.. 
@@ -1788,9 +1770,6 @@ static SyscallTableEntry syscall_table[] = {
    PLAXY(__NR_spu_run,            sys_spu_run),               // 278
    PLAX_(__NR_spu_create,         sys_spu_create),            // 279
 
-   LINX_(__NR_pselect6,          sys_pselect6),          // 280
-   LINXY(__NR_ppoll,             sys_ppoll),             // 281
-
    LINXY(__NR_openat,            sys_openat),            // 286
    LINX_(__NR_mkdirat,           sys_mkdirat),           // 287
    LINX_(__NR_mknodat,           sys_mknodat),           // 288
@@ -1824,7 +1803,7 @@ static SyscallTableEntry syscall_table[] = {
    LINXY(__NR_dup3,              sys_dup3),             // 316
    LINXY(__NR_pipe2,             sys_pipe2),            // 317
    LINXY(__NR_inotify_init1,     sys_inotify_init1),    // 318
-   LINXY(__NR_perf_event_open,   sys_perf_event_open),  // 319
+   LINXY(__NR_perf_counter_open, sys_perf_counter_open),// 319
    LINXY(__NR_preadv,            sys_preadv),           // 320
    LINX_(__NR_pwritev,           sys_pwritev),          // 321
    LINXY(__NR_rt_tgsigqueueinfo, sys_rt_tgsigqueueinfo) // 322

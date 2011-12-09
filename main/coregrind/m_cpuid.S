@@ -7,7 +7,7 @@
   This file is part of Valgrind, a dynamic binary instrumentation
   framework.
 
-  Copyright (C) 2000-2011 Julian Seward 
+  Copyright (C) 2000-2010 Julian Seward 
      jseward@acm.org
 
   This program is free software; you can redistribute it and/or
@@ -66,7 +66,7 @@
 #endif
 
 /*
-    void VG_(cpuid)(UInt eax, UInt ecx,
+    void VG_(cpuid)(UInt eax,
                     UInt* eax_ret, UInt* ebx_ret, UInt* ecx_ret, UInt* edx_ret)
  */
 #if defined(VGA_x86)
@@ -81,24 +81,23 @@
         pushl   %edx
         pushl   %esi
         movl    8(%ebp), %eax
-        movl    12(%ebp), %ecx
         cpuid
-        movl    16(%ebp), %esi
+        movl    12(%ebp), %esi
         testl   %esi, %esi
         jz      1f
         movl    %eax, (%esi)
     1:
-        movl    20(%ebp), %esi
+        movl    16(%ebp), %esi
         testl   %esi, %esi
         jz      2f
         movl    %ebx, (%esi)
     2:
-        movl    24(%ebp), %esi
+        movl    20(%ebp), %esi
         testl   %esi, %esi
         jz      3f
         movl    %ecx, (%esi)
     3:
-        movl    28(%ebp), %esi
+        movl    24(%ebp), %esi
         testl   %esi, %esi
         jz      4f
         movl    %edx, (%esi)
@@ -119,14 +118,13 @@
         movq    %rsp, %rbp
         pushq   %rbx
         movl    %edi, %eax
-        movq    %rcx, %rdi
-        movl    %esi, %ecx
-        movq    %rdx, %rsi
+        movq    %rdx, %rdi
+        movq    %rcx, %r9
         /*
            eax_ret now in %rsi
            ebx_ret now in %rdi
-           ecx_ret now in %r8
-           edx_ret now in %r9
+           ecx_ret now in %r9
+           edx_ret now in %r8
          */
         cpuid
         testq   %rsi, %rsi
@@ -137,13 +135,13 @@
         jz      2f
         movl    %ebx, (%rdi)
     2:
-        testq   %r8, %r8
-        jz      3f
-        movl    %ecx, (%r8)
-    3:
         testq   %r9, %r9
+        jz      3f
+        movl    %ecx, (%r9)
+    3:
+        testq   %r8, %r8
         jz      4f
-        movl    %edx, (%r9)
+        movl    %edx, (%r8)
     4:
         popq    %rbx
         movq    %rbp, %rsp

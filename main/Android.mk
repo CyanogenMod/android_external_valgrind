@@ -28,11 +28,9 @@ common_cflags := \
 	-DVGA_$(arch)=1 \
 	-DVGO_linux=1 \
 	-DVGP_$(arch)_linux=1 \
-	-DVGPV_$(arch)_linux_android=1 \
 	-DVG_PLATFORM=\"$(arch)-linux\" \
 	-DVG_LIBDIR=\"/system/lib/valgrind\" \
-	-DANDROID_SYMBOLS_DIR=\"/data/local/symbols\" \
-	-DANDROID_HARDWARE_nexus_s
+	-DANDROID_SYMBOLS_DIR=\"/data/local/symbols\"
 
 common_includes := \
 	external/valgrind/main \
@@ -78,8 +76,6 @@ LOCAL_SRC_FILES := \
 	VEX/priv/guest_ppc_toIR.c \
 	VEX/priv/guest_arm_helpers.c \
 	VEX/priv/guest_arm_toIR.c \
-	VEX/priv/guest_s390_helpers.c \
-	VEX/priv/guest_s390_toIR.c \
 	VEX/priv/host_generic_regs.c \
 	VEX/priv/host_generic_simd64.c \
 	VEX/priv/host_generic_simd128.c \
@@ -91,11 +87,7 @@ LOCAL_SRC_FILES := \
 	VEX/priv/host_ppc_defs.c \
 	VEX/priv/host_ppc_isel.c \
 	VEX/priv/host_arm_defs.c \
-	VEX/priv/host_arm_isel.c \
-	VEX/priv/host_s390_defs.c \
-	VEX/priv/host_s390_disasm.c \
-	VEX/priv/host_s390_isel.c
-
+	VEX/priv/host_arm_isel.c
 
 LOCAL_C_INCLUDES := $(common_includes)
 
@@ -115,7 +107,6 @@ LOCAL_MODULE_TAGS := optional
 LOCAL_ARM_MODE := arm
 
 LOCAL_SRC_FILES := \
-	coregrind/link_tool_exe.c \
 	coregrind/m_commandline.c \
 	coregrind/m_clientstate.c \
 	coregrind/m_cpuid.S \
@@ -129,7 +120,6 @@ LOCAL_SRC_FILES := \
 	coregrind/m_libcfile.c \
 	coregrind/m_libcprint.c \
 	coregrind/m_libcproc.c \
-	coregrind/m_libcsetjmp.c \
 	coregrind/m_libcsignal.c \
 	coregrind/m_machine.c \
 	coregrind/m_main.c \
@@ -153,12 +143,12 @@ LOCAL_SRC_FILES := \
 	coregrind/m_wordfm.c \
 	coregrind/m_xarray.c \
 	coregrind/m_aspacehl.c \
-	coregrind/m_start-amd64-darwin.S \
-	coregrind/m_start-x86-darwin.S \
 	coregrind/m_aspacemgr/aspacemgr-common.c \
 	coregrind/m_aspacemgr/aspacemgr-linux.c \
+	coregrind/m_aspacemgr/aspacemgr-aix5.c \
 	coregrind/m_coredump/coredump-elf.c \
 	coregrind/m_coredump/coredump-macho.c \
+	coregrind/m_coredump/coredump-xcoff.c \
 	coregrind/m_debuginfo/misc.c \
 	coregrind/m_debuginfo/d3basics.c \
 	coregrind/m_debuginfo/debuginfo.c \
@@ -167,6 +157,8 @@ LOCAL_SRC_FILES := \
 	coregrind/m_debuginfo/readelf.c \
 	coregrind/m_debuginfo/readmacho.c \
 	coregrind/m_debuginfo/readpdb.c \
+	coregrind/m_debuginfo/readstabs.c \
+	coregrind/m_debuginfo/readxcoff.c \
 	coregrind/m_debuginfo/storage.c \
 	coregrind/m_debuginfo/tytypes.c \
 	coregrind/m_demangle/cp-demangle.c \
@@ -179,9 +171,12 @@ LOCAL_SRC_FILES := \
 	coregrind/m_dispatch/dispatch-ppc32-linux.S \
 	coregrind/m_dispatch/dispatch-ppc64-linux.S \
 	coregrind/m_dispatch/dispatch-arm-linux.S \
+	coregrind/m_dispatch/dispatch-ppc32-aix5.S \
+	coregrind/m_dispatch/dispatch-ppc64-aix5.S \
 	coregrind/m_dispatch/dispatch-x86-darwin.S \
 	coregrind/m_dispatch/dispatch-amd64-darwin.S \
 	coregrind/m_initimg/initimg-linux.c \
+	coregrind/m_initimg/initimg-aix5.c \
 	coregrind/m_initimg/initimg-darwin.c \
 	coregrind/m_initimg/initimg-pathscan.c \
 	coregrind/m_mach/mach_basics.c \
@@ -196,51 +191,38 @@ LOCAL_SRC_FILES := \
 	coregrind/m_sigframe/sigframe-ppc32-linux.c \
 	coregrind/m_sigframe/sigframe-ppc64-linux.c \
 	coregrind/m_sigframe/sigframe-arm-linux.c \
+	coregrind/m_sigframe/sigframe-ppc32-aix5.c \
+	coregrind/m_sigframe/sigframe-ppc64-aix5.c \
 	coregrind/m_sigframe/sigframe-x86-darwin.c \
 	coregrind/m_sigframe/sigframe-amd64-darwin.c \
-	coregrind/m_sigframe/sigframe-s390x-linux.c \
 	coregrind/m_syswrap/syscall-x86-linux.S \
 	coregrind/m_syswrap/syscall-amd64-linux.S \
 	coregrind/m_syswrap/syscall-ppc32-linux.S \
 	coregrind/m_syswrap/syscall-ppc64-linux.S \
 	coregrind/m_syswrap/syscall-arm-linux.S \
+	coregrind/m_syswrap/syscall-ppc32-aix5.S \
+	coregrind/m_syswrap/syscall-ppc64-aix5.S \
 	coregrind/m_syswrap/syscall-x86-darwin.S \
 	coregrind/m_syswrap/syscall-amd64-darwin.S \
-	coregrind/m_syswrap/syscall-s390x-linux.S \
 	coregrind/m_syswrap/syswrap-main.c \
 	coregrind/m_syswrap/syswrap-generic.c \
 	coregrind/m_syswrap/syswrap-linux.c \
 	coregrind/m_syswrap/syswrap-linux-variants.c \
+	coregrind/m_syswrap/syswrap-aix5.c \
 	coregrind/m_syswrap/syswrap-darwin.c \
 	coregrind/m_syswrap/syswrap-x86-linux.c \
 	coregrind/m_syswrap/syswrap-amd64-linux.c \
 	coregrind/m_syswrap/syswrap-ppc32-linux.c \
 	coregrind/m_syswrap/syswrap-ppc64-linux.c \
 	coregrind/m_syswrap/syswrap-arm-linux.c \
+	coregrind/m_syswrap/syswrap-ppc32-aix5.c \
+	coregrind/m_syswrap/syswrap-ppc64-aix5.c \
 	coregrind/m_syswrap/syswrap-x86-darwin.c \
 	coregrind/m_syswrap/syswrap-amd64-darwin.c \
-	coregrind/m_syswrap/syswrap-s390x-linux.c \
 	coregrind/m_ume/elf.c \
 	coregrind/m_ume/macho.c \
 	coregrind/m_ume/main.c \
-	coregrind/m_ume/script.c \
-  coregrind/vgdb.c \
-	coregrind/m_gdbserver/inferiors.c \
-	coregrind/m_gdbserver/m_gdbserver.c \
-	coregrind/m_gdbserver/regcache.c \
-	coregrind/m_gdbserver/remote-utils.c \
-	coregrind/m_gdbserver/server.c \
-	coregrind/m_gdbserver/signals.c \
-	coregrind/m_gdbserver/target.c \
-	coregrind/m_gdbserver/utils.c \
-	coregrind/m_gdbserver/valgrind-low-amd64.c \
-	coregrind/m_gdbserver/valgrind-low-arm.c \
-	coregrind/m_gdbserver/valgrind-low.c \
-	coregrind/m_gdbserver/valgrind-low-ppc32.c \
-	coregrind/m_gdbserver/valgrind-low-ppc64.c \
-	coregrind/m_gdbserver/valgrind-low-s390x.c \
-	coregrind/m_gdbserver/valgrind-low-x86.c \
-	coregrind/m_gdbserver/version.c
+	coregrind/m_ume/script.c
 
 LOCAL_C_INCLUDES := $(common_includes)
 
@@ -359,13 +341,11 @@ LOCAL_NO_CRT := true
 LOCAL_SYSTEM_SHARED_LIBRARIES :=
 
 LOCAL_SRC_FILES := \
-	cachegrind/cg-arch.c \
-	cachegrind/cg-arm.c \
 	cachegrind/cg_main.c \
+	cachegrind/cg-x86-amd64.c \
 	cachegrind/cg-ppc32.c \
 	cachegrind/cg-ppc64.c \
-	cachegrind/cg-s390x.c \
-	cachegrind/cg-x86-amd64.c
+	cachegrind/cg-arm.c
 
 LOCAL_C_INCLUDES := $(common_includes)
 
@@ -405,12 +385,10 @@ LOCAL_SRC_FILES := \
 	callgrind/main.c \
 	callgrind/sim.c \
 	callgrind/threads.c \
-	cachegrind/cg-arch.c \
-	cachegrind/cg-arm.c \
+	cachegrind/cg-x86-amd64.c \
 	cachegrind/cg-ppc32.c \
 	cachegrind/cg-ppc64.c \
-	cachegrind/cg-s390x.c \
-	cachegrind/cg-x86-amd64.c
+	cachegrind/cg-arm.c
 
 LOCAL_C_INCLUDES := $(common_includes) \
 	external/valgrind/main/cachegrind

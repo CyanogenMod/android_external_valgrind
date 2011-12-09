@@ -6,7 +6,7 @@
 /*
    This file is part of Callgrind, a Valgrind tool for call tracing.
 
-   Copyright (C) 2002-2011, Josef Weidendorfer (Josef.Weidendorfer@gmx.de)
+   Copyright (C) 2002-2010, Josef Weidendorfer (Josef.Weidendorfer@gmx.de)
 
    This program is free software; you can redistribute it and/or
    modify it under the terms of the GNU General Public License as
@@ -29,8 +29,8 @@
 #include "config.h"
 #include "global.h"
 
-#include "pub_tool_threadstate.h"
-#include "pub_tool_libcfile.h"
+#include <pub_tool_threadstate.h>
+#include <pub_tool_libcfile.h>
 
 
 /* Dump Part Counter */
@@ -336,8 +336,6 @@ static Bool print_fn_pos(int fd, FnPos* last, BBCC* bbcc)
 {
     Bool res = False;
 
-    CLG_ASSERT(bbcc && bbcc->cxt);
-
     CLG_DEBUGIF(3) {
 	CLG_DEBUG(2, "+ print_fn_pos: ");
 	CLG_(print_cxt)(16, bbcc->cxt, bbcc->rec_index);
@@ -353,9 +351,9 @@ static Bool print_fn_pos(int fd, FnPos* last, BBCC* bbcc)
 	}
 	
 	if (last->cxt != bbcc->cxt) {
-	    fn_node* last_from = (last->cxt && last->cxt->size >1) ?
+	    fn_node* last_from = (last->cxt && last->cxt->size>1) ?
 				 last->cxt->fn[1] : 0;
-	    fn_node* curr_from = (bbcc->cxt->size >1) ?
+	    fn_node* curr_from = (bbcc->cxt && bbcc->cxt->size>1) ?
 				 bbcc->cxt->fn[1] : 0;
 	    if (curr_from == 0) {
 		if (last_from != 0) {
@@ -661,15 +659,13 @@ static void fprint_jcc(Int fd, jCC* jcc, AddrPos* curr, AddrPos* last, ULong eco
       CLG_(print_jcc)(-10, jcc);
     }
 
-    CLG_ASSERT(jcc->to !=0);
-    CLG_ASSERT(jcc->from !=0);
-    
     if (!get_debug_pos(jcc->to, bb_addr(jcc->to->bb), &target)) {
 	/* if we don't have debug info, don't switch to file "???" */
 	target.file = last->file;
     }
 
-    if ((jcc->jmpkind == JmpCond) || (jcc->jmpkind == Ijk_Boring)) {
+    if (jcc->from &&
+	(jcc->jmpkind == JmpCond || jcc->jmpkind == Ijk_Boring)) {
 	    
       /* this is a JCC for a followed conditional or boring jump. */
       CLG_ASSERT(CLG_(is_zero_cost)( CLG_(sets).full, jcc->cost));
@@ -724,6 +720,8 @@ static void fprint_jcc(Int fd, jCC* jcc, AddrPos* curr, AddrPos* last, ULong eco
 	return;
     }
 
+    CLG_ASSERT(jcc->to !=0);
+    
     file = jcc->to->cxt->fn[0]->file;
     obj  = jcc->to->bb->obj;
     
@@ -1637,19 +1635,15 @@ void CLG_(dump_profile)(Char* trigger, Bool only_current_thread)
      VG_(message)(Vg_DebugMsg, "Dumping done.\n");
 }
 
-/* Copy command to cmd buffer. We want to original command line
- * (can change at runtime)
- */
+/* copy command to cmd buffer (could change) */
 static
 void init_cmdbuf(void)
 {
   Int i,j,size = 0;
   HChar* argv;
 
-  if (VG_(args_the_exename)) {
-      CLG_ASSERT( VG_(strlen)( VG_(args_the_exename) ) < BUF_LEN-1);
+  if (VG_(args_the_exename))
       size = VG_(sprintf)(cmdbuf, " %s", VG_(args_the_exename));
-  }
 
   for(i = 0; i < VG_(sizeXA)( VG_(args_for_client) ); i++) {
       argv = * (HChar**) VG_(indexXA)( VG_(args_for_client), i );
@@ -1659,7 +1653,7 @@ void init_cmdbuf(void)
 	  if (size < BUF_LEN) cmdbuf[size++] = argv[j];
   }
 
-  if (size >= BUF_LEN) size = BUF_LEN-1;
+  if (size == BUF_LEN) size--;
   cmdbuf[size] = 0;
 }
 

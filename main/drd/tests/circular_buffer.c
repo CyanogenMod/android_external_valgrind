@@ -59,14 +59,8 @@ int fetch_and_add(int* p, int i)
 
 static sem_t* create_semaphore(const char* const name, const int value)
 {
-#ifdef VGO_darwin
-  char name_and_pid[32];
-  snprintf(name_and_pid, sizeof(name_and_pid), "%s-%d", name, getpid());
-  sem_t* p = sem_open(name_and_pid, O_CREAT | O_EXCL, 0600, value);
-  if (p == SEM_FAILED) {
-    perror("sem_open");
-    return NULL;
-  }
+#ifdef __APPLE__
+  sem_t* p = sem_open(name, O_CREAT, 0600, value);
   return p;
 #else
   sem_t* p = malloc(sizeof(*p));
@@ -78,7 +72,7 @@ static sem_t* create_semaphore(const char* const name, const int value)
 
 static void destroy_semaphore(const char* const name, sem_t* p)
 {
-#ifdef VGO_darwin
+#ifdef __APPLE__
   sem_close(p);
   sem_unlink(name);
 #else

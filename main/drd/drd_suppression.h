@@ -1,4 +1,4 @@
-/* -*- mode: C; c-basic-offset: 3; indent-tabs-mode: nil; -*- */
+/* -*- mode: C; c-basic-offset: 3; -*- */
 #ifndef __PUB_CORE_DRD_H
 #define __PUB_CORE_DRD_H
 

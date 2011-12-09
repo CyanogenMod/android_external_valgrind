@@ -6,10 +6,3 @@
    fun:(below main)
 }
 
-{
-   <insert a suppression name here>
-   Memcheck:Jump
-   obj:*
-   fun:main
-}
-

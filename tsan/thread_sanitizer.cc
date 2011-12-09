@@ -36,7 +36,6 @@
 #include "suppressions.h"
 #include "ignore.h"
 #include "ts_lock.h"
-#include "ts_atomic_int.h"
 #include "dense_multimap.h"
 #include <stdarg.h>
 // -------- Constants --------------- {{{1
@@ -92,10 +91,6 @@ bool debug_shadow_stack = false;
 bool debug_happens_before = false;
 bool debug_cache = false;
 bool debug_race_verifier = false;
-bool debug_atomic = false;
-
-#define PrintfIf(flag, ...) \
-  do { if ((flag)) Printf(__VA_ARGS__); } while ((void)0, 0)
 
 // -------- TIL --------------- {{{1
 // ThreadSanitizer Internal lock (scoped).
@@ -294,9 +289,9 @@ const char *c_default = "";
 
 
 // -------- Forward decls ------ {{{1
-static void ForgetAllStateAndStartOver(TSanThread *thr, const char *reason);
-static void FlushStateIfOutOfSegments(TSanThread *thr);
-static int32_t raw_tid(TSanThread *t);
+static void ForgetAllStateAndStartOver(Thread *thr, const char *reason);
+static void FlushStateIfOutOfSegments(Thread *thr);
+static int32_t raw_tid(Thread *t);
 // -------- Simple Cache ------ {{{1
 #include "ts_simple_cache.h"
 // -------- PairCache & IntPairToIntCache ------ {{{1
@@ -949,7 +944,7 @@ class LockSet {
     const LSSet &set2 = Get(lsid2);
 
     FixedArray<LID> intersection(min(set1.size(), set2.size()));
-    LID *end = set_intersection(set1.begin(), set1.end(),
+    LID *end = std::set_intersection(set1.begin(), set1.end(),
                             set2.begin(), set2.end(),
                             intersection.begin());
     DCHECK(!cache_hit || (ret == (end == intersection.begin())));
@@ -1247,17 +1242,6 @@ class VTS {
     return res;
   }
 
-  int32_t clk(TID tid) const {
-    // TODO(dvyukov): this function is sub-optimal,
-    // we only need thread's own clock.
-    for (size_t i = 0; i < size_; i++) {
-      if (arr_[i].tid == tid.raw()) {
-        return arr_[i].clk;
-      }
-    }
-    return 0;
-  }
-
   static INLINE void FlushHBCache() {
     hb_cache_->Flush();
   }
@@ -1455,54 +1439,6 @@ int32_t VTS::uniq_id_counter_;
 VTS::HBCache *VTS::hb_cache_;
 FreeList **VTS::free_lists_;
 
-
-// This class is somewhat similar to VTS,
-// but it's mutable, not reference counted and not sorted.
-class VectorClock {
- public:
-  VectorClock()
-      : size_(),
-        clock_()
-  {
-  }
-
-  void reset() {
-    free(clock_);
-    size_ = 0;
-    clock_ = NULL;
-  }
-
-  int32_t clock(TID tid) const {
-    for (size_t i = 0; i != size_; i += 1) {
-      if (clock_[i].tid == tid.raw()) {
-        return clock_[i].clk;
-      }
-    }
-    return 0;
-  }
-
-  void update(TID tid, int32_t clk) {
-    for (size_t i = 0; i != size_; i += 1) {
-      if (clock_[i].tid == tid.raw()) {
-        clock_[i].clk = clk;
-        return;
-      }
-    }
-    size_ += 1;
-    clock_ = (TS*)realloc(clock_, size_ * sizeof(TS));
-    clock_[size_ - 1].tid = tid.raw();
-    clock_[size_ - 1].clk = clk;
-  }
-
- private:
-  struct TS {
-    int32_t tid;
-    int32_t clk;
-  };
-
-  size_t    size_;
-  TS*       clock_;
-};
 
 
 // -------- Mask -------------------- {{{1
@@ -1947,12 +1883,10 @@ class Segment {
     const VTS *vts_a = seg_a->vts();
     const VTS *vts_b = seg_b->vts();
     res = VTS::HappensBeforeCached(vts_a, vts_b);
-#if 0
-    if (DEBUG_MODE) {
+    if (0 && DEBUG_MODE) {
       Printf("HB = %d\n  %s\n  %s\n", res,
            vts_a->ToString().c_str(), vts_b->ToString().c_str());
     }
-#endif
     return res;
   }
 
@@ -2123,7 +2057,6 @@ class SegmentSet {
   }
 
   static void INLINE Ref(SSID ssid, const char *where) {
-    AssertTILHeld(); // The reference counting logic below is not thread-safe
     DCHECK(ssid.valid());
     if (ssid.IsSingleton()) {
       Segment::Ref(ssid.GetSingleton(), where);
@@ -2136,7 +2069,6 @@ class SegmentSet {
   }
 
   static void INLINE Unref(SSID ssid, const char *where) {
-    AssertTILHeld(); // The reference counting logic below is not thread-safe
     DCHECK(ssid.valid());
     if (ssid.IsSingleton()) {
       Segment::Unref(ssid.GetSingleton(), where);
@@ -3009,10 +2941,6 @@ class CacheLine {
   uintptr_t tag() { return tag_; }
 
   void DebugTrace(uintptr_t off, const char *where_str, int where_int) {
-    (void)off;
-    (void)where_str;
-    (void)where_int;
-#if 0
     if (DEBUG_MODE && tag() == G_flags->trace_addr) {
       uintptr_t off8 = off & ~7;
       Printf("CacheLine %p, off=%ld off8=%ld gr=%d "
@@ -3030,7 +2958,6 @@ class CacheLine {
              where_str, where_int
              );
     }
-#endif
   }
 
   // Add a new shadow value to a place where there was no shadow value before.
@@ -3278,6 +3205,63 @@ uintptr_t GetCacheLinesForRange(uintptr_t a, uintptr_t b,
 }
 
 
+
+// -------- DirectMapCacheForRange -------------- {{{1
+// Fast cache which stores cache lines for memory in range [kMin, kMax).
+// The simplest way to force a program to allocate memory in first 2G
+// is to set MALLOC_MMAP_MAX_=0 (works with regular malloc on linux).
+
+#ifdef TS_DIRECT_MAP
+
+template<size_t kMin, size_t kMax>
+class DirectMapCacheForRange {
+ public:
+  DirectMapCacheForRange() {
+    Report("INFO: Allocating %ldMb for fast cache\n", sizeof(*this) >> 20);
+    memset(cache_, 0, sizeof(cache_));
+  }
+
+  INLINE bool AddressIsInRange(uintptr_t a) {
+    return a >= kMin && a < kMax;
+  }
+
+  INLINE CacheLine *GetLine(uintptr_t a, bool create_new_if_need) {
+    CHECK(AddressIsInRange(a));
+    uintptr_t cli = (a - kMin) >> CacheLine::kLineSizeBits;
+    CHECK(cli < kCacheSize);
+    CacheLine **cache_line_p = &cache_[cli];
+    if (*cache_line_p == NULL) {
+      if (create_new_if_need == false) return NULL;
+      AssertTILHeld();
+      uintptr_t tag = CacheLine::ComputeTag(a);
+      *cache_line_p = CacheLine::CreateNewCacheLine(tag);
+    }
+    DCHECK(*cache_line_p);
+    return *cache_line_p;
+  }
+ private:
+  enum { kRangeSize = kMax - kMin };
+  enum { kCacheSize = kRangeSize / CacheLine::kLineSize };
+  CacheLine *cache_[kCacheSize];
+};
+
+#else
+
+template<size_t kMin, size_t kMax>
+class DirectMapCacheForRange {
+ public:
+  INLINE bool AddressIsInRange(uintptr_t a) {
+    return false;
+  }
+
+  INLINE CacheLine *GetLine(uintptr_t a, bool create_new_if_need) {
+    CHECK(AddressIsInRange(a));
+    return NULL;
+  }
+};
+
+#endif
+
 // -------- Cache ------------------ {{{1
 class Cache {
  public:
@@ -3299,9 +3283,16 @@ class Cache {
     return kLineIsLocked();
   }
 
+  INLINE bool IsInDirectCache(uintptr_t a) {
+    return direct_cache_.AddressIsInRange(a);
+  }
+
   // Try to get a CacheLine for exclusive use.
   // May return NULL or kLineIsLocked.
-  INLINE CacheLine *TryAcquireLine(TSanThread *thr, uintptr_t a, int call_site) {
+  INLINE CacheLine *TryAcquireLine(Thread *thr, uintptr_t a, int call_site) {
+    if (IsInDirectCache(a)) {
+      return direct_cache_.GetLine(a, false);
+    }
     uintptr_t cli = ComputeCacheLineIndexInCache(a);
     CacheLine **addr = &lines_[cli];
     CacheLine *res = (CacheLine*)AtomicExchange(
@@ -3320,39 +3311,35 @@ class Cache {
     return res;
   }
 
-  INLINE CacheLine *AcquireLine(TSanThread *thr, uintptr_t a, int call_site) {
+  INLINE CacheLine *AcquireLine(Thread *thr, uintptr_t a, int call_site) {
+    CHECK(!IsInDirectCache(a));
     CacheLine *line = NULL;
     int iter = 0;
     const int max_iter = 1 << 30;
-    for (;;) {
+    do {
       line = TryAcquireLine(thr, a, call_site);
-      if (line != kLineIsLocked())
-        break;
       iter++;
-      if ((iter % (1 << 6)) == 0) {
+      if ((iter % (1 << 12)) == 0) {
         YIELD();
         G_stats->try_acquire_line_spin++;
-        if (DEBUG_MODE && debug_cache && ((iter & (iter - 1)) == 0)) {
+        if (((iter & (iter - 1)) == 0)) {
           Printf("T%d %s a=%p iter=%d\n", raw_tid(thr), __FUNCTION__, a, iter);
         }
-      } else {
-        for (int active_spin = 0; active_spin != 10; active_spin += 1) {
-          PROCESSOR_YIELD();
-        }
       }
-      if (DEBUG_MODE && debug_cache && iter == max_iter) {
+      if (iter == max_iter) {
         Printf("Failed to acquire a cache line: T%d a=%p site=%d\n",
                raw_tid(thr), a, call_site);
         CHECK(iter < max_iter);
       }
-    }
+    } while (line == kLineIsLocked());
     DCHECK(lines_[ComputeCacheLineIndexInCache(a)] == TidMagic(raw_tid(thr)));
     return line;
   }
 
   // Release a CacheLine from exclusive use.
-  INLINE void ReleaseLine(TSanThread *thr, uintptr_t a, CacheLine *line, int call_site) {
+  INLINE void ReleaseLine(Thread *thr, uintptr_t a, CacheLine *line, int call_site) {
     if (TS_SERIALIZED) return;
+    if (IsInDirectCache(a)) return;
     DCHECK(line != kLineIsLocked());
     uintptr_t cli = ComputeCacheLineIndexInCache(a);
     DCHECK(line == NULL ||
@@ -3371,7 +3358,7 @@ class Cache {
     }
   }
 
-  void AcquireAllLines(TSanThread *thr) {
+  void AcquireAllLines(Thread *thr) {
     CHECK(TS_SERIALIZED == 0);
     for (size_t i = 0; i < (size_t)kNumLines; i++) {
       uintptr_t tag = i << CacheLine::kLineSizeBits;
@@ -3385,13 +3372,17 @@ class Cache {
   // concurrently w/o a lock.
   // Every call to GetLine() which returns non-null line
   // should be followed by a call to ReleaseLine().
-  INLINE CacheLine *GetLine(TSanThread *thr, uintptr_t a, bool create_new_if_need, int call_site) {
+  INLINE CacheLine *GetLine(Thread *thr, uintptr_t a, bool create_new_if_need, int call_site) {
     uintptr_t tag = CacheLine::ComputeTag(a);
     DCHECK(tag <= a);
     DCHECK(tag + CacheLine::kLineSize > a);
     uintptr_t cli = ComputeCacheLineIndexInCache(a);
     CacheLine *res = NULL;
     CacheLine *line = NULL;
+
+    if (IsInDirectCache(a)) {
+      return direct_cache_.GetLine(a, create_new_if_need);
+    }
 
     if (create_new_if_need == false && lines_[cli] == 0) {
       // There is no such line in the cache, nor should it be in the storage.
@@ -3425,14 +3416,14 @@ class Cache {
     return res;
   }
 
-  INLINE CacheLine *GetLineOrCreateNew(TSanThread *thr, uintptr_t a, int call_site) {
+  INLINE CacheLine *GetLineOrCreateNew(Thread *thr, uintptr_t a, int call_site) {
     return GetLine(thr, a, true, call_site);
   }
-  INLINE CacheLine *GetLineIfExists(TSanThread *thr, uintptr_t a, int call_site) {
+  INLINE CacheLine *GetLineIfExists(Thread *thr, uintptr_t a, int call_site) {
     return GetLine(thr, a, false, call_site);
   }
 
-  void ForgetAllState(TSanThread *thr) {
+  void ForgetAllState(Thread *thr) {
     for (int i = 0; i < kNumLines; i++) {
       if (TS_SERIALIZED == 0) CHECK(LineIsNullOrLocked(lines_[i]));
       lines_[i] = NULL;
@@ -3517,13 +3508,12 @@ class Cache {
     return (addr >> CacheLine::kLineSizeBits) & (kNumLines - 1);
   }
 
-  NOINLINE CacheLine *WriteBackAndFetch(TSanThread *thr, CacheLine *old_line,
+  NOINLINE CacheLine *WriteBackAndFetch(Thread *thr, CacheLine *old_line,
                                         uintptr_t tag, uintptr_t cli,
                                         bool create_new_if_need) {
     ScopedMallocCostCenter cc("Cache::WriteBackAndFetch");
     CacheLine *res;
     size_t old_storage_size = storage_.size();
-    (void)old_storage_size;
     CacheLine **line_for_this_tag = NULL;
     if (create_new_if_need) {
       line_for_this_tag = &storage_[tag];
@@ -3586,6 +3576,9 @@ class Cache {
 
     if (G_stats->cache_max_storage_size < storage_.size()) {
       G_stats->cache_max_storage_size = storage_.size();
+      // if ((storage_.size() % (1024 * 64)) == 0) {
+      //  PrintStorageStats();
+      // }
     }
 
     return res;
@@ -3601,6 +3594,7 @@ class Cache {
         if (old_line->has_shadow_value().Get(i)) {
           int64_t sval = *reinterpret_cast<int64_t*>(
                             old_line->GetValuePointer(i));
+          // Printf("%p ", sval);
           s.insert(sval);
         }
       }
@@ -3620,6 +3614,8 @@ class Cache {
   // tag => CacheLine
   typedef unordered_map<uintptr_t, CacheLine*> Map;
   Map storage_;
+
+  DirectMapCacheForRange<0,  (1<<30) > direct_cache_;
 };
 
 static  Cache *G_cache;
@@ -3716,7 +3712,7 @@ static void ClearPublishedAttribute(CacheLine *line, Mask mask) {
 }
 
 // Publish range [a, b) in addr's CacheLine with vts.
-static void PublishRangeInOneLine(TSanThread *thr, uintptr_t addr, uintptr_t a,
+static void PublishRangeInOneLine(Thread *thr, uintptr_t addr, uintptr_t a,
                                   uintptr_t b, VTS *vts) {
   ScopedMallocCostCenter cc("PublishRangeInOneLine");
   DCHECK(b <= CacheLine::kLineSize);
@@ -3748,7 +3744,7 @@ static void PublishRangeInOneLine(TSanThread *thr, uintptr_t addr, uintptr_t a,
 }
 
 // Publish memory range [a, b).
-static void PublishRange(TSanThread *thr, uintptr_t a, uintptr_t b, VTS *vts) {
+static void PublishRange(Thread *thr, uintptr_t a, uintptr_t b, VTS *vts) {
   CHECK(a);
   CHECK(a < b);
   if (kDebugPublish)
@@ -3768,6 +3764,73 @@ static void PublishRange(TSanThread *thr, uintptr_t a, uintptr_t b, VTS *vts) {
   }
   if (b > line2_tag) {
     PublishRangeInOneLine(thr, line2_tag, 0, b - line2_tag, vts);
+  }
+}
+
+// -------- Clear Memory State ------------------ {{{1
+static void INLINE UnrefSegmentsInMemoryRange(uintptr_t a, uintptr_t b,
+                                                Mask mask, CacheLine *line) {
+  while (!mask.Empty()) {
+    uintptr_t x = mask.GetSomeSetBit();
+    DCHECK(mask.Get(x));
+    mask.Clear(x);
+    line->GetValuePointer(x)->Unref("Detector::UnrefSegmentsInMemoryRange");
+  }
+}
+
+void INLINE ClearMemoryStateInOneLine(Thread *thr, uintptr_t addr,
+                                      uintptr_t beg, uintptr_t end) {
+  AssertTILHeld();
+  CacheLine *line = G_cache->GetLineIfExists(thr, addr, __LINE__);
+  // CacheLine *line = G_cache->GetLineOrCreateNew(addr, __LINE__);
+  if (line) {
+    DCHECK(beg < CacheLine::kLineSize);
+    DCHECK(end <= CacheLine::kLineSize);
+    DCHECK(beg < end);
+    Mask published = line->published();
+    if (UNLIKELY(!published.Empty())) {
+      Mask mask(published.GetRange(beg, end));
+      ClearPublishedAttribute(line, mask);
+    }
+    Mask old_used = line->ClearRangeAndReturnOldUsed(beg, end);
+    UnrefSegmentsInMemoryRange(beg, end, old_used, line);
+    G_cache->ReleaseLine(thr, addr, line, __LINE__);
+  }
+}
+
+// clear memory state for [a,b)
+void NOINLINE ClearMemoryState(Thread *thr, uintptr_t a, uintptr_t b) {
+  if (a == b) return;
+  CHECK(a < b);
+  uintptr_t line1_tag = 0, line2_tag = 0;
+  uintptr_t single_line_tag = GetCacheLinesForRange(a, b,
+                                                    &line1_tag, &line2_tag);
+  if (single_line_tag) {
+    ClearMemoryStateInOneLine(thr, a, a - single_line_tag,
+                              b - single_line_tag);
+    return;
+  }
+
+  uintptr_t a_tag = CacheLine::ComputeTag(a);
+  ClearMemoryStateInOneLine(thr, a, a - a_tag, CacheLine::kLineSize);
+
+  for (uintptr_t tag_i = line1_tag; tag_i < line2_tag;
+       tag_i += CacheLine::kLineSize) {
+    ClearMemoryStateInOneLine(thr, tag_i, 0, CacheLine::kLineSize);
+  }
+
+  if (b > line2_tag) {
+    ClearMemoryStateInOneLine(thr, line2_tag, 0, b - line2_tag);
+  }
+
+  if (DEBUG_MODE && G_flags->debug_level >= 2) {
+    // Check that we've cleared it. Slow!
+    for (uintptr_t x = a; x < b; x++) {
+      uintptr_t off = CacheLine::ComputeOffset(x);
+      CacheLine *line = G_cache->GetLineOrCreateNew(thr, x, __LINE__);
+      CHECK(!line->has_shadow_value().Get(off));
+      G_cache->ReleaseLine(thr, x, line, __LINE__);
+    }
   }
 }
 
@@ -4017,7 +4080,7 @@ struct RecentSegmentsCache {
 
  private:
   void ShortenQueue(size_t flush_to_length) {
-    while (queue_.size() > flush_to_length) {
+    while(queue_.size() > flush_to_length) {
       SID sid = queue_.back();
       Segment::Unref(sid, "RecentSegmentsCache::ShortenQueue");
       queue_.pop_back();
@@ -4228,12 +4291,12 @@ static void HandleAtomicityRegion(AtomicityRegion *atomicity_region) {
   }
 }
 
-// -------- TSanThread ------------------ {{{1
-struct TSanThread {
+// -------- Thread ------------------ {{{1
+struct Thread {
  public:
   ThreadLocalStats stats;
 
-  TSanThread(TID tid, TID parent_tid, VTS *vts, StackTrace *creation_context,
+  Thread(TID tid, TID parent_tid, VTS *vts, StackTrace *creation_context,
          CallStack *call_stack)
     : is_running_(true),
       tid_(tid),
@@ -4253,13 +4316,9 @@ struct TSanThread {
       vts_at_exit_(NULL),
       call_stack_(call_stack),
       lock_history_(128),
-      recent_segments_cache_(G_flags->recent_segments_cache_size),
-      inside_atomic_op_(),
-      rand_state_((unsigned)(tid.raw() + (uintptr_t)vts
-                      + (uintptr_t)creation_context
-                      + (uintptr_t)call_stack)) {
+      recent_segments_cache_(G_flags->recent_segments_cache_size) {
 
-    NewSegmentWithoutUnrefingOld("TSanThread Creation", vts);
+    NewSegmentWithoutUnrefingOld("Thread Creation", vts);
     ignore_depth_[0] = ignore_depth_[1] = 0;
 
     HandleRtnCall(0, 0, IGNORE_BELOW_RTN_UNKNOWN);
@@ -4289,14 +4348,6 @@ struct TSanThread {
   // STACK
   uintptr_t max_sp() const { return max_sp_; }
   uintptr_t min_sp() const { return min_sp_; }
-
-  unsigned random() {
-    return tsan_prng(&rand_state_);
-  }
-
-  bool ShouldReportRaces() const {
-    return (inside_atomic_op_ == 0);
-  }
 
   void SetStack(uintptr_t stack_min, uintptr_t stack_max) {
     CHECK(stack_min < stack_max);
@@ -4332,7 +4383,7 @@ struct TSanThread {
         Report("INFO: T%d has been created by T%d at this point: {{{\n%s}}}\n",
                tid_.raw(), parent_tid_.raw(),
                creation_context_->ToString().c_str());
-        TSanThread * parent = GetIfExists(parent_tid_);
+        Thread * parent = GetIfExists(parent_tid_);
         CHECK(parent);
         parent->Announce();
       } else {
@@ -4418,14 +4469,13 @@ struct TSanThread {
     CHECK(vts_at_exit_);
     FlushDeadSids();
     ReleaseFreshSids();
-    call_stack_ = NULL;
   }
 
   // Return the TID of the joined child and it's vts
   TID HandleThreadJoinAfter(VTS **vts_at_exit, TID joined_tid) {
     CHECK(joined_tid.raw() > 0);
     CHECK(GetIfExists(joined_tid) != NULL);
-    TSanThread* joined_thread  = TSanThread::Get(joined_tid);
+    Thread* joined_thread  = Thread::Get(joined_tid);
     // Sometimes the joined thread is not truly dead yet.
     // In that case we just take the current vts.
     if (joined_thread->is_running_)
@@ -4448,13 +4498,13 @@ struct TSanThread {
     return INTERNAL_ANNOTATE_UNPROTECTED_READ(n_threads_);
   }
 
-  static TSanThread *GetIfExists(TID tid) {
+  static Thread *GetIfExists(TID tid) {
     if (tid.raw() < NumberOfThreads())
       return Get(tid);
     return NULL;
   }
 
-  static TSanThread *Get(TID tid) {
+  static Thread *Get(TID tid) {
     DCHECK(tid.raw() < NumberOfThreads());
     return all_threads_[tid.raw()];
   }
@@ -4602,13 +4652,6 @@ struct TSanThread {
     lock_era_access_set_[1].Clear();
   }
 
-  // Handles memory access with race reports suppressed.
-  void HandleAtomicMop(uintptr_t a,
-                       uintptr_t pc,
-                       tsan_atomic_op op,
-                       tsan_memory_order mo,
-                       size_t size);
-
   void HandleForgetSignaller(uintptr_t cv) {
     SignallerMap::iterator it = signaller_map_->find(cv);
     if (it != signaller_map_->end()) {
@@ -4650,6 +4693,7 @@ struct TSanThread {
     }
   }
 
+
   void HandleSignal(uintptr_t cv) {
     Signaller *signaller = &(*signaller_map_)[cv];
     if (!signaller->vts) {
@@ -4681,7 +4725,7 @@ struct TSanThread {
       recent_segments_cache_.Clear();
     }
     sid_ = new_sid;
-    Segment::Ref(new_sid, "TSanThread::NewSegmentWithoutUnrefingOld");
+    Segment::Ref(new_sid, "Thread::NewSegmentWithoutUnrefingOld");
 
     if (kSizeOfHistoryStackTrace > 0) {
       FillEmbeddedStackTrace(Segment::embedded_stack_trace(sid()));
@@ -4695,7 +4739,7 @@ struct TSanThread {
   void INLINE NewSegment(const char *call_site, VTS *new_vts) {
     SID old_sid = sid();
     NewSegmentWithoutUnrefingOld(call_site, new_vts);
-    Segment::Unref(old_sid, "TSanThread::NewSegment");
+    Segment::Unref(old_sid, "Thread::NewSegment");
   }
 
   void NewSegmentForLockingEvent() {
@@ -4744,8 +4788,8 @@ struct TSanThread {
     if (match.valid()) {
       // This part is 100% thread-local, no need for locking.
       if (sid_ != match) {
-        Segment::Ref(match, "TSanThread::HandleSblockEnter");
-        this->AddDeadSid(sid_, "TSanThread::HandleSblockEnter");
+        Segment::Ref(match, "Thread::HandleSblockEnter");
+        this->AddDeadSid(sid_, "Thread::HandleSblockEnter");
         sid_ = match;
       }
       if (refill_stack) {
@@ -4760,8 +4804,8 @@ struct TSanThread {
       fresh_sids_.pop_back();
       Segment::SetupFreshSid(fresh_sid, tid(), vts()->Clone(),
                              rd_lockset_, wr_lockset_);
-      this->AddDeadSid(sid_, "TSanThread::HandleSblockEnter-1");
-      Segment::Ref(fresh_sid, "TSanThread::HandleSblockEnter-1");
+      this->AddDeadSid(sid_, "Thread::HandleSblockEnter-1");
+      Segment::Ref(fresh_sid, "Thread::HandleSblockEnter-1");
       sid_ = fresh_sid;
       recent_segments_cache_.Push(sid());
       FillEmbeddedStackTrace(Segment::embedded_stack_trace(sid()));
@@ -4847,7 +4891,7 @@ struct TSanThread {
   }
 
   void HandleChildThreadStart(TID child_tid, VTS **vts, StackTrace **ctx) {
-    TSanThread *parent = this;
+    Thread *parent = this;
     ThreadCreateInfo info;
     if (child_tid_to_create_info_.count(child_tid)) {
       // We already seen THR_CREATE_AFTER, so the info is under child_tid.
@@ -5091,22 +5135,14 @@ struct TSanThread {
 
   static void ForgetAllState() {
     // G_flags->debug_level = 2;
-    for (int i = 0; i < TSanThread::NumberOfThreads(); i++) {
-      TSanThread *thr = Get(TID(i));
+    for (int i = 0; i < Thread::NumberOfThreads(); i++) {
+      Thread *thr = Get(TID(i));
+      if (!thr->is_running()) continue;
+      thr->child_tid_to_create_info_.clear();
       thr->recent_segments_cache_.ForgetAllState();
       thr->sid_ = SID();  // Reset the old SID so we don't try to read its VTS.
       VTS *singleton_vts = VTS::CreateSingleton(TID(i), 2);
-      if (thr->is_running()) {
-        thr->NewSegmentWithoutUnrefingOld("ForgetAllState", singleton_vts);
-      }
-      for (map<TID, ThreadCreateInfo>::iterator j =
-               thr->child_tid_to_create_info_.begin();
-           j != thr->child_tid_to_create_info_.end(); ++j) {
-        ThreadCreateInfo &info = j->second;
-        VTS::Unref(info.vts);
-        // The parent's VTS should neither happen-before nor equal the child's.
-        info.vts = VTS::CreateSingleton(TID(i), 1);
-      }
+      thr->NewSegmentWithoutUnrefingOld("ForgetAllState", singleton_vts);
       if (thr->vts_at_exit_) {
         VTS::Unref(thr->vts_at_exit_);
         thr->vts_at_exit_ = singleton_vts->Clone();
@@ -5119,8 +5155,8 @@ struct TSanThread {
 
   static void InitClassMembers() {
     ScopedMallocCostCenter malloc_cc("InitClassMembers");
-    all_threads_        = new TSanThread*[G_flags->max_n_threads];
-    memset(all_threads_, 0, sizeof(TSanThread*) * G_flags->max_n_threads);
+    all_threads_        = new Thread*[G_flags->max_n_threads];
+    memset(all_threads_, 0, sizeof(Thread*) * G_flags->max_n_threads);
     n_threads_          = 0;
     signaller_map_      = new SignallerMap;
   }
@@ -5229,14 +5265,6 @@ struct TSanThread {
 
   map<TID, ThreadCreateInfo> child_tid_to_create_info_;
 
-  // This var is used to suppress race reports
-  // when handling atomic memory accesses.
-  // That is, an atomic memory access can't race with other accesses,
-  // however plain memory accesses can race with atomic memory accesses.
-  int inside_atomic_op_;
-
-  prng_t rand_state_;
-
   struct Signaller {
     VTS *vts;
   };
@@ -5252,7 +5280,7 @@ struct TSanThread {
   };
 
   // All threads. The main thread has tid 0.
-  static TSanThread **all_threads_;
+  static Thread **all_threads_;
   static int      n_threads_;
 
   // signaller address -> VTS
@@ -5260,159 +5288,16 @@ struct TSanThread {
   static CyclicBarrierMap *cyclic_barrier_map_;
 };
 
-INLINE static int32_t raw_tid(TSanThread *t) {
+INLINE static int32_t raw_tid(Thread *t) {
   return t->tid().raw();
 }
 
-// TSanThread:: static members
-TSanThread                    **TSanThread::all_threads_;
-int                         TSanThread::n_threads_;
-TSanThread::SignallerMap       *TSanThread::signaller_map_;
-TSanThread::CyclicBarrierMap   *TSanThread::cyclic_barrier_map_;
+// Thread:: static members
+Thread                    **Thread::all_threads_;
+int                         Thread::n_threads_;
+Thread::SignallerMap       *Thread::signaller_map_;
+Thread::CyclicBarrierMap   *Thread::cyclic_barrier_map_;
 
-
-// -------- TsanAtomicCore ------------------ {{{1
-
-// Responsible for handling of atomic memory accesses.
-class TsanAtomicCore {
- public:
-  TsanAtomicCore();
-
-  void HandleWrite(TSanThread* thr,
-                   uintptr_t a,
-                   uint64_t v,
-                   uint64_t prev,
-                   bool is_acquire,
-                   bool is_release,
-                   bool is_rmw);
-
-  uint64_t HandleRead(TSanThread* thr,
-                      uintptr_t a,
-                      uint64_t v,
-                      bool is_acquire);
-
-  void ClearMemoryState(uintptr_t a, uintptr_t b);
-
- private:
-  // Represents one value in modification history
-  // of an atomic variable.
-  struct AtomicHistoryEntry {
-    // Actual value.
-    // (atomics of size more than uint64_t are not supported as of now)
-    uint64_t val;
-    // ID of a thread that did the modification.
-    TID tid;
-    // The thread's clock during the modification.
-    int32_t clk;
-    // Vector clock that is acquired by a thread
-    // that loads the value.
-    // Similar to Signaller::vts.
-    VTS* vts;
-  };
-
-  // Descriptor of an atomic variable.
-  struct Atomic {
-    // Number of stored entries in the modification order of the variable.
-    // This represents space-modelling preciseness trade-off.
-    // 4 values should be generally enough.
-    static int32_t const kHistSize = 4;
-    // Current position in the modification order.
-    int32_t hist_pos;
-    // Modification history organized as a circular buffer.
-    // That is, old values are discarded.
-    AtomicHistoryEntry hist [kHistSize];
-    // It's basically a tid->hist_pos map that tracks what threads
-    // had seen what values. It's required to meet the following requirement:
-    // even relaxed loads must not be reordered in a single thread.
-    VectorClock last_seen;
-
-    Atomic();
-    void reset(bool init = false);
-  };
-
-  typedef map<uintptr_t, Atomic> AtomicMap;
-  AtomicMap atomic_map_;
-
-  void AtomicFixHist(Atomic* atomic,
-                     uint64_t prev);
-
-  TsanAtomicCore(TsanAtomicCore const&);
-  void operator=(TsanAtomicCore const&);
-};
-
-
-static TsanAtomicCore* g_atomicCore;
-
-
-// -------- Clear Memory State ------------------ {{{1
-static void INLINE UnrefSegmentsInMemoryRange(uintptr_t a, uintptr_t b,
-                                                Mask mask, CacheLine *line) {
-  while (!mask.Empty()) {
-    uintptr_t x = mask.GetSomeSetBit();
-    DCHECK(mask.Get(x));
-    mask.Clear(x);
-    line->GetValuePointer(x)->Unref("Detector::UnrefSegmentsInMemoryRange");
-  }
-}
-
-void INLINE ClearMemoryStateInOneLine(TSanThread *thr, uintptr_t addr,
-                                      uintptr_t beg, uintptr_t end) {
-  AssertTILHeld();
-  CacheLine *line = G_cache->GetLineIfExists(thr, addr, __LINE__);
-  // CacheLine *line = G_cache->GetLineOrCreateNew(addr, __LINE__);
-  if (line) {
-    DCHECK(beg < CacheLine::kLineSize);
-    DCHECK(end <= CacheLine::kLineSize);
-    DCHECK(beg < end);
-    Mask published = line->published();
-    if (UNLIKELY(!published.Empty())) {
-      Mask mask(published.GetRange(beg, end));
-      ClearPublishedAttribute(line, mask);
-    }
-    Mask old_used = line->ClearRangeAndReturnOldUsed(beg, end);
-    UnrefSegmentsInMemoryRange(beg, end, old_used, line);
-    G_cache->ReleaseLine(thr, addr, line, __LINE__);
-  }
-}
-
-// clear memory state for [a,b)
-void NOINLINE ClearMemoryState(TSanThread *thr, uintptr_t a, uintptr_t b) {
-  if (a == b) return;
-  CHECK(a < b);
-  uintptr_t line1_tag = 0, line2_tag = 0;
-  uintptr_t single_line_tag = GetCacheLinesForRange(a, b,
-                                                    &line1_tag, &line2_tag);
-  if (single_line_tag) {
-    ClearMemoryStateInOneLine(thr, a, a - single_line_tag,
-                              b - single_line_tag);
-    return;
-  }
-
-  uintptr_t a_tag = CacheLine::ComputeTag(a);
-  ClearMemoryStateInOneLine(thr, a, a - a_tag, CacheLine::kLineSize);
-
-  for (uintptr_t tag_i = line1_tag; tag_i < line2_tag;
-       tag_i += CacheLine::kLineSize) {
-    ClearMemoryStateInOneLine(thr, tag_i, 0, CacheLine::kLineSize);
-  }
-
-  if (b > line2_tag) {
-    ClearMemoryStateInOneLine(thr, line2_tag, 0, b - line2_tag);
-  }
-
-  if (DEBUG_MODE && G_flags->debug_level >= 2) {
-    // Check that we've cleared it. Slow!
-    for (uintptr_t x = a; x < b; x++) {
-      uintptr_t off = CacheLine::ComputeOffset(x);
-      (void)off;
-      CacheLine *line = G_cache->GetLineOrCreateNew(thr, x, __LINE__);
-      CHECK(!line->has_shadow_value().Get(off));
-      G_cache->ReleaseLine(thr, x, line, __LINE__);
-    }
-  }
-
-  g_atomicCore->ClearMemoryState(a, b);
-}
 
 // -------- PCQ --------------------- {{{1
 struct PCQ {
@@ -5451,7 +5336,7 @@ static HeapMap<ThreadStackInfo> *G_thread_stack_map;
 // -------- Forget all state -------- {{{1
 // We need to forget all state and start over because we've
 // run out of some resources (most likely, segment IDs).
-static void ForgetAllStateAndStartOver(TSanThread *thr, const char *reason) {
+static void ForgetAllStateAndStartOver(Thread *thr, const char *reason) {
   // This is done under the main lock.
   AssertTILHeld();
   size_t start_time = g_last_flush_time = TimeInMilliSeconds();
@@ -5480,7 +5365,7 @@ static void ForgetAllStateAndStartOver(TSanThread *thr, const char *reason) {
 
   Segment::ForgetAllState();
   SegmentSet::ForgetAllState();
-  TSanThread::ForgetAllState();
+  Thread::ForgetAllState();
   VTS::FlushHBCache();
 
   G_heap_map->Clear();
@@ -5507,7 +5392,7 @@ static void ForgetAllStateAndStartOver(TSanThread *thr, const char *reason) {
   }
 }
 
-static INLINE void FlushStateIfOutOfSegments(TSanThread *thr) {
+static INLINE void FlushStateIfOutOfSegments(Thread *thr) {
   if (Segment::NumberOfSegments() > kMaxSIDBeforeFlush) {
     // too few sids left -- flush state.
     if (DEBUG_MODE) {
@@ -5576,13 +5461,6 @@ static const char default_suppressions[] =
 "  fun:*~basic_string*                                               \n"
 "}                                                                   \n"
 
-"{                                                                   \n"
-"  False reports on std::string internals. See TSan issue #40.       \n"
-"  ThreadSanitizer:Race                                              \n"
-"  ...                                                               \n"
-"  fun:*basic_string*_M_destroy                                      \n"
-"}                                                                   \n"
-
 #else
 "{                                                                   \n"
 "  False lock report inside ntdll.dll                                \n"
@@ -5635,8 +5513,7 @@ class ReportStorage {
   ReportStorage()
    : n_reports(0),
      n_race_reports(0),
-     program_finished_(0),
-     unwind_cb_(0) {
+     program_finished_(0) {
     if (G_flags->generate_suppressions) {
       Report("INFO: generate_suppressions = true\n");
     }
@@ -5665,7 +5542,7 @@ class ReportStorage {
     }
   }
 
-  bool NOINLINE AddReport(TSanThread *thr, uintptr_t pc, bool is_w, uintptr_t addr,
+  bool NOINLINE AddReport(Thread *thr, uintptr_t pc, bool is_w, uintptr_t addr,
                           int size,
                           ShadowValue old_sval, ShadowValue new_sval,
                           bool is_published) {
@@ -5691,7 +5568,9 @@ class ReportStorage {
       Printf("Checking expected race for %lx; exp_race=%p\n",
              addr, expected_race);
       if (expected_race) {
-        Printf("  FOUND\n");
+        Printf("  ptr=0x%lx size=0x%lx end=0x%lx\n",
+               expected_race->ptr, expected_race->size,
+               expected_race->ptr + expected_race->size);
       }
     }
 
@@ -5713,17 +5592,6 @@ class ReportStorage {
     if (is_expected && !G_flags->show_expected_races) return false;
 
     StackTrace *stack_trace = thr->CreateStackTrace(pc);
-    if (unwind_cb_) {
-      int const maxcnt = 256;
-      uintptr_t cur_stack [maxcnt];
-      int cnt = unwind_cb_(cur_stack, maxcnt, pc);
-      if (cnt > 0 && cnt <= maxcnt) {
-        cnt = min<int>(cnt, stack_trace->capacity());
-        stack_trace->set_size(cnt);
-        for (int i = 0; i < cnt; i++)
-          stack_trace->Set(i, cur_stack[i]);
-      }
-    }
     int n_reports_for_this_context = reported_stacks_[stack_trace]++;
 
     if (n_reports_for_this_context > 0) {
@@ -5752,7 +5620,6 @@ class ReportStorage {
     race_report->last_acces_lsid[true] = thr->lsid(true);
 
     Segment *seg = Segment::Get(thr->sid());
-    (void)seg;
     CHECK(thr->lsid(false) == seg->lsid(false));
     CHECK(thr->lsid(true) == seg->lsid(true));
 
@@ -5763,7 +5630,7 @@ class ReportStorage {
     if (ssid.IsEmpty()) return;
     for (int s = 0; s < SegmentSet::Size(ssid); s++) {
       Segment *seg = SegmentSet::GetSegmentForNonSingleton(ssid, s, __LINE__);
-      TSanThread::Get(seg->tid())->Announce();
+      Thread::Get(seg->tid())->Announce();
     }
   }
 
@@ -5775,7 +5642,7 @@ class ReportStorage {
                                  set<SID>* concurrent_sids) {
     if (ssid.IsEmpty()) return;
     bool printed_header = false;
-    TSanThread *thr1 = TSanThread::Get(tid);
+    Thread *thr1 = Thread::Get(tid);
     for (int s = 0; s < SegmentSet::Size(ssid); s++) {
       SID concurrent_sid = SegmentSet::GetSID(ssid, s, __LINE__);
       Segment *seg = Segment::Get(concurrent_sid);
@@ -5784,7 +5651,7 @@ class ReportStorage {
       if (concurrent_sids) {
         concurrent_sids->insert(concurrent_sid);
       }
-      TSanThread *thr2 = TSanThread::Get(seg->tid());
+      Thread *thr2 = Thread::Get(seg->tid());
       if (!printed_header) {
         Report("  %sConcurrent %s happened at (OR AFTER) these points:%s\n",
                c_magenta, descr, c_default);
@@ -5852,7 +5719,7 @@ class ReportStorage {
     }
     bool is_w = race->last_access_is_w;
     TID     tid = race->last_access_tid;
-    TSanThread *thr = TSanThread::Get(tid);
+    Thread *thr = Thread::Get(tid);
     SID     sid = race->last_access_sid;
     LSID    lsid = race->last_acces_lsid[is_w];
     set<LID> all_locks;
@@ -6079,8 +5946,8 @@ class ReportStorage {
     char buff[kBufLen+1];
 
     // Is this stack?
-    for (int i = 0; i < TSanThread::NumberOfThreads(); i++) {
-      TSanThread *t = TSanThread::Get(TID(i));
+    for (int i = 0; i < Thread::NumberOfThreads(); i++) {
+      Thread *t = Thread::Get(TID(i));
       if (!t || !t->is_running()) continue;
       if (t->MemoryIsInStack(a)) {
         snprintf(buff, sizeof(buff),
@@ -6125,8 +5992,8 @@ class ReportStorage {
     if (G_flags->debug_level >= 2) {
       string res;
       // Is this near stack?
-      for (int i = 0; i < TSanThread::NumberOfThreads(); i++) {
-        TSanThread *t = TSanThread::Get(TID(i));
+      for (int i = 0; i < Thread::NumberOfThreads(); i++) {
+        Thread *t = Thread::Get(TID(i));
         const uintptr_t kMaxStackDiff = 1024 * 16;
         uintptr_t diff1 = a - t->max_sp();
         uintptr_t diff2 = t->min_sp() - a;
@@ -6158,10 +6025,6 @@ class ReportStorage {
     return "";
   }
 
-  void SetUnwindCallback(ThreadSanitizerUnwindCallback cb) {
-    unwind_cb_ = cb;
-  }
-
  private:
   map<StackTrace *, int, StackTrace::Less> reported_stacks_;
   int n_reports;
@@ -6169,7 +6032,6 @@ class ReportStorage {
   bool program_finished_;
   Suppressions suppressions_;
   map<string, int> used_suppressions_;
-  ThreadSanitizerUnwindCallback unwind_cb_;
 };
 
 // -------- Event Sampling ---------------- {{{1
@@ -6179,7 +6041,7 @@ class EventSampler {
  public:
 
   // Sample one event
-  void Sample(TSanThread *thr, const char *event_name, bool need_locking) {
+  void Sample(Thread *thr, const char *event_name, bool need_locking) {
     CHECK_NE(G_flags->sample_events, 0);
     (counter_)++;
     if ((counter_ & ((1 << G_flags->sample_events) - 1)) != 0)
@@ -6251,7 +6113,7 @@ int64_t EventSampler::print_after_this_number_of_samples_;
 // Collection of event handlers.
 class Detector {
  public:
-  void INLINE HandleTraceLoop(TSanThread *thr, uintptr_t pc,
+  void INLINE HandleTraceLoop(Thread *thr, uintptr_t pc,
                               MopInfo *mops,
                               uintptr_t *tleb, size_t n,
                               int expensive_bits, bool need_locking) {
@@ -6286,7 +6148,7 @@ class Detector {
 #else
   INLINE
 #endif
-  void HandleTrace(TSanThread *thr, MopInfo *mops, size_t n, uintptr_t pc,
+  void HandleTrace(Thread *thr, MopInfo *mops, size_t n, uintptr_t pc,
                    uintptr_t *tleb, bool need_locking) {
     DCHECK(n);
     // 0 bit - ignore reads, 1 bit -- ignore writes,
@@ -6308,7 +6170,7 @@ class Detector {
   }
 
   // Special case of a trace with just one mop and no sblock.
-  void INLINE HandleMemoryAccess(TSanThread *thr, uintptr_t pc,
+  void INLINE HandleMemoryAccess(Thread *thr, uintptr_t pc,
                                  uintptr_t addr, uintptr_t size,
                                  bool is_w, bool need_locking) {
     CHECK(size);
@@ -6375,7 +6237,7 @@ class Detector {
     // Report("ThreadSanitizerValgrind: exiting\n");
   }
 
-  void FlushIfOutOfMem(TSanThread *thr) {
+  void FlushIfOutOfMem(Thread *thr) {
     static int max_vm_size;
     static int soft_limit;
     const int hard_limit = G_flags->max_mem_in_mb;
@@ -6405,11 +6267,11 @@ class Detector {
 
   // Force state flushing.
   void FlushState(TID tid) {
-    ForgetAllStateAndStartOver(TSanThread::Get(tid), 
+    ForgetAllStateAndStartOver(Thread::Get(tid), 
                                "State flushing requested by client");
   }
 
-  void FlushIfNeeded(TSanThread *thr) {
+  void FlushIfNeeded(Thread *thr) {
     // Are we out of segment IDs?
 #ifdef TS_VALGRIND  // GetVmSizeInMb() works only with valgrind any way.
     static int counter;
@@ -6451,7 +6313,7 @@ class Detector {
 
   void HandleRtnCall(TID tid, uintptr_t call_pc, uintptr_t target_pc,
                      IGNORE_BELOW_RTN ignore_below) {
-    TSanThread *thr = TSanThread::Get(tid);
+    Thread *thr = Thread::Get(tid);
     thr->HandleRtnCall(call_pc, target_pc, ignore_below);
     FlushIfNeeded(thr);
   }
@@ -6462,9 +6324,9 @@ class Detector {
     DCHECK(e);
     EventType type = e->type();
     DCHECK(type != NOOP);
-    TSanThread *thr = NULL;
+    Thread *thr = NULL;
     if (type != THR_START) {
-      thr = TSanThread::Get(TID(e->tid()));
+      thr = Thread::Get(TID(e->tid()));
       DCHECK(thr);
       thr->SetTopPc(e->pc());
       thr->stats.events[type]++;
@@ -6494,7 +6356,7 @@ class Detector {
 
     if (UNLIKELY(type == THR_START)) {
         HandleThreadStart(TID(e->tid()), TID(e->info()), (CallStack*)e->pc());
-        TSanThread::Get(TID(e->tid()))->stats.events[type]++;
+        Thread::Get(TID(e->tid()))->stats.events[type]++;
         return;
     }
 
@@ -6557,7 +6419,8 @@ class Detector {
 
 
       case EXPECT_RACE :
-        HandleExpectRace(e->a(), (const char*)e->pc(), TID(e->tid()));
+        HandleExpectRace(e->a(), e->info(),
+                         (const char*)e->pc(), TID(e->tid()));
         break;
       case BENIGN_RACE :
         HandleBenignRace(e->a(), e->info(),
@@ -6654,7 +6517,7 @@ class Detector {
     }
     PCQ &pcq = (*g_pcq_map)[e->a()];
     CHECK(pcq.pcq_addr == e->a());
-    TSanThread *thread = TSanThread::Get(TID(e->tid()));
+    Thread *thread = Thread::Get(TID(e->tid()));
     VTS *vts = thread->segment()->vts()->Clone();
     pcq.putters.push_back(vts);
     thread->NewSegmentForSignal();
@@ -6669,7 +6532,7 @@ class Detector {
     VTS *putter = pcq.putters.front();
     pcq.putters.pop_front();
     CHECK(putter);
-    TSanThread *thread = TSanThread::Get(TID(e->tid()));
+    Thread *thread = Thread::Get(TID(e->tid()));
     thread->NewSegmentForWait(putter);
     VTS::Unref(putter);
   }
@@ -6690,7 +6553,7 @@ class Detector {
     uintptr_t size = e->info();
 
     TID tid(e->tid());
-    TSanThread *thread = TSanThread::Get(tid);
+    Thread *thread = Thread::Get(tid);
     VTS *vts = thread->segment()->vts();
     PublishRange(thread, mem, mem + size, vts);
 
@@ -6702,14 +6565,14 @@ class Detector {
     if (G_flags->verbosity >= 2) {
       e->Print();
     }
-    TSanThread *thread = TSanThread::Get(TID(e->tid()));
+    Thread *thread = Thread::Get(TID(e->tid()));
     thread->set_ignore_accesses(is_w, on);
   }
 
   // BENIGN_RACE
   void HandleBenignRace(uintptr_t ptr, uintptr_t size,
                         const char *descr, TID tid) {
-    TSanThread *thr = TSanThread::Get(tid);
+    Thread *thr = Thread::Get(tid);
     if (debug_benign_races) {
       Printf("T%d: BENIGN_RACE: ptr=%p size=%ld descr='%s'\n",
              tid.raw(), ptr, size, descr);
@@ -6724,10 +6587,11 @@ class Detector {
   }
 
   // EXPECT_RACE
-  void HandleExpectRace(uintptr_t ptr, const char *descr, TID tid) {
+  void HandleExpectRace(uintptr_t ptr, uintptr_t size,
+                        const char *descr, TID tid) {
     ExpectedRace expected_race;
     expected_race.ptr = ptr;
-    expected_race.size = 1;
+    expected_race.size = size;
     expected_race.count = 0;
     expected_race.is_verifiable = !descr ||
         (string(descr).find("UNVERIFIABLE") == string::npos);
@@ -6741,33 +6605,26 @@ class Detector {
     d[descr_len] = 0;
     expected_race.description = d;
 
-    TSanThread *thread = TSanThread::Get(tid);
+    Thread *thread = Thread::Get(tid);
     expected_race.pc = thread->GetCallstackEntry(1);
     G_expected_races_map->InsertInfo(ptr, expected_race);
-
-    // Flush 'racey' flag for the address
-    CacheLine *cache_line = G_cache->GetLineIfExists(thread, ptr, __LINE__);
-    if (cache_line != NULL) {
-      uintptr_t offset = CacheLine::ComputeOffset(ptr);
-      cache_line->racey().ClearRange(offset, offset + 1);
-      G_cache->ReleaseLine(thread, ptr, cache_line, __LINE__);
-    }
-
     if (debug_expected_races) {
-      Printf("T%d: EXPECT_RACE: ptr=%p descr='%s'\n", tid.raw(), ptr, descr);
+      Printf("T%d: EXPECT_RACE: ptr=%p size=%ld descr='%s'\n",
+             tid.raw(), ptr, size, descr);
       thread->ReportStackTrace(ptr);
       int i = 0;
       for (ExpectedRacesMap::iterator it = G_expected_races_map->begin();
            it != G_expected_races_map->end(); ++it) {
         ExpectedRace &x = it->second;
-        Printf("  [%d] %p [0x%lx]\n", i, &x, x.ptr);
+        Printf("  [%d] %p [0x%lx,0x%lx) size=0x%lx\n",
+               i, &x, x.ptr, x.ptr + x.size, x.size);
         i++;
       }
     }
   }
 
   void HandleStackTrace(Event *e) {
-    TSanThread *thread = TSanThread::Get(TID(e->tid()));
+    Thread *thread = Thread::Get(TID(e->tid()));
     e->Print();
     thread->ReportStackTrace();
   }
@@ -6799,7 +6656,7 @@ class Detector {
   // TODO(kcc): is there a way to distinguish pthread_spin_init
   // and pthread_spin_unlock?
   void HandleUnlockOrInit(Event *e) {
-    TSanThread *thread = TSanThread::Get(TID(e->tid()));
+    Thread *thread = Thread::Get(TID(e->tid()));
     if (G_flags->verbosity >= 2) {
       e->Print();
       thread->ReportStackTrace();
@@ -6816,7 +6673,7 @@ class Detector {
   }
 
   void HandleLockCreateOrDestroy(Event *e) {
-    TSanThread *thread = TSanThread::Get(TID(e->tid()));
+    Thread *thread = Thread::Get(TID(e->tid()));
     uintptr_t lock_addr = e->a();
     if (debug_lock) {
       e->Print();
@@ -6858,7 +6715,7 @@ class Detector {
   void HandleTraceMem(Event *e) {
     if (G_flags->trace_level == 0) return;
     TID tid(e->tid());
-    TSanThread *thr = TSanThread::Get(TID(e->tid()));
+    Thread *thr = Thread::Get(TID(e->tid()));
     uintptr_t a = e->a();
     CacheLine *line = G_cache->GetLineOrCreateNew(thr, a, __LINE__);
     uintptr_t offset = CacheLine::ComputeOffset(a);
@@ -6938,7 +6795,7 @@ class Detector {
   // New experimental state machine.
   // Set *res to the new state.
   // Return true if the new state is race.
-  bool INLINE MemoryStateMachine(ShadowValue old_sval, TSanThread *thr,
+  bool INLINE MemoryStateMachine(ShadowValue old_sval, Thread *thr,
                                  bool is_w, ShadowValue *res) {
     ShadowValue new_sval;
     SID cur_sid = thr->sid();
@@ -7000,10 +6857,10 @@ class Detector {
   // If this function returns true, the ShadowValue *new_sval is updated
   // in the same way as MemoryStateMachine() would have done it. Just faster.
   INLINE bool MemoryStateMachineSameThread(bool is_w, ShadowValue old_sval,
-                                           TSanThread *thr,
+                                           Thread *thr,
                                            ShadowValue *new_sval) {
 #define MSM_STAT(i) do { if (DEBUG_MODE) \
-  thr->stats.msm_branch_count[i]++; } while ((void)0, 0)
+  thr->stats.msm_branch_count[i]++; } while(0)
     SSID rd_ssid = old_sval.rd_ssid();
     SSID wr_ssid = old_sval.wr_ssid();
     SID cur_sid = thr->sid();
@@ -7128,7 +6985,7 @@ class Detector {
                                        uintptr_t addr,
                                        uintptr_t size,
                                        uintptr_t pc,
-                                       TSanThread *thr,
+                                       Thread *thr,
                                        bool fast_path_only) {
     DCHECK((addr & (size - 1)) == 0);  // size-aligned.
     uintptr_t offset = CacheLine::ComputeOffset(addr);
@@ -7164,13 +7021,11 @@ class Detector {
 
       // Check for race.
       if (UNLIKELY(is_race)) {
-        if (thr->ShouldReportRaces()) {
-          if (G_flags->report_races && !cache_line->racey().Get(offset)) {
-            reports_.AddReport(thr, pc, is_w, addr, size,
-                               old_sval, *sval_p, is_published);
-          }
-          cache_line->racey().SetRange(offset, offset + size);
+        if (G_flags->report_races && !cache_line->racey().Get(offset)) {
+          reports_.AddReport(thr, pc, is_w, addr, size,
+                             old_sval, *sval_p, is_published);
         }
+        cache_line->racey().SetRange(offset, offset + size);
       }
 
       // Ref/Unref segments
@@ -7192,7 +7047,6 @@ class Detector {
           // singleton segment should have ref count > 0.
           SID sid = ssid.GetSingleton();
           Segment *seg = Segment::Get(sid);
-          (void)seg;
           CHECK(seg->ref_count() > 0);
           if (sid == thr->sid()) {
             // if this is the current seg, ref count should be > 1.
@@ -7200,7 +7054,6 @@ class Detector {
           }
         } else {
           SegmentSet *sset = SegmentSet::Get(ssid);
-          (void)sset;
           CHECK(sset->ref_count() > 0);
         }
       }
@@ -7212,7 +7065,7 @@ class Detector {
   // return false if we were not able to complete the task (fast_path_only).
   INLINE bool HandleAccessGranularityAndExecuteHelper(
       CacheLine *cache_line,
-      TSanThread *thr, uintptr_t addr, MopInfo *mop,
+      Thread *thr, uintptr_t addr, MopInfo *mop,
       bool has_expensive_flags, bool fast_path_only) {
     size_t size = mop->size();
     uintptr_t pc = mop->pc();
@@ -7224,9 +7077,6 @@ class Detector {
     uint16_t *granularity_mask = cache_line->granularity_mask(off);
     uint16_t gr = *granularity_mask;
 
-    // Can't do split/join on the fast path, bacause it involves segment set
-    // reference count manipulation that is not thread-safe.
-
     if        (size == 8 && (off & 7) == 0) {
       if (!gr) {
         *granularity_mask = gr = 1;  // 0000000000000001
@@ -7236,7 +7086,6 @@ class Detector {
         cache_line->DebugTrace(off, __FUNCTION__, __LINE__);
         goto one_call;
       } else {
-        if (fast_path_only) return false;
         if (has_expensive_flags) thr->stats.n_slow_access8++;
         cache_line->Join_1_to_2(off);
         cache_line->Join_1_to_2(off + 2);
@@ -7256,7 +7105,6 @@ class Detector {
         cache_line->DebugTrace(off, __FUNCTION__, __LINE__);
         goto one_call;
       } else {
-        if (fast_path_only) return false;
         if (has_expensive_flags) thr->stats.n_slow_access4++;
         cache_line->Split_8_to_4(off);
         cache_line->Join_1_to_2(off);
@@ -7273,7 +7121,6 @@ class Detector {
         cache_line->DebugTrace(off, __FUNCTION__, __LINE__);
         goto one_call;
       } else {
-        if (fast_path_only) return false;
         if (has_expensive_flags) thr->stats.n_slow_access2++;
         cache_line->Split_8_to_4(off);
         cache_line->Split_4_to_2(off);
@@ -7289,7 +7136,6 @@ class Detector {
         cache_line->DebugTrace(off, __FUNCTION__, __LINE__);
         goto one_call;
       } else {
-        if (fast_path_only) return false;
         if (has_expensive_flags) thr->stats.n_slow_access1++;
         cache_line->Split_8_to_4(off);
         cache_line->Split_4_to_2(off);
@@ -7366,7 +7212,7 @@ one_call:
     return false;
   }
 
-  void DoTrace(TSanThread *thr, uintptr_t addr, MopInfo *mop, bool need_locking) {
+  void DoTrace(Thread *thr, uintptr_t addr, MopInfo *mop, bool need_locking) {
     size_t size = mop->size();
     uintptr_t pc = mop->pc();
     TIL til(ts_lock, 1, need_locking);
@@ -7396,7 +7242,7 @@ one_call:
 #else
   NOINLINE
 #endif
-  void HandleMemoryAccessSlowLocked(TSanThread *thr,
+  void HandleMemoryAccessSlowLocked(Thread *thr,
                                     uintptr_t addr,
                                     MopInfo *mop,
                                     bool has_expensive_flags,
@@ -7430,14 +7276,13 @@ one_call:
     }
   }
 
-  INLINE bool HandleMemoryAccessInternal(TSanThread *thr,
+  INLINE bool HandleMemoryAccessInternal(Thread *thr,
                                          uintptr_t *sblock_pc,
                                          uintptr_t addr,
                                          MopInfo *mop,
                                          bool has_expensive_flags,
                                          bool need_locking) {
-#   define INC_STAT(stat) \
-        do { if (has_expensive_flags) (stat)++; } while ((void)0, 0)
+  #define INC_STAT(stat) do { if (has_expensive_flags) (stat)++; } while(0)
     if (TS_ATOMICITY && G_flags->atomicity) {
       HandleMemoryAccessForAtomicityViolationDetector(thr, addr, mop);
       return false;
@@ -7468,6 +7313,9 @@ one_call:
       if (thr->HasRoomForDeadSids()) {
         // Acquire a line w/o locks.
         cache_line = G_cache->TryAcquireLine(thr, addr, __LINE__);
+        if (has_expensive_flags && cache_line && G_cache->IsInDirectCache(addr)) {
+          INC_STAT(thr->stats.cache_fast_get);
+        }
         if (!Cache::LineIsNullOrLocked(cache_line)) {
           // The line is not empty or locked -- check the tag.
           if (cache_line->tag() == CacheLine::ComputeTag(addr)) {
@@ -7531,7 +7379,7 @@ one_call:
   }
 
 
-  void HandleMemoryAccessForAtomicityViolationDetector(TSanThread *thr,
+  void HandleMemoryAccessForAtomicityViolationDetector(Thread *thr,
                                                        uintptr_t addr,
                                                        MopInfo *mop) {
     CHECK(G_flags->atomicity);
@@ -7580,7 +7428,7 @@ one_call:
       return;
     }
     #endif
-    TSanThread *thr = TSanThread::Get(tid);
+    Thread *thr = Thread::Get(tid);
     thr->NewSegmentForMallocEvent();
     uintptr_t b = a + size;
     CHECK(a <= b);
@@ -7613,7 +7461,7 @@ one_call:
     }
   }
 
-  void ImitateWriteOnFree(TSanThread *thr, uintptr_t a, uintptr_t size, uintptr_t pc) {
+  void ImitateWriteOnFree(Thread *thr, uintptr_t a, uintptr_t size, uintptr_t pc) {
     // Handle the memory deletion as a write, but don't touch all
     // the memory if there is too much of it, limit with the first 1K.
     if (size && G_flags->free_is_write && !global_ignore) {
@@ -7632,7 +7480,7 @@ one_call:
   // FREE
   void HandleFree(Event *e) {
     TID tid(e->tid());
-    TSanThread *thr = TSanThread::Get(tid);
+    Thread *thr = Thread::Get(tid);
     uintptr_t a = e->a();
     if (debug_free) {
       e->Print();
@@ -7668,8 +7516,6 @@ one_call:
     // that may carve the existing mappings or split them into two parts.
     // It should also be possible to munmap() several mappings at a time.
     uintptr_t a = e->a();
-    if (a == 0)
-      return;
     HeapInfo *h_info = G_heap_map->GetInfo(a);
     uintptr_t size = e->info();
     if (h_info && h_info->ptr == a && h_info->size == size) {
@@ -7693,12 +7539,12 @@ one_call:
       // main thread, we are done.
       vts = VTS::CreateSingleton(child_tid);
     } else if (!parent_tid.valid()) {
-      TSanThread::StopIgnoringAccessesInT0BecauseNewThreadStarted();
+      Thread::StopIgnoringAccessesInT0BecauseNewThreadStarted();
       Report("INFO: creating thread T%d w/o a parent\n", child_tid.raw());
       vts = VTS::CreateSingleton(child_tid);
     } else {
-      TSanThread::StopIgnoringAccessesInT0BecauseNewThreadStarted();
-      TSanThread *parent = TSanThread::Get(parent_tid);
+      Thread::StopIgnoringAccessesInT0BecauseNewThreadStarted();
+      Thread *parent = Thread::Get(parent_tid);
       CHECK(parent);
       parent->HandleChildThreadStart(child_tid, &vts, &creation_context);
     }
@@ -7706,9 +7552,9 @@ one_call:
     if (!call_stack) {
       call_stack = new CallStack();
     }
-    TSanThread *new_thread = new TSanThread(child_tid, parent_tid,
+    Thread *new_thread = new Thread(child_tid, parent_tid,
                                     vts, creation_context, call_stack);
-    CHECK(new_thread == TSanThread::Get(child_tid));
+    CHECK(new_thread == Thread::Get(child_tid));
     if (child_tid == TID(0)) {
       new_thread->set_ignore_all_accesses(true); // until a new thread comes.
     }
@@ -7721,7 +7567,7 @@ one_call:
     if (tid == TID(0)) {
       uintptr_t stack_min(0), stack_max(0);
       GetThreadStack(tid.raw(), &stack_min, &stack_max);
-      TSanThread *thr = TSanThread::Get(tid);
+      Thread *thr = Thread::Get(tid);
       thr->SetStack(stack_min, stack_max);
       ClearMemoryState(thr, thr->min_sp(), thr->max_sp());
     }
@@ -7730,7 +7576,7 @@ one_call:
   // THR_STACK_TOP
   void HandleThreadStackTop(Event *e) {
     TID tid(e->tid());
-    TSanThread *thr = TSanThread::Get(tid);
+    Thread *thr = Thread::Get(tid);
     // Stack grows from bottom up.
     uintptr_t sp = e->a();
     uintptr_t sp_min = 0, sp_max = 0;
@@ -7761,14 +7607,14 @@ one_call:
 
   // THR_END
   void HandleThreadEnd(TID tid) {
-    TSanThread *thr = TSanThread::Get(tid);
+    Thread *thr = Thread::Get(tid);
     // Add the thread-local stats to global stats.
     G_stats->Add(thr->stats);
     thr->stats.Clear();
 
     // Printf("HandleThreadEnd: %d\n", tid.raw());
     if (tid != TID(0)) {
-      TSanThread *child = TSanThread::Get(tid);
+      Thread *child = Thread::Get(tid);
       child->HandleThreadEnd();
 
 
@@ -7806,7 +7652,7 @@ one_call:
   // THR_JOIN_AFTER
   void HandleThreadJoinAfter(Event *e) {
     TID tid(e->tid());
-    TSanThread *parent_thr = TSanThread::Get(tid);
+    Thread *parent_thr = Thread::Get(tid);
     VTS *vts_at_exit = NULL;
     TID child_tid = parent_thr->HandleThreadJoinAfter(&vts_at_exit, TID(e->a()));
     CHECK(vts_at_exit);
@@ -7818,37 +7664,12 @@ one_call:
              child_tid.raw(), parent_thr->vts()->ToString().c_str());
     }
   }
-
  public:
   // TODO(kcc): merge this into Detector class. (?)
   ReportStorage reports_;
-
-  void SetUnwindCallback(ThreadSanitizerUnwindCallback cb) {
-    reports_.SetUnwindCallback(cb);
-  }
 };
 
 static Detector        *G_detector;
-
-
-void TSanThread::HandleAtomicMop(uintptr_t a,
-                             uintptr_t pc,
-                             tsan_atomic_op op,
-                             tsan_memory_order mo,
-                             size_t size) {
-  if (op == tsan_atomic_op_fence)
-    return;
-  bool const is_store = (op != tsan_atomic_op_load);
-  CHECK(inside_atomic_op_ >= 0);
-  if (mo != tsan_memory_order_natomic)
-    inside_atomic_op_ += 1;
-  MopInfo mop (pc, size, is_store, true);
-  G_detector->HandleTrace(this, &mop, 1, pc, &a, false);
-  if (mo != tsan_memory_order_natomic)
-    inside_atomic_op_ -= 1;
-  CHECK(inside_atomic_op_ >= 0);
-}
-
 
 // -------- Flags ------------------------- {{{1
 const char *usage_str =
@@ -8003,7 +7824,7 @@ static size_t GetMemoryLimitInMbFromProcSelfLimits() {
   size_t pos = proc_self_limits.find(max_addr_space);
   if (pos == string::npos) return 0;
   pos += strlen(max_addr_space);
-  while (proc_self_limits[pos] == ' ') pos++;
+  while(proc_self_limits[pos] == ' ') pos++;
   if (proc_self_limits[pos] == 'u')
     return 0;  // 'unlimited'.
   char *end;
@@ -8219,13 +8040,13 @@ void ThreadSanitizerParseFlags(vector<string> *args) {
   kSizeOfHistoryStackTrace = G_flags->num_callers_in_history;
 
   // Cut stack under the following default functions.
-  G_flags->cut_stack_below.push_back("TSanThread*ThreadBody*");
+  G_flags->cut_stack_below.push_back("Thread*ThreadBody*");
   G_flags->cut_stack_below.push_back("ThreadSanitizerStartThread");
   G_flags->cut_stack_below.push_back("start_thread");
   G_flags->cut_stack_below.push_back("BaseThreadInitThunk");
   FindStringFlag("cut_stack_below", args, &G_flags->cut_stack_below);
 
-  FindIntFlag("num_callers", 16, args, &G_flags->num_callers);
+  FindIntFlag("num_callers", 12, args, &G_flags->num_callers);
 
   G_flags->max_n_threads        = 100000;
 
@@ -8250,11 +8071,6 @@ void ThreadSanitizerParseFlags(vector<string> *args) {
   FindBoolFlag("nacl_untrusted", false, args, &G_flags->nacl_untrusted);
   FindBoolFlag("threaded_analysis", false, args, &G_flags->threaded_analysis);
 
-  FindBoolFlag("sched_shake", false, args, &G_flags->sched_shake);
-  FindBoolFlag("api_ambush", false, args, &G_flags->api_ambush);
-
-  FindBoolFlag("enable_atomic", false, args, &G_flags->enable_atomic);
-
   if (!args->empty()) {
     ReportUnknownFlagAndExit(args->front());
   }
@@ -8273,7 +8089,6 @@ void ThreadSanitizerParseFlags(vector<string> *args) {
   debug_happens_before = PhaseDebugIsOn("happens_before");
   debug_cache = PhaseDebugIsOn("cache");
   debug_race_verifier = PhaseDebugIsOn("race_verifier");
-  debug_atomic = PhaseDebugIsOn("atomic");
 }
 
 // -------- ThreadSanitizer ------------------ {{{1
@@ -8300,7 +8115,6 @@ static void SetupIgnore() {
   g_ignore_lists->ignores_hist.push_back(IgnoreFun("Replace_memchr"));
   g_ignore_lists->ignores_hist.push_back(IgnoreFun("Replace_strcpy"));
   g_ignore_lists->ignores_hist.push_back(IgnoreFun("Replace_strchr"));
-  g_ignore_lists->ignores_hist.push_back(IgnoreFun("Replace_strchrnul"));
   g_ignore_lists->ignores_hist.push_back(IgnoreFun("Replace_strrchr"));
   g_ignore_lists->ignores_hist.push_back(IgnoreFun("Replace_strlen"));
   g_ignore_lists->ignores_hist.push_back(IgnoreFun("Replace_strcmp"));
@@ -8408,10 +8222,6 @@ static void SetupIgnore() {
     string str = ReadFileToString(file_name, true);
     ReadIgnoresFromString(str, g_white_lists);
   }
-}
-
-void ThreadSanitizerSetUnwindCallback(ThreadSanitizerUnwindCallback cb) {
-  G_detector->SetUnwindCallback(cb);
 }
 
 void ThreadSanitizerNaclUntrustedRegion(uintptr_t mem_start, uintptr_t mem_end) {
@@ -8564,7 +8374,7 @@ extern void ThreadSanitizerInit() {
   }
   SegmentSet::InitClassMembers();
   CacheLine::InitClassMembers();
-  TSanThread::InitClassMembers();
+  Thread::InitClassMembers();
   Lock::InitClassMembers();
   LockSet::InitClassMembers();
   EventSampler::InitClassMembers();
@@ -8574,7 +8384,6 @@ extern void ThreadSanitizerInit() {
   g_publish_info_map = new PublishInfoMap;
   g_stack_trace_free_list = new StackTraceFreeList;
   g_pcq_map = new PCQMap;
-  g_atomicCore = new TsanAtomicCore();
 
 
   if (G_flags->html) {
@@ -8615,15 +8424,15 @@ extern void ThreadSanitizerFini() {
 
 extern void ThreadSanitizerDumpAllStacks() {
   // first, print running threads.
-  for (int i = 0; i < TSanThread::NumberOfThreads(); i++) {
-    TSanThread *t = TSanThread::Get(TID(i));
+  for (int i = 0; i < Thread::NumberOfThreads(); i++) {
+    Thread *t = Thread::Get(TID(i));
     if (!t || !t->is_running()) continue;
     Report("T%d\n", i);
     t->ReportStackTrace();
   }
   // now print all dead threds.
-  for (int i = 0; i < TSanThread::NumberOfThreads(); i++) {
-    TSanThread *t = TSanThread::Get(TID(i));
+  for (int i = 0; i < Thread::NumberOfThreads(); i++) {
+    Thread *t = Thread::Get(TID(i));
     if (!t || t->is_running()) continue;
     Report("T%d (not running)\n", i);
     t->ReportStackTrace();
@@ -8636,15 +8445,15 @@ extern void ThreadSanitizerHandleOneEvent(Event *e) {
   G_detector->HandleOneEvent(e);
 }
 
-TSanThread *ThreadSanitizerGetThreadByTid(int32_t tid) {
-  return TSanThread::Get(TID(tid));
+Thread *ThreadSanitizerGetThreadByTid(int32_t tid) {
+  return Thread::Get(TID(tid));
 }
 
 extern NOINLINE void ThreadSanitizerHandleTrace(int32_t tid, TraceInfo *trace_info,
                                        uintptr_t *tleb) {
-  ThreadSanitizerHandleTrace(TSanThread::Get(TID(tid)), trace_info, tleb);
+  ThreadSanitizerHandleTrace(Thread::Get(TID(tid)), trace_info, tleb);
 }
-extern NOINLINE void ThreadSanitizerHandleTrace(TSanThread *thr, TraceInfo *trace_info,
+extern NOINLINE void ThreadSanitizerHandleTrace(Thread *thr, TraceInfo *trace_info,
                                                 uintptr_t *tleb) {
   DCHECK(thr);
   // The lock is taken inside on the slow path.
@@ -8655,7 +8464,7 @@ extern NOINLINE void ThreadSanitizerHandleTrace(TSanThread *thr, TraceInfo *trac
                           tleb, /*need_locking=*/true);
 }
 
-extern NOINLINE void ThreadSanitizerHandleOneMemoryAccess(TSanThread *thr,
+extern NOINLINE void ThreadSanitizerHandleOneMemoryAccess(Thread *thr,
                                                           MopInfo mop,
                                                           uintptr_t addr) {
   DCHECK(thr);
@@ -8674,326 +8483,18 @@ void NOINLINE ThreadSanitizerHandleRtnCall(int32_t tid, uintptr_t call_pc,
 
   if (G_flags->sample_events) {
     static EventSampler sampler;
-    TSanThread *thr = TSanThread::Get(TID(tid));
+    Thread *thr = Thread::Get(TID(tid));
     sampler.Sample(thr, "RTN_CALL", true);
   }
 }
 void NOINLINE ThreadSanitizerHandleRtnExit(int32_t tid) {
   // This is a thread-local operation, no need for locking.
-  TSanThread::Get(TID(tid))->HandleRtnExit();
+  Thread::Get(TID(tid))->HandleRtnExit();
 }
 
 static bool ThreadSanitizerPrintReport(ThreadSanitizerReport *report) {
   return G_detector->reports_.PrintReport(report);
 }
-
-
-// -------- TsanAtomicImplementation ------------------ {{{1
-
-// Atomic operation handler.
-// The idea of atomic handling is as simple as follows.
-// * First, we handle it as normal memory access,
-//     however with race reporting suppressed. That is, we won't produce any
-//     race reports during atomic access, but we can produce race reports
-//     later during normal memory accesses that race with the access.
-// * Then, we do the actual atomic memory access.
-//     It's executed in an atomic fashion, because there can be simultaneous
-//     atomic accesses from non-instrumented code (FUTEX_OP is a notable
-//     example).
-// * Finally, we update simulated memory model state according to
-//     the access type and associated memory order as follows.
-//     For writes and RMWs we create a new entry in the modification order
-//     of the variable. For reads we scan the modification order starting
-//     from the latest entry and going back in time, during the scan we decide
-//     what entry the read returns. A separate VTS (happens-before edges)
-//     is associated with each entry in the modification order, so that a load
-//     acquires memory visibility from the exact release-sequence associated
-//     with the loaded value.
-// For details of memory modelling refer to sections 1.10 and 29
-//     of C++0x standard:
-// http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2011/n3242.pdf
-uint64_t ThreadSanitizerHandleAtomicOp(int32_t tid,
-                                       uintptr_t pc,
-                                       tsan_atomic_op op,
-                                       tsan_memory_order mo,
-                                       tsan_memory_order fail_mo,
-                                       size_t size,
-                                       void volatile* a,
-                                       uint64_t v,
-                                       uint64_t cmp) {
-  if (G_flags->enable_atomic == false) {
-    uint64_t newv = 0;
-    uint64_t prev = 0;
-    return tsan_atomic_do_op(op, mo, fail_mo, size, a, v, cmp, &newv, &prev);
-  } else {
-    uint64_t rv = 0;
-    TSanThread* thr = TSanThread::Get(TID(tid));
-    // Just a verification of the parameters.
-    tsan_atomic_verify(op, mo, fail_mo, size, a);
-
-    {
-      TIL til(ts_lock, 0);
-      uint64_t newv = 0;
-      uint64_t prev = 0;
-      // Handle it as a plain mop. Race reports are temporally suppressed,though.
-      thr->HandleAtomicMop((uintptr_t)a, pc, op, mo, size);
-      // Do the actual atomic operation. It's executed in an atomic fashion,
-      // because there can be simultaneous atomic accesses
-      // from non-instrumented code.
-      rv = tsan_atomic_do_op(op, mo, fail_mo, size, a, v, cmp, &newv, &prev);
-
-      PrintfIf(debug_atomic, "rv=%llu, newv=%llu, prev=%llu\n",
-               (unsigned long long)rv,
-               (unsigned long long)newv,
-               (unsigned long long)prev);
-
-      if (op != tsan_atomic_op_fence) {
-        if (op == tsan_atomic_op_load) {
-          // For reads it replaces the return value with a random value
-          // from visible sequence of side-effects in the modification order
-          // of the variable.
-          rv = g_atomicCore->HandleRead(thr, (uintptr_t)a, rv,
-                                        tsan_atomic_is_acquire(mo));
-        } else if ((op == tsan_atomic_op_compare_exchange_weak
-            || op == tsan_atomic_op_compare_exchange_strong)
-            && cmp != rv) {
-          // Failed compare_exchange is handled as read, because, well,
-          // it's indeed just a read (at least logically).
-          g_atomicCore->HandleRead(thr, (uintptr_t)a, rv,
-                                   tsan_atomic_is_acquire(fail_mo));
-        } else {
-          // For writes and RMW operations it updates modification order
-          // of the atomic variable.
-          g_atomicCore->HandleWrite(thr, (uintptr_t)a, newv, prev,
-                                    tsan_atomic_is_acquire(mo),
-                                    tsan_atomic_is_release(mo),
-                                    tsan_atomic_is_rmw(op));
-        }
-      }
-    }
-
-    PrintfIf(debug_atomic, "ATOMIC: %s-%s %p (%llu,%llu)=%llu\n",
-             tsan_atomic_to_str(op),
-             tsan_atomic_to_str(mo),
-             a, (unsigned long long)v, (unsigned long long)cmp,
-             (unsigned long long)rv);
-
-    return rv;
-  }
-}
-
-
-TsanAtomicCore::TsanAtomicCore() {
-}
-
-
-void TsanAtomicCore::HandleWrite(TSanThread* thr,
-                                 uintptr_t a,
-                                 uint64_t v,
-                                 uint64_t prev,
-                                 bool const is_acquire,
-                                 bool const is_release,
-                                 bool const is_rmw) {
-  PrintfIf(debug_atomic, "HIST(%p): store acquire=%u, release=%u, rmw=%u\n",
-           (void*)a, is_acquire, is_release, is_rmw);
-  Atomic* atomic = &atomic_map_[a];
-  // Fix modification history if there were untracked accesses.
-  AtomicFixHist(atomic, prev);
-  AtomicHistoryEntry& hprv = atomic->hist
-      [(atomic->hist_pos - 1) % Atomic::kHistSize];
-  AtomicHistoryEntry& hist = atomic->hist
-      [atomic->hist_pos % Atomic::kHistSize];
-  // Fill in new entry in the modification history.
-  hist.val = v;
-  hist.tid = thr->tid();
-  hist.clk = thr->vts()->clk(thr->tid());
-  if (hist.vts != 0) {
-    VTS::Unref(hist.vts);
-    hist.vts = 0;
-  }
-  atomic->hist_pos += 1;
-
-  // Update VTS according to memory access type and memory ordering.
-  if (is_rmw) {
-    if (is_release) {
-      if (hprv.vts != 0) {
-        hist.vts = VTS::Join(hprv.vts, thr->vts());
-      } else {
-        hist.vts = thr->vts()->Clone();
-      }
-    } else if (hprv.vts != 0) {
-      hist.vts = hprv.vts->Clone();
-    }
-    if (is_acquire && hprv.vts != 0) {
-      thr->NewSegmentForWait(hprv.vts);
-    }
-  } else {
-    DCHECK(is_acquire == false);
-    if (is_release) {
-      hist.vts = thr->vts()->Clone();
-    }
-  }
-
-  // Update the thread's VTS if it's relese memory access.
-  if (is_release) {
-    thr->NewSegmentForSignal();
-    if (debug_happens_before) {
-      Printf("T%d: Signal: %p:\n    %s %s\n    %s\n",
-             thr->tid().raw(), a,
-             thr->vts()->ToString().c_str(),
-             Segment::ToString(thr->sid()).c_str(),
-             hist.vts->ToString().c_str());
-      if (G_flags->debug_level >= 1) {
-        thr->ReportStackTrace();
-      }
-    }
-  }
-}
-
-
-uint64_t TsanAtomicCore::HandleRead(TSanThread* thr,
-                                    uintptr_t a,
-                                    uint64_t v,
-                                    bool is_acquire) {
-  PrintfIf(debug_atomic, "HIST(%p): {\n", (void*)a);
-
-  Atomic* atomic = &atomic_map_[a];
-  // Fix modification history if there were untracked accesses.
-  AtomicFixHist(atomic, v);
-  AtomicHistoryEntry* hist0 = 0;
-  int32_t seen_seq = 0;
-  int32_t const seen_seq0 = atomic->last_seen.clock(thr->tid());
-  // Scan modification order of the variable from the latest entry
-  // back in time. For each side-effect (write) we determine as to
-  // whether we have to yield the value or we can go back in time further.
-  for (int32_t i = 0; i != Atomic::kHistSize; i += 1) {
-    int32_t const idx = (atomic->hist_pos - i - 1);
-    CHECK(idx >= 0);
-    AtomicHistoryEntry& hist = atomic->hist[idx % Atomic::kHistSize];
-    PrintfIf(debug_atomic, "HIST(%p):   #%u (tid=%u, clk=%u,"
-           " val=%llu) vts=%u\n",
-           (void*)a, (unsigned)i, (unsigned)hist.tid.raw(),
-           (unsigned)hist.clk, (unsigned long long)hist.val,
-           (unsigned)thr->vts()->clk(hist.tid));
-    if (hist.tid.raw() == TID::kInvalidTID) {
-      // We hit an uninialized entry, that is, it's an access to an unitialized
-      // variable (potentially due to "race").
-      // Unfortunately, it should not happen as of now.
-      // TODO(dvyukov): how can we detect and report unitialized atomic reads?.
-      // .
-      hist0 = 0;
-      break;
-    } else if (i == Atomic::kHistSize - 1) {
-      // It's the last entry so we have to return it
-      // because we have to return something.
-      PrintfIf(debug_atomic, "HIST(%p):   replaced: last\n", (void*)a);
-      hist0 = &hist;
-      break;
-    } else if (seen_seq0 >= idx) {
-      // The thread had already seen the entry so we have to return
-      // at least it.
-      PrintfIf(debug_atomic, "HIST(%p):   replaced: stability\n", (void*)a);
-      hist0 = &hist;
-      break;
-    } else if (thr->vts()->clk(hist.tid) >= hist.clk) {
-      // The write happened-before the read, so we have to return it.
-      PrintfIf(debug_atomic, "HIST(%p):   replaced: ordering\n", (void*)a);
-      hist0 = &hist;
-      break;
-    } else if (thr->random() % 2) {
-      // We are not obliged to return the entry but we can (and decided to do).
-      PrintfIf(debug_atomic, "HIST(%p):   replaced: coherence\n", (void*)a);
-      seen_seq = idx;
-      hist0 = &hist;
-      break;
-    } else {
-      // Move on to the next (older) entry.
-      PrintfIf(debug_atomic, "HIST(%p):   can be replaced but not\n", (void*)a);
-    }
-  }
-
-  if (hist0 != 0) {
-    v = hist0->val;
-    // Acquire mamory visibility is needed.
-    if (is_acquire) {
-      if (hist0->vts != 0) {
-        thr->NewSegmentForWait(hist0->vts);
-      }
-
-      if (debug_happens_before) {
-        Printf("T%d: Wait: %p:\n    %s %s\n",
-               thr->tid().raw(), a,
-               thr->vts()->ToString().c_str(),
-               Segment::ToString(thr->sid()).c_str());
-        if (G_flags->debug_level >= 1) {
-          thr->ReportStackTrace();
-        }
-      }
-    }
-    if (seen_seq != 0) {
-      // Mark the entry as seen so we won't return any older entry later.
-      atomic->last_seen.update(thr->tid(), seen_seq);
-    }
-  } else {
-    CHECK("should never happen as of now" == 0);
-    PrintfIf(debug_atomic, "HIST(%p): UNITIALIZED LOAD\n", (void*)a);
-    v = thr->random();
-  }
-  PrintfIf(debug_atomic, "HIST(%p): } -> %llu\n",
-      (void*)a, (unsigned long long)v);
-  return v;
-}
-
-
-void TsanAtomicCore::ClearMemoryState(uintptr_t a, uintptr_t b) {
-  DCHECK(a <= b);
-  DCHECK(G_flags->enable_atomic || atomic_map_.empty());
-  AtomicMap::iterator begin (atomic_map_.lower_bound(a));
-  AtomicMap::iterator pos (begin);
-  for (; pos != atomic_map_.end() && pos->first <= b; ++pos) {
-    pos->second.reset();
-  }
-  atomic_map_.erase(begin, pos);
-}
-
-
-void TsanAtomicCore::AtomicFixHist(Atomic* atomic, uint64_t prev) {
-  AtomicHistoryEntry& hprv = atomic->hist
-      [(atomic->hist_pos - 1) % Atomic::kHistSize];
-  // In case we had missed an atomic access (that is, an access from 
-  // non-instrumented code), reset whole history and initialize it
-  // with a single entry that happened "before world creation".
-  if (prev != hprv.val) {
-    PrintfIf(debug_atomic, "HIST RESET\n");
-    atomic->reset();
-    AtomicHistoryEntry& hist = atomic->hist
-        [atomic->hist_pos % Atomic::kHistSize];
-    hist.val = prev;
-    hist.tid = TID(0);
-    hist.clk = 0;
-    atomic->hist_pos += 1;
-  }
-}
-
-
-TsanAtomicCore::Atomic::Atomic() {
-  reset(true);
-}
-
-
-void TsanAtomicCore::Atomic::reset(bool init) {
-  hist_pos = sizeof(hist)/sizeof(hist[0]) + 1;
-  for (size_t i = 0; i != sizeof(hist)/sizeof(hist[0]); i += 1) {
-    hist[i].val = 0xBCEBC041;
-    hist[i].tid = TID(TID::kInvalidTID);
-    hist[i].clk = -1;
-    if (init == false && hist[i].vts != 0)
-      VTS::Unref(hist[i].vts);
-    hist[i].vts = 0;
-  }
-  last_seen.reset();
-}
-
 
 // -------- TODO -------------------------- {{{1
 // - Support configurable aliases for function names (is it doable in valgrind)?

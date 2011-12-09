@@ -1,5 +1,3 @@
-#define _GNU_SOURCE
-
 #include "../../memcheck.h"
 #include "scalar.h"
 #include <unistd.h>

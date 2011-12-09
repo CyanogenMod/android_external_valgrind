@@ -7,7 +7,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2000-2011 Julian Seward
+   Copyright (C) 2000-2010 Julian Seward
       jseward@acm.org
 
    This program is free software; you can redistribute it and/or
@@ -158,9 +158,6 @@ extern Addr VG_(am_get_advisory_client_simple)
 extern Bool VG_(am_notify_client_mmap)
    ( Addr a, SizeT len, UInt prot, UInt flags, Int fd, Off64T offset );
 
-extern Bool VG_(am_notify_fake_client_mmap)
-   ( Addr a, SizeT len, UInt prot, UInt flags, HChar* fileName, Off64T offset );
-
 /* Notifies aspacem that the client completed a shmat successfully.
    The segment array is updated accordingly.  If the returned Bool is
    True, the caller should immediately discard translations from the
@@ -193,6 +190,51 @@ extern Bool VG_(am_notify_munmap)( Addr start, SizeT len );
    aspacem.  In short, DO NOT USE THIS FUNCTION. */
 extern SysRes VG_(am_do_mmap_NO_NOTIFY)
    ( Addr start, SizeT length, UInt prot, UInt flags, Int fd, Off64T offset);
+
+
+//--------------------------------------------------------------
+// Functions pertaining to AIX5-specific notifications.
+
+/* Describes followup actions that need to be done following a call to
+   VG_(am_aix5_reread_procmap).  When acquire==True, the specified
+   code and data segments have been mapped into the process, and so
+   m_debuginfo needs to read info for it; also m_redir needs to know,
+   and the tool needs to be told.  When acquire==False, the specified
+   segments have been unloaded and m_debuginfo, m_redir and the tool
+   (and m_transtab?) need to notified appropriately. */
+typedef
+   struct {
+      Addr   code_start;
+      Word   code_len;
+      Addr   data_start;
+      Word   data_len;
+      UChar* file_name;
+      UChar* mem_name;
+      Bool   is_mainexe;
+      Bool   acquire;
+   }
+   AixCodeSegChange;
+
+/* Tell aspacem that /proc/<pid>/map may have changed (eg following
+   __loadx) and so it should be re-read, and the code/data segment
+   list updated accordingly.  The resulting array of AixCodeChangeSeg
+   directives are written to 'directives', and the number of entries
+   to *ndirectives. */
+extern void VG_(am_aix5_reread_procmap)
+   ( /*OUT*/AixCodeSegChange* directives, /*OUT*/Int* ndirectives );
+
+/* Find out the size of the AixCodeSegChange that must be
+   presented to VG_(am_aix5_reread_procmap). */
+extern Int VG_(am_aix5_reread_procmap_howmany_directives)(void);
+
+/* Tell aspacem where the initial client stack is, so that it
+   can later produce a faked-up NSegment in response to
+   VG_(am_find_nsegment) for athat address, if asked. */
+extern void VG_(am_aix5_set_initial_client_sp)( Addr );
+
+/* The AIX5 aspacem implementation needs to be told when it is and
+   isn't allowed to use sbrk to allocate memory.  Hence: */
+extern Bool VG_(am_aix5_sbrk_allowed);
 
 
 //--------------------------------------------------------------
@@ -241,19 +283,13 @@ extern SysRes VG_(am_mmap_anon_float_valgrind)( SizeT cszB );
 extern SysRes VG_(am_sbrk_anon_float_valgrind)( SizeT cszB );
 
 
-/* Map privately a file at an unconstrained address for V, and update the
+/* Map a file at an unconstrained address for V, and update the
    segment array accordingly.  This is used by V for transiently
    mapping in object files to read their debug info.  */
 extern SysRes VG_(am_mmap_file_float_valgrind)
    ( SizeT length, UInt prot, Int fd, Off64T offset );
-extern SysRes VG_(am_mmap_file_float_valgrind_flags)
+extern SysRes VG_(am_mmap_file_float_valgrind_with_flags)
    ( SizeT length, UInt prot, UInt flags, Int fd, Off64T offset );
-
-/* Map shared a file at an unconstrained address for V, and update the
-   segment array accordingly.  This is used by V for communicating
-   with vgdb.  */
-extern SysRes VG_(am_shared_mmap_file_float_valgrind)
-   ( SizeT length, UInt prot, Int fd, Off64T offset );
 
 /* Unmap the given address range and update the segment array
    accordingly.  This fails if the range isn't valid for the client.

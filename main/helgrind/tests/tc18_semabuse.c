@@ -16,7 +16,7 @@
 void start_watchdog ( void );
 int main ( void )
 {
-  int r __attribute__((unused));
+  int r;
   sem_t s1;
   start_watchdog();
   /* Do sem_init with huge initial count */

@@ -54,9 +54,9 @@ U8 build(int size, U1 byte)
    // res is now considered partially defined, but we know exactly what its
    // value is (it happens to be the same as its metavalue).
    
-   (void)VALGRIND_GET_VBITS(&res, &shres, 8);
+   VALGRIND_GET_VBITS(&res, &shres, 8);
    res2 = res;
-   (void)VALGRIND_MAKE_MEM_DEFINED(&res2, 8);  // avoid the 'undefined' warning
+   VALGRIND_MAKE_MEM_DEFINED(&res2, 8);      // avoid the 'undefined' warning
    assert(res2 == shres);
    return res;
 }
@@ -71,7 +71,7 @@ void check_all(U4 x, U4 y, U1 expected_byte, U1 expected_byte_alt,
    U1 sh[SZB_OF_a];     // Used for getting a[]'s V bits
    int i;
 
-   (void)VALGRIND_GET_VBITS(a, sh, sizeof(a));
+   VALGRIND_GET_VBITS(a, sh, sizeof(a));
    for (i = x; i < y; i++) {
       if ( expected_byte != sh[i] && expected_byte_alt != sh[i] ) {
          fprintf(stderr, "\n\nFAILURE: %s, offset %d, byte %d -- "
