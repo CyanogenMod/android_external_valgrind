@@ -7,7 +7,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2000-2007 Julian Seward
+   Copyright (C) 2000-2011 Julian Seward
       jseward@acm.org
 
    This program is free software; you can redistribute it and/or
@@ -44,7 +44,6 @@
 #include "pub_core_ume.h"
 #include "pub_core_options.h"
 #include "pub_core_tooliface.h"       /* VG_TRACK */
-#include "pub_core_threadstate.h"     /* ThreadArchState */
 #include "pub_core_initimg.h"         /* self */
 
 #include "priv_initimg_pathscan.h"

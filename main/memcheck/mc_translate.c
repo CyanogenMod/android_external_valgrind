@@ -8,7 +8,7 @@
    This file is part of MemCheck, a heavyweight Valgrind tool for
    detecting memory errors.
 
-   Copyright (C) 2000-2010 Julian Seward 
+   Copyright (C) 2000-2011 Julian Seward 
       jseward@acm.org
 
    This program is free software; you can redistribute it and/or
@@ -41,6 +41,13 @@
 
 #include "mc_include.h"
 
+
+/* FIXMEs JRS 2011-June-16.
+
+   Check the interpretation for vector narrowing and widening ops,
+   particularly the saturating ones.  I suspect they are either overly
+   pessimistic and/or wrong.
+*/
 
 /* This file implements the Memcheck instrumentation, and in
    particular contains the core of its undefined value detection
@@ -121,6 +128,7 @@ static IRType  shadowTypeV ( IRType ty );
 static IRExpr* expr2vbits ( struct _MCEnv* mce, IRExpr* e );
 static IRTemp  findShadowTmpB ( struct _MCEnv* mce, IRTemp orig );
 
+static IRExpr *i128_const_zero(void);
 
 /*------------------------------------------------------------*/
 /*--- Memcheck running state, and tmp management.          ---*/
@@ -343,7 +351,7 @@ static Bool sameKindedAtoms ( IRAtom* a1, IRAtom* a2 )
 /* Shadow state is always accessed using integer types.  This returns
    an integer type with the same size (as per sizeofIRType) as the
    given type.  The only valid shadow types are Bit, I8, I16, I32,
-   I64, V128. */
+   I64, I128, V128. */
 
 static IRType shadowTypeV ( IRType ty )
 {
@@ -356,6 +364,7 @@ static IRType shadowTypeV ( IRType ty )
       case Ity_I128: return ty;
       case Ity_F32:  return Ity_I32;
       case Ity_F64:  return Ity_I64;
+      case Ity_F128: return Ity_I128;
       case Ity_V128: return Ity_V128;
       default: ppIRType(ty); 
                VG_(tool_panic)("memcheck:shadowTypeV");
@@ -371,6 +380,7 @@ static IRExpr* definedOfType ( IRType ty ) {
       case Ity_I16:  return IRExpr_Const(IRConst_U16(0));
       case Ity_I32:  return IRExpr_Const(IRConst_U32(0));
       case Ity_I64:  return IRExpr_Const(IRConst_U64(0));
+      case Ity_I128: return i128_const_zero();
       case Ity_V128: return IRExpr_Const(IRConst_V128(0x0000));
       default:       VG_(tool_panic)("memcheck:definedOfType");
    }
@@ -438,6 +448,18 @@ static IRAtom* assignNew ( HChar cat, MCEnv* mce, IRType ty, IRExpr* e )
 
 
 /*------------------------------------------------------------*/
+/*--- Helper functions for 128-bit ops                     ---*/
+/*------------------------------------------------------------*/
+static IRExpr *i128_const_zero(void)
+{
+  return binop(Iop_64HLto128, IRExpr_Const(IRConst_U64(0)),
+               IRExpr_Const(IRConst_U64(0)));
+}
+
+/* There are no 128-bit loads and/or stores. So we do not need to worry
+   about that in expr2vbits_Load */
+
+/*------------------------------------------------------------*/
 /*--- Constructing definedness primitive ops               ---*/
 /*------------------------------------------------------------*/
 
@@ -499,6 +521,20 @@ static IRAtom* mkUifU64 ( MCEnv* mce, IRAtom* a1, IRAtom* a2 ) {
    return assignNew('V', mce, Ity_I64, binop(Iop_Or64, a1, a2));
 }
 
+static IRAtom* mkUifU128 ( MCEnv* mce, IRAtom* a1, IRAtom* a2 ) {
+   IRAtom *tmp1, *tmp2, *tmp3, *tmp4, *tmp5, *tmp6;
+   tl_assert(isShadowAtom(mce,a1));
+   tl_assert(isShadowAtom(mce,a2));
+   tmp1 = assignNew('V', mce, Ity_I64, unop(Iop_128to64, a1));
+   tmp2 = assignNew('V', mce, Ity_I64, unop(Iop_128HIto64, a1));
+   tmp3 = assignNew('V', mce, Ity_I64, unop(Iop_128to64, a2));
+   tmp4 = assignNew('V', mce, Ity_I64, unop(Iop_128HIto64, a2));
+   tmp5 = assignNew('V', mce, Ity_I64, binop(Iop_Or64, tmp1, tmp3));
+   tmp6 = assignNew('V', mce, Ity_I64, binop(Iop_Or64, tmp2, tmp4));
+
+   return assignNew('V', mce, Ity_I128, binop(Iop_64HLto128, tmp6, tmp5));
+}
+
 static IRAtom* mkUifUV128 ( MCEnv* mce, IRAtom* a1, IRAtom* a2 ) {
    tl_assert(isShadowAtom(mce,a1));
    tl_assert(isShadowAtom(mce,a2));
@@ -511,6 +547,7 @@ static IRAtom* mkUifU ( MCEnv* mce, IRType vty, IRAtom* a1, IRAtom* a2 ) {
       case Ity_I16:  return mkUifU16(mce, a1, a2);
       case Ity_I32:  return mkUifU32(mce, a1, a2);
       case Ity_I64:  return mkUifU64(mce, a1, a2);
+      case Ity_I128: return mkUifU128(mce, a1, a2);
       case Ity_V128: return mkUifUV128(mce, a1, a2);
       default:
          VG_(printf)("\n"); ppIRType(vty); VG_(printf)("\n");
@@ -649,6 +686,10 @@ static IRAtom* mkImproveORV128 ( MCEnv* mce, IRAtom* data, IRAtom* vbits )
 }
 
 /* --------- Pessimising casts. --------- */
+
+/* The function returns an expression of type DST_TY. If any of the VBITS
+   is undefined (value == 1) the resulting expression has all bits set to
+   1. Otherwise, all bits are 0. */
 
 static IRAtom* mkPCastTo( MCEnv* mce, IRType dst_ty, IRAtom* vbits ) 
 {
@@ -1202,6 +1243,7 @@ void do_shadow_PUT ( MCEnv* mce,  Int offset,
 
    ty = typeOfIRExpr(mce->sb->tyenv, vatom);
    tl_assert(ty != Ity_I1);
+   tl_assert(ty != Ity_I128);
    if (isAlwaysDefd(mce, offset, sizeofIRType(ty))) {
       /* later: no ... */
       /* emit code to emit a complaint if any of the vbits are 1. */
@@ -1263,6 +1305,7 @@ IRExpr* shadow_GET ( MCEnv* mce, Int offset, IRType ty )
 {
    IRType tyS = shadowTypeV(ty);
    tl_assert(ty != Ity_I1);
+   tl_assert(ty != Ity_I128);
    if (isAlwaysDefd(mce, offset, sizeofIRType(ty))) {
       /* Always defined, return all zeroes of the relevant type */
       return definedOfType(tyS);
@@ -1414,6 +1457,22 @@ IRAtom* mkLazy3 ( MCEnv* mce, IRType finalVty,
       return at;
    }
 
+   /* I32 x I128 x I128 -> I128 */
+   /* Standard FP idiom: rm x FParg1 x FParg2 -> FPresult */
+   if (t1 == Ity_I32 && t2 == Ity_I128 && t3 == Ity_I128
+       && finalVty == Ity_I128) {
+      if (0) VG_(printf)("mkLazy3: I32 x I128 x I128 -> I128\n");
+      /* Widen 1st arg to I128.  Since 1st arg is typically a rounding
+         mode indication which is fully defined, this should get
+         folded out later. */
+      at = mkPCastTo(mce, Ity_I128, va1);
+      /* Now fold in 2nd and 3rd args. */
+      at = mkUifU(mce, Ity_I128, at, va2);
+      at = mkUifU(mce, Ity_I128, at, va3);
+      /* and PCast once again. */
+      at = mkPCastTo(mce, Ity_I128, at);
+      return at;
+   }
    if (1) {
       VG_(printf)("mkLazy3: ");
       ppIRType(t1);
@@ -1474,6 +1533,19 @@ IRAtom* mkLazy4 ( MCEnv* mce, IRType finalVty,
       at = mkPCastTo(mce, Ity_I64, at);
       return at;
    }
+   /* I32 x I32 x I32 x I32 -> I32 */
+   /* Standard FP idiom: rm x FParg1 x FParg2 x FParg3 -> FPresult */
+   if (t1 == Ity_I32 && t2 == Ity_I32 && t3 == Ity_I32 && t4 == Ity_I32
+       && finalVty == Ity_I32) {
+      if (0) VG_(printf)("mkLazy4: I32 x I32 x I32 x I32 -> I32\n");
+      at = va1;
+      /* Now fold in 2nd, 3rd, 4th args. */
+      at = mkUifU(mce, Ity_I32, at, va2);
+      at = mkUifU(mce, Ity_I32, at, va3);
+      at = mkUifU(mce, Ity_I32, at, va4);
+      at = mkPCastTo(mce, Ity_I32, at);
+      return at;
+   }
 
    if (1) {
       VG_(printf)("mkLazy4: ");
@@ -1506,7 +1578,7 @@ IRAtom* mkLazyN ( MCEnv* mce,
    IRAtom* here;
    IRAtom* curr;
    IRType  mergeTy;
-   IRType  mergeTy64 = True;
+   Bool    mergeTy64 = True;
 
    /* Decide on the type of the merge intermediary.  If all relevant
       args are I64, then it's I64.  In all other circumstances, use
@@ -1885,114 +1957,188 @@ IRAtom* unary32Fx2 ( MCEnv* mce, IRAtom* vatomX )
 
 /* --- --- Vector saturated narrowing --- --- */
 
-/* This is quite subtle.  What to do is simple:
+/* We used to do something very clever here, but on closer inspection
+   (2011-Jun-15), and in particular bug #279698, it turns out to be
+   wrong.  Part of the problem came from the fact that for a long
+   time, the IR primops to do with saturated narrowing were
+   underspecified and managed to confuse multiple cases which needed
+   to be separate: the op names had a signedness qualifier, but in
+   fact the source and destination signednesses needed to be specified
+   independently, so the op names really need two independent
+   signedness specifiers.
 
-   Let the original narrowing op be QNarrowW{S,U}xN.  Produce:
+   As of 2011-Jun-15 (ish) the underspecification was sorted out
+   properly.  The incorrect instrumentation remained, though.  That
+   has now (2011-Oct-22) been fixed.
 
-      the-narrowing-op( PCastWxN(vatom1), PCastWxN(vatom2))
+   What we now do is simple:
 
-   Why this is right is not so simple.  Consider a lane in the args,
-   vatom1 or 2, doesn't matter.
+   Let the original narrowing op be QNarrowBinXtoYxZ, where Z is a
+   number of lanes, X is the source lane width and signedness, and Y
+   is the destination lane width and signedness.  In all cases the
+   destination lane width is half the source lane width, so the names
+   have a bit of redundancy, but are at least easy to read.
 
-   After the PCast, that lane is all 0s (defined) or all
-   1s(undefined).
+   For example, Iop_QNarrowBin32Sto16Ux8 narrows 8 lanes of signed 32s
+   to unsigned 16s.
 
-   Both signed and unsigned saturating narrowing of all 0s produces
-   all 0s, which is what we want.
+   Let Vanilla(OP) be a function that takes OP, one of these
+   saturating narrowing ops, and produces the same "shaped" narrowing
+   op which is not saturating, but merely dumps the most significant
+   bits.  "same shape" means that the lane numbers and widths are the
+   same as with OP.
 
-   The all-1s case is more complex.  Unsigned narrowing interprets an
-   all-1s input as the largest unsigned integer, and so produces all
-   1s as a result since that is the largest unsigned value at the
-   smaller width.
+   For example, Vanilla(Iop_QNarrowBin32Sto16Ux8) 
+                  = Iop_NarrowBin32to16x8,
+   that is, narrow 8 lanes of 32 bits to 8 lanes of 16 bits, by
+   dumping the top half of each lane.
 
-   Signed narrowing interprets all 1s as -1.  Fortunately, -1 narrows
-   to -1, so we still wind up with all 1s at the smaller width.
+   So, with that in place, the scheme is simple, and it is simple to
+   pessimise each lane individually and then apply Vanilla(OP) so as
+   to get the result in the right "shape".  If the original OP is
+   QNarrowBinXtoYxZ then we produce
 
-   So: In short, pessimise the args, then apply the original narrowing
-   op.
+   Vanilla(OP)( PCast-X-to-X-x-Z(vatom1), PCast-X-to-X-x-Z(vatom2) )
+
+   or for the case when OP is unary (Iop_QNarrowUn*)
+
+   Vanilla(OP)( PCast-X-to-X-x-Z(vatom) )
 */
 static
-IRAtom* vectorNarrowV128 ( MCEnv* mce, IROp narrow_op, 
-                          IRAtom* vatom1, IRAtom* vatom2)
+IROp vanillaNarrowingOpOfShape ( IROp qnarrowOp )
+{
+   switch (qnarrowOp) {
+      /* Binary: (128, 128) -> 128 */
+      case Iop_QNarrowBin16Sto8Ux16:
+      case Iop_QNarrowBin16Sto8Sx16:
+      case Iop_QNarrowBin16Uto8Ux16:
+         return Iop_NarrowBin16to8x16;
+      case Iop_QNarrowBin32Sto16Ux8:
+      case Iop_QNarrowBin32Sto16Sx8:
+      case Iop_QNarrowBin32Uto16Ux8:
+         return Iop_NarrowBin32to16x8;
+      /* Binary: (64, 64) -> 64 */
+      case Iop_QNarrowBin32Sto16Sx4:
+         return Iop_NarrowBin32to16x4;
+      case Iop_QNarrowBin16Sto8Ux8:
+      case Iop_QNarrowBin16Sto8Sx8:
+         return Iop_NarrowBin16to8x8;
+      /* Unary: 128 -> 64 */
+      case Iop_QNarrowUn64Uto32Ux2:
+      case Iop_QNarrowUn64Sto32Sx2:
+      case Iop_QNarrowUn64Sto32Ux2:
+         return Iop_NarrowUn64to32x2;
+      case Iop_QNarrowUn32Uto16Ux4:
+      case Iop_QNarrowUn32Sto16Sx4:
+      case Iop_QNarrowUn32Sto16Ux4:
+         return Iop_NarrowUn32to16x4;
+      case Iop_QNarrowUn16Uto8Ux8:
+      case Iop_QNarrowUn16Sto8Sx8:
+      case Iop_QNarrowUn16Sto8Ux8:
+         return Iop_NarrowUn16to8x8;
+      default: 
+         ppIROp(qnarrowOp);
+         VG_(tool_panic)("vanillaNarrowOpOfShape");
+   }
+}
+
+static
+IRAtom* vectorNarrowBinV128 ( MCEnv* mce, IROp narrow_op, 
+                              IRAtom* vatom1, IRAtom* vatom2)
 {
    IRAtom *at1, *at2, *at3;
    IRAtom* (*pcast)( MCEnv*, IRAtom* );
    switch (narrow_op) {
-      case Iop_QNarrow32Sx4: pcast = mkPCast32x4; break;
-      case Iop_QNarrow32Ux4: pcast = mkPCast32x4; break;
-      case Iop_QNarrow16Sx8: pcast = mkPCast16x8; break;
-      case Iop_QNarrow16Ux8: pcast = mkPCast16x8; break;
-      default: VG_(tool_panic)("vectorNarrowV128");
+      case Iop_QNarrowBin32Sto16Sx8: pcast = mkPCast32x4; break;
+      case Iop_QNarrowBin32Uto16Ux8: pcast = mkPCast32x4; break;
+      case Iop_QNarrowBin32Sto16Ux8: pcast = mkPCast32x4; break;
+      case Iop_QNarrowBin16Sto8Sx16: pcast = mkPCast16x8; break;
+      case Iop_QNarrowBin16Uto8Ux16: pcast = mkPCast16x8; break;
+      case Iop_QNarrowBin16Sto8Ux16: pcast = mkPCast16x8; break;
+      default: VG_(tool_panic)("vectorNarrowBinV128");
    }
+   IROp vanilla_narrow = vanillaNarrowingOpOfShape(narrow_op);
    tl_assert(isShadowAtom(mce,vatom1));
    tl_assert(isShadowAtom(mce,vatom2));
    at1 = assignNew('V', mce, Ity_V128, pcast(mce, vatom1));
    at2 = assignNew('V', mce, Ity_V128, pcast(mce, vatom2));
-   at3 = assignNew('V', mce, Ity_V128, binop(narrow_op, at1, at2));
+   at3 = assignNew('V', mce, Ity_V128, binop(vanilla_narrow, at1, at2));
    return at3;
 }
 
 static
-IRAtom* vectorNarrow64 ( MCEnv* mce, IROp narrow_op, 
-                         IRAtom* vatom1, IRAtom* vatom2)
+IRAtom* vectorNarrowBin64 ( MCEnv* mce, IROp narrow_op, 
+                            IRAtom* vatom1, IRAtom* vatom2)
 {
    IRAtom *at1, *at2, *at3;
    IRAtom* (*pcast)( MCEnv*, IRAtom* );
    switch (narrow_op) {
-      case Iop_QNarrow32Sx2: pcast = mkPCast32x2; break;
-      case Iop_QNarrow16Sx4: pcast = mkPCast16x4; break;
-      case Iop_QNarrow16Ux4: pcast = mkPCast16x4; break;
-      default: VG_(tool_panic)("vectorNarrow64");
+      case Iop_QNarrowBin32Sto16Sx4: pcast = mkPCast32x2; break;
+      case Iop_QNarrowBin16Sto8Sx8:  pcast = mkPCast16x4; break;
+      case Iop_QNarrowBin16Sto8Ux8:  pcast = mkPCast16x4; break;
+      default: VG_(tool_panic)("vectorNarrowBin64");
    }
+   IROp vanilla_narrow = vanillaNarrowingOpOfShape(narrow_op);
    tl_assert(isShadowAtom(mce,vatom1));
    tl_assert(isShadowAtom(mce,vatom2));
    at1 = assignNew('V', mce, Ity_I64, pcast(mce, vatom1));
    at2 = assignNew('V', mce, Ity_I64, pcast(mce, vatom2));
-   at3 = assignNew('V', mce, Ity_I64, binop(narrow_op, at1, at2));
+   at3 = assignNew('V', mce, Ity_I64, binop(vanilla_narrow, at1, at2));
    return at3;
 }
 
 static
-IRAtom* vectorShortenV128 ( MCEnv* mce, IROp shorten_op,
-                          IRAtom* vatom1)
+IRAtom* vectorNarrowUnV128 ( MCEnv* mce, IROp narrow_op,
+                             IRAtom* vatom1)
 {
    IRAtom *at1, *at2;
    IRAtom* (*pcast)( MCEnv*, IRAtom* );
-   switch (shorten_op) {
-      case Iop_Shorten16x8: pcast = mkPCast16x8; break;
-      case Iop_Shorten32x4: pcast = mkPCast32x4; break;
-      case Iop_Shorten64x2: pcast = mkPCast64x2; break;
-      case Iop_QShortenS16Sx8: pcast = mkPCast16x8; break;
-      case Iop_QShortenU16Sx8: pcast = mkPCast16x8; break;
-      case Iop_QShortenU16Ux8: pcast = mkPCast16x8; break;
-      case Iop_QShortenS32Sx4: pcast = mkPCast32x4; break;
-      case Iop_QShortenU32Sx4: pcast = mkPCast32x4; break;
-      case Iop_QShortenU32Ux4: pcast = mkPCast32x4; break;
-      case Iop_QShortenS64Sx2: pcast = mkPCast64x2; break;
-      case Iop_QShortenU64Sx2: pcast = mkPCast64x2; break;
-      case Iop_QShortenU64Ux2: pcast = mkPCast64x2; break;
-      default: VG_(tool_panic)("vectorShortenV128");
-   }
    tl_assert(isShadowAtom(mce,vatom1));
+   /* For vanilla narrowing (non-saturating), we can just apply
+      the op directly to the V bits. */
+   switch (narrow_op) {
+      case Iop_NarrowUn16to8x8:
+      case Iop_NarrowUn32to16x4:
+      case Iop_NarrowUn64to32x2:
+         at1 = assignNew('V', mce, Ity_I64, unop(narrow_op, vatom1));
+         return at1;
+      default:
+         break; /* Do Plan B */
+   }
+   /* Plan B: for ops that involve a saturation operation on the args,
+      we must PCast before the vanilla narrow. */
+   switch (narrow_op) {
+      case Iop_QNarrowUn16Sto8Sx8:  pcast = mkPCast16x8; break;
+      case Iop_QNarrowUn16Sto8Ux8:  pcast = mkPCast16x8; break;
+      case Iop_QNarrowUn16Uto8Ux8:  pcast = mkPCast16x8; break;
+      case Iop_QNarrowUn32Sto16Sx4: pcast = mkPCast32x4; break;
+      case Iop_QNarrowUn32Sto16Ux4: pcast = mkPCast32x4; break;
+      case Iop_QNarrowUn32Uto16Ux4: pcast = mkPCast32x4; break;
+      case Iop_QNarrowUn64Sto32Sx2: pcast = mkPCast64x2; break;
+      case Iop_QNarrowUn64Sto32Ux2: pcast = mkPCast64x2; break;
+      case Iop_QNarrowUn64Uto32Ux2: pcast = mkPCast64x2; break;
+      default: VG_(tool_panic)("vectorNarrowUnV128");
+   }
+   IROp vanilla_narrow = vanillaNarrowingOpOfShape(narrow_op);
    at1 = assignNew('V', mce, Ity_V128, pcast(mce, vatom1));
-   at2 = assignNew('V', mce, Ity_I64, unop(shorten_op, at1));
+   at2 = assignNew('V', mce, Ity_I64, unop(vanilla_narrow, at1));
    return at2;
 }
 
 static
-IRAtom* vectorLongenI64 ( MCEnv* mce, IROp longen_op,
-                           IRAtom* vatom1)
+IRAtom* vectorWidenI64 ( MCEnv* mce, IROp longen_op,
+                         IRAtom* vatom1)
 {
    IRAtom *at1, *at2;
    IRAtom* (*pcast)( MCEnv*, IRAtom* );
    switch (longen_op) {
-      case Iop_Longen8Ux8: pcast = mkPCast16x8; break;
-      case Iop_Longen8Sx8: pcast = mkPCast16x8; break;
-      case Iop_Longen16Ux4: pcast = mkPCast32x4; break;
-      case Iop_Longen16Sx4: pcast = mkPCast32x4; break;
-      case Iop_Longen32Ux2: pcast = mkPCast64x2; break;
-      case Iop_Longen32Sx2: pcast = mkPCast64x2; break;
-      default: VG_(tool_panic)("vectorLongenI64");
+      case Iop_Widen8Uto16x8:  pcast = mkPCast16x8; break;
+      case Iop_Widen8Sto16x8:  pcast = mkPCast16x8; break;
+      case Iop_Widen16Uto32x4: pcast = mkPCast32x4; break;
+      case Iop_Widen16Sto32x4: pcast = mkPCast32x4; break;
+      case Iop_Widen32Uto64x2: pcast = mkPCast64x2; break;
+      case Iop_Widen32Sto64x2: pcast = mkPCast64x2; break;
+      default: VG_(tool_panic)("vectorWidenI64");
    }
    tl_assert(isShadowAtom(mce,vatom1));
    at1 = assignNew('V', mce, Ity_V128, unop(longen_op, vatom1));
@@ -2136,6 +2282,12 @@ IRAtom* expr2vbits_Qop ( MCEnv* mce,
       case Iop_MSubF64r32:
          /* I32(rm) x F64 x F64 x F64 -> F64 */
          return mkLazy4(mce, Ity_I64, vatom1, vatom2, vatom3, vatom4);
+
+      case Iop_MAddF32:
+      case Iop_MSubF32:
+         /* I32(rm) x F32 x F32 x F32 -> F32 */
+         return mkLazy4(mce, Ity_I32, vatom1, vatom2, vatom3, vatom4);
+
       default:
          ppIROp(op);
          VG_(tool_panic)("memcheck:expr2vbits_Qop");
@@ -2162,6 +2314,12 @@ IRAtom* expr2vbits_Triop ( MCEnv* mce,
    tl_assert(sameKindedAtoms(atom2,vatom2));
    tl_assert(sameKindedAtoms(atom3,vatom3));
    switch (op) {
+      case Iop_AddF128:
+      case Iop_SubF128:
+      case Iop_MulF128:
+      case Iop_DivF128:
+         /* I32(rm) x F128 x F128 -> F128 */
+         return mkLazy3(mce, Ity_I128, vatom1, vatom2, vatom3);
       case Iop_AddF64:
       case Iop_AddF64r32:
       case Iop_SubF64:
@@ -2266,10 +2424,10 @@ IRAtom* expr2vbits_Binop ( MCEnv* mce,
          complainIfUndefined(mce, atom2);
          return assignNew('V', mce, Ity_I64, binop(op, vatom1, atom2));
 
-      case Iop_QNarrow32Sx2:
-      case Iop_QNarrow16Sx4:
-      case Iop_QNarrow16Ux4:
-         return vectorNarrow64(mce, op, vatom1, vatom2);
+      case Iop_QNarrowBin32Sto16Sx4:
+      case Iop_QNarrowBin16Sto8Sx8:
+      case Iop_QNarrowBin16Sto8Ux8:
+         return vectorNarrowBin64(mce, op, vatom1, vatom2);
 
       case Iop_Min8Ux8:
       case Iop_Min8Sx8:
@@ -2613,6 +2771,7 @@ IRAtom* expr2vbits_Binop ( MCEnv* mce,
 
       case Iop_Sub64x2:
       case Iop_Add64x2:
+      case Iop_CmpEQ64x2:
       case Iop_CmpGT64Sx2:
       case Iop_QSal64x2:
       case Iop_QShl64x2:
@@ -2622,11 +2781,13 @@ IRAtom* expr2vbits_Binop ( MCEnv* mce,
       case Iop_QSub64Sx2:
          return binary64Ix2(mce, vatom1, vatom2);
 
-      case Iop_QNarrow32Sx4:
-      case Iop_QNarrow32Ux4:
-      case Iop_QNarrow16Sx8:
-      case Iop_QNarrow16Ux8:
-         return vectorNarrowV128(mce, op, vatom1, vatom2);
+      case Iop_QNarrowBin32Sto16Sx8:
+      case Iop_QNarrowBin32Uto16Ux8:
+      case Iop_QNarrowBin32Sto16Ux8:
+      case Iop_QNarrowBin16Sto8Sx16:
+      case Iop_QNarrowBin16Uto8Ux16:
+      case Iop_QNarrowBin16Sto8Ux16:
+         return vectorNarrowBinV128(mce, op, vatom1, vatom2);
 
       case Iop_Sub64Fx2:
       case Iop_Mul64Fx2:
@@ -2719,20 +2880,20 @@ IRAtom* expr2vbits_Binop ( MCEnv* mce,
       case Iop_Mull32Sx2:
       case Iop_Mull32Ux2:
       case Iop_QDMulLong32Sx2:
-         return vectorLongenI64(mce, Iop_Longen32Sx2,
-               mkUifU64(mce, vatom1, vatom2));
+         return vectorWidenI64(mce, Iop_Widen32Sto64x2,
+                                    mkUifU64(mce, vatom1, vatom2));
 
       case Iop_Mull16Sx4:
       case Iop_Mull16Ux4:
       case Iop_QDMulLong16Sx4:
-         return vectorLongenI64(mce, Iop_Longen16Sx4,
-               mkUifU64(mce, vatom1, vatom2));
+         return vectorWidenI64(mce, Iop_Widen16Sto32x4,
+                                    mkUifU64(mce, vatom1, vatom2));
 
       case Iop_Mull8Sx8:
       case Iop_Mull8Ux8:
       case Iop_PolynomialMull8x8:
-         return vectorLongenI64(mce, Iop_Longen8Sx8,
-               mkUifU64(mce, vatom1, vatom2));
+         return vectorWidenI64(mce, Iop_Widen8Sto16x8,
+                                    mkUifU64(mce, vatom1, vatom2));
 
       case Iop_PwAdd32x4:
          return mkPCast32x4(mce,
@@ -2828,8 +2989,8 @@ IRAtom* expr2vbits_Binop ( MCEnv* mce,
          32x4 -> 16x8 laneage, discarding the upper half of each lane.
          Simply apply same op to the V bits, since this really no more
          than a data steering operation. */
-      case Iop_Narrow32x4: 
-      case Iop_Narrow16x8: 
+      case Iop_NarrowBin32to16x8: 
+      case Iop_NarrowBin16to8x16: 
          return assignNew('V', mce, Ity_V128, 
                                     binop(op, vatom1, vatom2));
 
@@ -2847,10 +3008,20 @@ IRAtom* expr2vbits_Binop ( MCEnv* mce,
 
       /* Scalar floating point */
 
+      case Iop_F32toI64S:
+         /* I32(rm) x F32 -> I64 */
+         return mkLazy2(mce, Ity_I64, vatom1, vatom2);
+
+      case Iop_I64StoF32:
+         /* I32(rm) x I64 -> F32 */
+         return mkLazy2(mce, Ity_I32, vatom1, vatom2);
+
       case Iop_RoundF64toInt:
       case Iop_RoundF64toF32:
       case Iop_F64toI64S:
+      case Iop_F64toI64U:
       case Iop_I64StoF64:
+      case Iop_I64UtoF64:
       case Iop_SinF64:
       case Iop_CosF64:
       case Iop_TanF64:
@@ -2864,9 +3035,30 @@ IRAtom* expr2vbits_Binop ( MCEnv* mce,
          /* I32(rm) x I32/F32 -> I32/F32 */
          return mkLazy2(mce, Ity_I32, vatom1, vatom2);
 
+      case Iop_SqrtF128:
+         /* I32(rm) x F128 -> F128 */
+         return mkLazy2(mce, Ity_I128, vatom1, vatom2);
+
+      case Iop_I32StoF32:
+      case Iop_F32toI32S:
+         /* First arg is I32 (rounding mode), second is F32/I32 (data). */
+         return mkLazy2(mce, Ity_I32, vatom1, vatom2);
+
+      case Iop_F128toI32S: /* IRRoundingMode(I32) x F128 -> signed I32  */
+      case Iop_F128toF32:  /* IRRoundingMode(I32) x F128 -> F32         */
+         return mkLazy2(mce, Ity_I32, vatom1, vatom2);
+
+      case Iop_F128toI64S: /* IRRoundingMode(I32) x F128 -> signed I64  */
+      case Iop_F128toF64:  /* IRRoundingMode(I32) x F128 -> F64         */
+         return mkLazy2(mce, Ity_I64, vatom1, vatom2);
+
+      case Iop_F64HLtoF128:
+         return assignNew('V', mce, Ity_I128, binop(Iop_64HLto128, vatom1, vatom2));
+
       case Iop_F64toI32U:
       case Iop_F64toI32S:
       case Iop_F64toF32:
+      case Iop_I64UtoF32:
          /* First arg is I32 (rounding mode), second is F64 (data). */
          return mkLazy2(mce, Ity_I32, vatom1, vatom2);
 
@@ -2874,7 +3066,9 @@ IRAtom* expr2vbits_Binop ( MCEnv* mce,
          /* First arg is I32 (rounding mode), second is F64 (data). */
          return mkLazy2(mce, Ity_I16, vatom1, vatom2);
 
+      case Iop_CmpF32:
       case Iop_CmpF64:
+      case Iop_CmpF128:
          return mkLazy2(mce, Ity_I32, vatom1, vatom2);
 
       /* non-FP after here */
@@ -2892,6 +3086,7 @@ IRAtom* expr2vbits_Binop ( MCEnv* mce,
       case Iop_32HLto64:
          return assignNew('V', mce, Ity_I64, binop(op, vatom1, vatom2));
 
+      case Iop_DivModS64to64:
       case Iop_MullS64:
       case Iop_MullU64: {
          IRAtom* vLo64 = mkLeft64(mce, mkUifU64(mce, vatom1,vatom2));
@@ -2923,10 +3118,14 @@ IRAtom* expr2vbits_Binop ( MCEnv* mce,
       case Iop_Sad8Ux4: /* maybe we could do better?  ftm, do mkLazy2. */
       case Iop_DivS32:
       case Iop_DivU32:
+      case Iop_DivU32E:
+      case Iop_DivS32E:
          return mkLazy2(mce, Ity_I32, vatom1, vatom2);
 
       case Iop_DivS64:
       case Iop_DivU64:
+      case Iop_DivS64E:
+      case Iop_DivU64E:
          return mkLazy2(mce, Ity_I64, vatom1, vatom2);
 
       case Iop_Add32:
@@ -3142,6 +3341,21 @@ IRExpr* expr2vbits_Unop ( MCEnv* mce, IROp op, IRAtom* atom )
       case Iop_Reverse64_32x4:
          return assignNew('V', mce, Ity_V128, unop(op, vatom));
 
+      case Iop_F128HItoF64:  /* F128 -> high half of F128 */
+         return assignNew('V', mce, Ity_I64, unop(Iop_128HIto64, vatom));
+      case Iop_F128LOtoF64:  /* F128 -> low  half of F128 */
+         return assignNew('V', mce, Ity_I64, unop(Iop_128to64, vatom));
+
+      case Iop_NegF128:
+      case Iop_AbsF128:
+         return mkPCastTo(mce, Ity_I128, vatom);
+
+      case Iop_I32StoF128: /* signed I32 -> F128 */
+      case Iop_I64StoF128: /* signed I64 -> F128 */
+      case Iop_F32toF128:  /* F32 -> F128 */
+      case Iop_F64toF128:  /* F64 -> F128 */
+         return mkPCastTo(mce, Ity_I128, vatom);
+
       case Iop_F32toF64: 
       case Iop_I32StoF64:
       case Iop_I32UtoF64:
@@ -3164,6 +3378,7 @@ IRExpr* expr2vbits_Unop ( MCEnv* mce, IROp op, IRAtom* atom )
          return mkPCastTo(mce, Ity_I32, vatom);
 
       case Iop_1Uto64:
+      case Iop_1Sto64:
       case Iop_8Uto64:
       case Iop_8Sto64:
       case Iop_16Uto64:
@@ -3185,6 +3400,7 @@ IRExpr* expr2vbits_Unop ( MCEnv* mce, IROp op, IRAtom* atom )
       case Iop_Reverse64_32x2:
          return assignNew('V', mce, Ity_I64, unop(op, vatom));
 
+      case Iop_I16StoF32:
       case Iop_64to32:
       case Iop_64HIto32:
       case Iop_1Uto32:
@@ -3204,6 +3420,7 @@ IRExpr* expr2vbits_Unop ( MCEnv* mce, IROp op, IRAtom* atom )
          return assignNew('V', mce, Ity_I16, unop(op, vatom));
 
       case Iop_1Uto8:
+      case Iop_1Sto8:
       case Iop_16to8:
       case Iop_16HIto8:
       case Iop_32to8:
@@ -3276,27 +3493,27 @@ IRExpr* expr2vbits_Unop ( MCEnv* mce, IROp op, IRAtom* atom )
       case Iop_CmpNEZ64x2:
          return mkPCast64x2(mce, vatom);
 
-      case Iop_Shorten16x8:
-      case Iop_Shorten32x4:
-      case Iop_Shorten64x2:
-      case Iop_QShortenS16Sx8:
-      case Iop_QShortenU16Sx8:
-      case Iop_QShortenU16Ux8:
-      case Iop_QShortenS32Sx4:
-      case Iop_QShortenU32Sx4:
-      case Iop_QShortenU32Ux4:
-      case Iop_QShortenS64Sx2:
-      case Iop_QShortenU64Sx2:
-      case Iop_QShortenU64Ux2:
-         return vectorShortenV128(mce, op, vatom);
+      case Iop_NarrowUn16to8x8:
+      case Iop_NarrowUn32to16x4:
+      case Iop_NarrowUn64to32x2:
+      case Iop_QNarrowUn16Sto8Sx8:
+      case Iop_QNarrowUn16Sto8Ux8:
+      case Iop_QNarrowUn16Uto8Ux8:
+      case Iop_QNarrowUn32Sto16Sx4:
+      case Iop_QNarrowUn32Sto16Ux4:
+      case Iop_QNarrowUn32Uto16Ux4:
+      case Iop_QNarrowUn64Sto32Sx2:
+      case Iop_QNarrowUn64Sto32Ux2:
+      case Iop_QNarrowUn64Uto32Ux2:
+         return vectorNarrowUnV128(mce, op, vatom);
 
-      case Iop_Longen8Sx8:
-      case Iop_Longen8Ux8:
-      case Iop_Longen16Sx4:
-      case Iop_Longen16Ux4:
-      case Iop_Longen32Sx2:
-      case Iop_Longen32Ux2:
-         return vectorLongenI64(mce, op, vatom);
+      case Iop_Widen8Sto16x8:
+      case Iop_Widen8Uto16x8:
+      case Iop_Widen16Sto32x4:
+      case Iop_Widen16Uto32x4:
+      case Iop_Widen32Sto64x2:
+      case Iop_Widen32Uto64x2:
+         return vectorWidenI64(mce, op, vatom);
 
       case Iop_PwAddL32Ux2:
       case Iop_PwAddL32Sx2:
@@ -3328,6 +3545,7 @@ IRExpr* expr2vbits_Unop ( MCEnv* mce, IROp op, IRAtom* atom )
          return mkPCast16x8(mce,
                assignNew('V', mce, Ity_V128, unop(op, mkPCast8x16(mce, vatom))));
 
+      case Iop_I64UtoF32:
       default:
          ppIROp(op);
          VG_(tool_panic)("memcheck:expr2vbits_Unop");
@@ -4536,6 +4754,7 @@ static Bool isBogusAtom ( IRAtom* at )
       case Ico_U32:  n = (ULong)con->Ico.U32; break;
       case Ico_U64:  n = (ULong)con->Ico.U64; break;
       case Ico_F64:  return False;
+      case Ico_F32i: return False;
       case Ico_F64i: return False;
       case Ico_V128: return False;
       default: ppIRExpr(at); tl_assert(0);
@@ -4751,7 +4970,7 @@ IRSB* MC_(instrument) ( VgCallbackClosure* closure,
       to cause IR sanity check failures, due to references to
       non-existent shadows.  This is only evident for the complex
       preambles used for function wrapping on TOC-afflicted platforms
-      (ppc64-linux, ppc32-aix5, ppc64-aix5).
+      (ppc64-linux).
 
       The following loop therefore scans the preamble looking for
       assignments to temporaries.  For each one found it creates an

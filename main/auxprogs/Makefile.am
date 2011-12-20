@@ -1,6 +1,8 @@
 include $(top_srcdir)/Makefile.all.am
 
 dist_noinst_SCRIPTS = \
+	change-copyright-year \
+	dump_insn_ppc.sh \
 	gen-mdg \
 	gsl16test \
 	gsl19test \
@@ -9,8 +11,6 @@ dist_noinst_SCRIPTS = \
 EXTRA_DIST = \
 	DotToScc.hs \
 	Merge3Way.hs \
-	aix5_VKI_info.c \
-	aix5_proc_self_sysent.c \
 	gsl16-badfree.patch \
 	gsl16-wavelet.patch \
 	posixtestsuite-1.5.1-diff.txt \

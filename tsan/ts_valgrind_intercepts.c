@@ -2161,22 +2161,20 @@ LIBC_FUNC(long, opendir$Za, void *path) {
   return opendir_WRK(path);
 }
 
-#ifndef ANDROID
-LIBC_FUNC(long, lockf, long fd, long cmd, OFF_T offset) {
-  // TODO: this doesn't support locking file subsections
-  const long offset_magic = 0xFEB0ACC0;
+#if !defined(ANDROID)
+LIBC_FUNC(int, lockf, int fd, int cmd, OFF_T offset) {
   OrigFn fn;
+  void *o;
   long ret;
   VALGRIND_GET_ORIG_FN(fn);
-  if (cmd == F_ULOCK)
-    DO_CREQ_v_W(TSREQ_PTHREAD_RWLOCK_UNLOCK_PRE,
-                  long, fd ^ offset_magic);
+  o = SocketMagic(fd);
+  if (cmd == F_ULOCK) {
+    DO_CREQ_v_W(TSREQ_SIGNAL, void*, o);
+  }
   CALL_FN_W_2WO_T(ret, fn, fd, cmd, offset);
-  if (cmd == F_LOCK && ret == 0)
-    DO_CREQ_v_WW(TSREQ_PTHREAD_RWLOCK_LOCK_POST,
-                  long, fd ^ offset_magic,
-                  long, 1/*is_w*/);
-
+  if (cmd == F_LOCK && ret == 0) {
+    do_wait(o);
+  }
   return ret;
 }
 #endif
@@ -2327,6 +2325,19 @@ STRCHR(NONE,             index)
 STRCHR(VG_Z_LIBC_SONAME, __GI_strchr)
 #endif
 
+// --- STRCHRNUL --------------------------------------------------
+//
+#define STRCHRNUL(soname, fnname) \
+   char* VG_REPLACE_FUNCTION_ZU(soname,fnname) ( const char* s, int c ); \
+   char* VG_REPLACE_FUNCTION_ZU(soname,fnname) ( const char* s, int c ) \
+   { return Replace_strchrnul(s, c); }
+
+STRCHRNUL(VG_Z_LIBC_SONAME, strchrnul)
+STRCHRNUL(NONE,             strchrnul)
+#if defined(VGO_linux)
+STRCHRNUL(VG_Z_LIBC_SONAME, __GI_strchrnul)
+#endif
+
 // --- STRRCHR RINDEX -----------------------------------------------------
 //
 #define STRRCHR(soname, fnname) \
@@ -2334,6 +2345,7 @@ STRCHR(VG_Z_LIBC_SONAME, __GI_strchr)
    char* VG_REPLACE_FUNCTION_ZU(soname,fnname)( const char* str, int c ) \
    { return Replace_strrchr(str, c); }
 
+// Apparently rindex() is the same thing as strrchr()
 STRRCHR(VG_Z_LIBC_SONAME, strrchr)
 STRRCHR(VG_Z_LIBC_SONAME, rindex)
 STRRCHR(NONE,             strrchr)
@@ -2603,7 +2615,7 @@ ANN_FUNC(void, AnnotateExpectRace, const char *file, int line, void *mem, char *
 {
   const char *name = "AnnotateExpectRace";
   ANN_TRACE("--#%d %s[%p] %s:%d\n", tid, name, mem, file, line);
-  DO_CREQ_v_WWW(TSREQ_EXPECT_RACE, void*,mem, long, 1, char*,description);
+  DO_CREQ_v_WW(TSREQ_EXPECT_RACE, void*,mem, char*,description);
 }
 
 ANN_FUNC(void, AnnotateFlushExpectedRaces, const char *file, int line)
@@ -2764,25 +2776,35 @@ ANN_FUNC(void, AnnotateSetVerbosity, char *file, int line, void *mem)
 //   a) nacl memory range
 //   b) nacl .nexe file
 #include "coregrind/pub_core_clreq.h"
-void I_WRAP_SONAME_FNNAME_ZZ(NONE, StopForDebuggerInit) (void *arg);
-void I_WRAP_SONAME_FNNAME_ZZ(NONE, StopForDebuggerInit) (void *arg) {
-  int res;
+
+void I_WRAP_SONAME_FNNAME_ZZ(NONE, NaClSandboxMemoryStartForValgrind) (void *mem_start);
+void I_WRAP_SONAME_FNNAME_ZZ(NONE, NaClSandboxMemoryStartForValgrind) (void *mem_start) {
   OrigFn fn;
+  int res;
   VALGRIND_GET_ORIG_FN(fn);
-  CALL_FN_v_W(fn, arg);
-  VALGRIND_DO_CLIENT_REQUEST(res, 0, VG_USERREQ__NACL_MEM_START, arg, 0, 0, 0, 0);
+  CALL_FN_v_W(fn, mem_start);
+  VALGRIND_DO_CLIENT_REQUEST(res, 0, VG_USERREQ__NACL_MEM_START, mem_start, 0, 0, 0, 0);
 }
 
-int I_WRAP_SONAME_FNNAME_ZZ(NONE, GioMemoryFileSnapshotCtor) (void *a, char *file);
-int I_WRAP_SONAME_FNNAME_ZZ(NONE, GioMemoryFileSnapshotCtor) (void *a, char *file) {
-  int res;
+int I_WRAP_SONAME_FNNAME_ZZ(NONE, NaClFileNameForValgrind) (char *file);
+int I_WRAP_SONAME_FNNAME_ZZ(NONE, NaClFileNameForValgrind) (char *file) {
   OrigFn fn;
-  int ret;
+  int ret, res;
   VALGRIND_GET_ORIG_FN(fn);
-  CALL_FN_W_WW(ret, fn, a, file);
+  CALL_FN_W_W(ret, fn, file);
   VALGRIND_DO_CLIENT_REQUEST(res, 0, VG_USERREQ__NACL_FILE, file, 0, 0, 0, 0);
   return ret;
 }
+
+void I_WRAP_SONAME_FNNAME_ZZ(NONE, NaClFileMappingForValgrind) (UWord vma, UWord size, UWord file_offset);
+void I_WRAP_SONAME_FNNAME_ZZ(NONE, NaClFileMappingForValgrind) (UWord vma, UWord size, UWord file_offset) {
+  OrigFn fn;
+  int res;
+  VALGRIND_GET_ORIG_FN(fn);
+  CALL_FN_v_WWW(fn, vma, size, file_offset);
+  VALGRIND_DO_CLIENT_REQUEST(res, 0, VG_USERREQ__NACL_MMAP, vma, size, file_offset, 0, 0);
+}
+
 
 //-------------- Functions to Ignore -------------- {{{1
 // For some functions we want to ignore everything that happens

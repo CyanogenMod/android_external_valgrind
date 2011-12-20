@@ -7,7 +7,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2000-2010 Julian Seward
+   Copyright (C) 2000-2011 Julian Seward
       jseward@acm.org
 
    This program is free software; you can redistribute it and/or
@@ -94,6 +94,11 @@ extern ThreadId VG_(scheduler_init_phase1) ( void );
 extern void VG_(scheduler_init_phase2) ( ThreadId main_tid, 
                                          Addr     clstack_end, 
                                          SizeT    clstack_size );
+
+// Allows to disable the polling done to detect vgdb input
+// or to force a poll at next scheduler call.
+extern void VG_(disable_vgdb_poll) (void );
+extern void VG_(force_vgdb_poll) ( void );
 
 /* Stats ... */
 extern void VG_(print_scheduler_stats) ( void );

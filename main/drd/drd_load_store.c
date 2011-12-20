@@ -1,8 +1,8 @@
-/* -*- mode: C; c-basic-offset: 3; -*- */
+/* -*- mode: C; c-basic-offset: 3; indent-tabs-mode: nil; -*- */
 /*
   This file is part of drd, a thread error detector.
 
-  Copyright (C) 2006-2010 Bart Van Assche <bvanassche@acm.org>.
+  Copyright (C) 2006-2011 Bart Van Assche <bvanassche@acm.org>.
 
   This program is free software; you can redistribute it and/or
   modify it under the terms of the GNU General Public License as
@@ -48,6 +48,8 @@
 #define STACK_POINTER_OFFSET OFFSET_ppc64_GPR1
 #elif defined(VGA_arm)
 #define STACK_POINTER_OFFSET OFFSET_arm_R13
+#elif defined(VGA_s390x)
+#define STACK_POINTER_OFFSET OFFSET_s390x_r15
 #else
 #error Unknown architecture.
 #endif
@@ -91,24 +93,13 @@ void DRD_(trace_mem_access)(const Addr addr, const SizeT size,
       char* vc;
 
       vc = DRD_(vc_aprint)(DRD_(thread_get_vc)(DRD_(thread_get_running_tid)()));
-      VG_(message)(Vg_UserMsg,
-                   "%s 0x%lx size %ld (thread %d / vc %s)\n",
-                   access_type == eLoad
-                   ? "load "
-                   : access_type == eStore
-                   ? "store"
-                   : access_type == eStart
-                   ? "start"
-                   : access_type == eEnd
-                   ? "end  "
-                   : "????",
-                   addr,
-                   size,
-                   DRD_(thread_get_running_tid)(),
-                   vc);
+      DRD_(trace_msg_w_bt)("%s 0x%lx size %ld (thread %d / vc %s)",
+                           access_type == eLoad ? "load "
+                           : access_type == eStore ? "store"
+                           : access_type == eStart ? "start"
+                           : access_type == eEnd ? "end  " : "????",
+                           addr, size, DRD_(thread_get_running_tid)(), vc);
       VG_(free)(vc);
-      VG_(get_and_pp_StackTrace)(VG_(get_running_tid)(),
-                                 VG_(clo_backtrace_size));
       tl_assert(DRD_(DrdThreadIdToVgThreadId)(DRD_(thread_get_running_tid)())
                 == VG_(get_running_tid)());
    }
@@ -136,7 +127,7 @@ static void drd_report_race(const Addr addr, const SizeT size,
    VG_(maybe_record_error)(VG_(get_running_tid)(),
                            DataRaceErr,
                            VG_(get_IP)(VG_(get_running_tid)()),
-                           "Conflicting accesses",
+                           "Conflicting access",
                            &drei);
 
    if (s_first_race_only)

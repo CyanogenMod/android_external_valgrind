@@ -225,15 +225,16 @@ $(OUTDIR):
 TS_HEADERS=thread_sanitizer.h ts_util.h suppressions.h ignore.h ts_replace.h ts_heap_info.h \
 	   ts_simple_cache.h ts_stats.h ts_lock.h ts_events.h ts_event_names.h \
 	   ts_trace_info.h ts_race_verifier.h dense_multimap.h \
+           ts_atomic.h ts_atomic_int.h \
 	   ../dynamic_annotations/dynamic_annotations.h
 ts_event_names.h: ts_events.h
-	sed -n '/^enum/,/^};/ {s/enum EventType/static const char *kEventNames[] = /; s/^  \([A-Z_]\+\)/  "\1"/g; p}' $< > $@
+	sed -n '/^enum/,/^};/ {s/enum EventType/static const char *kEventNames[] = /; s/^  \([A-Z_][A-Z_]*\)/  "\1"/g; p;}' $< > $@
 TS_VG_HEADERS=ts_valgrind.h ts_valgrind_client_requests.h
 
-TS_VG_OBJECTS=$(VGP)thread_sanitizer.o $(VGP)ts_valgrind.o $(VGP)ts_valgrind_libc.o $(VGP)ts_util.o $(VGP)suppressions.o $(VGP)ignore.o $(VGP)common_util.o $(VGP)ts_race_verifier.o
-TS_PIN_OBJECTS=$(PINP)ts_pin.$(OBJ) $(PINP)ts_util.$(OBJ) $(PINP)thread_sanitizer.$(OBJ) $(PINP)suppressions.$(OBJ) $(PINP)ignore.$(OBJ) $(PINP)common_util.$(OBJ) $(PINP)ts_race_verifier.$(OBJ)
-TS_PINMT_OBJECTS=$(PINMTP)ts_pin.$(OBJ) $(PINMTP)ts_util.$(OBJ) $(PINMTP)thread_sanitizer.$(OBJ) $(PINMTP)suppressions.$(OBJ) $(PINMTP)ignore.$(OBJ) $(PINMTP)common_util.$(OBJ) $(PINMTP)ts_race_verifier.$(OBJ)
-TS_OFFLINE_OBJECTS=$(OFF)ts_offline.$(OBJ) $(OFF)thread_sanitizer.$(OBJ) $(OFF)ts_util.$(OBJ) $(OFF)suppressions.$(OBJ) $(OFF)ignore.$(OBJ) $(OFF)common_util.$(OBJ)
+TS_VG_OBJECTS=$(VGP)thread_sanitizer.o $(VGP)ts_valgrind.o $(VGP)ts_valgrind_libc.o $(VGP)ts_util.o $(VGP)suppressions.o $(VGP)ignore.o $(VGP)common_util.o $(VGP)ts_race_verifier.o $(VGP)ts_atomic.o
+TS_PIN_OBJECTS=$(PINP)ts_pin.$(OBJ) $(PINP)ts_util.$(OBJ) $(PINP)thread_sanitizer.$(OBJ) $(PINP)suppressions.$(OBJ) $(PINP)ignore.$(OBJ) $(PINP)common_util.$(OBJ) $(PINP)ts_race_verifier.$(OBJ) $(PINP)ts_atomic.$(OBJ)
+TS_PINMT_OBJECTS=$(PINMTP)ts_pin.$(OBJ) $(PINMTP)ts_util.$(OBJ) $(PINMTP)thread_sanitizer.$(OBJ) $(PINMTP)suppressions.$(OBJ) $(PINMTP)ignore.$(OBJ) $(PINMTP)common_util.$(OBJ) $(PINMTP)ts_race_verifier.$(OBJ) $(PINMTP)ts_atomic.$(OBJ)
+TS_OFFLINE_OBJECTS=$(OFF)ts_offline.$(OBJ) $(OFF)thread_sanitizer.$(OBJ) $(OFF)ts_util.$(OBJ) $(OFF)suppressions.$(OBJ) $(OFF)ignore.$(OBJ) $(OFF)common_util.$(OBJ) $(OFF)ts_atomic.$(OBJ)
 TS_DR_OBJECTS=$(DRP)ts_dynamorio.$(OBJ) $(DRP)ts_util.$(OBJ)
 
 $(P)%.$(OBJ): %.cc $(TS_HEADERS) | $(OUTDIR)

@@ -8,7 +8,7 @@
    This file is part of MemCheck, a heavyweight Valgrind tool for
    detecting memory errors.
 
-   Copyright (C) 2000-2010 Julian Seward 
+   Copyright (C) 2000-2011 Julian Seward 
       jseward@acm.org
 
    This program is free software; you can redistribute it and/or
@@ -30,6 +30,7 @@
 */
 
 #include "pub_tool_basics.h"
+#include "pub_tool_gdbserver.h"
 #include "pub_tool_hashtable.h"     // For mc_include.h
 #include "pub_tool_libcbase.h"
 #include "pub_tool_libcassert.h"
@@ -350,7 +351,7 @@ static void mc_pp_AddrInfo ( Addr a, AddrInfo* ai, Bool maybe_gcc )
 
       case Addr_DataSym:
          emiN( "%sAddress 0x%llx is %llu bytes "
-               "inside data symbol \"%t\"%s\n",
+               "inside data symbol \"%pS\"%s\n",
                xpre,
                (ULong)a,
                (ULong)ai->Addr.DataSym.offset,
@@ -373,7 +374,7 @@ static void mc_pp_AddrInfo ( Addr a, AddrInfo* ai, Bool maybe_gcc )
          break;
 
       case Addr_SectKind:
-         emiN( "%sAddress 0x%llx is in the %t segment of %t%s\n",
+         emiN( "%sAddress 0x%llx is in the %pS segment of %pS%s\n",
                xpre,
                (ULong)a,
                VG_(pp_SectKind)(ai->Addr.SectKind.kind),
@@ -433,6 +434,20 @@ static void mc_pp_origin ( ExeContext* ec, UInt okind )
    }
 }
 
+char * MC_(snprintf_delta) (char * buf, Int size, 
+                            SizeT current_val, SizeT old_val, 
+                            LeakCheckDeltaMode delta_mode)
+{
+   if (delta_mode == LCD_Any)
+      buf[0] = '\0';
+   else if (current_val >= old_val)
+      VG_(snprintf) (buf, size, " (+%'lu)", current_val - old_val);
+   else
+      VG_(snprintf) (buf, size, " (-%'lu)", old_val - current_val);
+
+   return buf;
+}
+
 void MC_(pp_Error) ( Error* err )
 {
    const Bool xml  = VG_(clo_xml); /* a shorthand */
@@ -447,7 +462,7 @@ void MC_(pp_Error) ( Error* err )
          // the following code is untested.  Bad.
          if (xml) {
             emit( "  <kind>CoreMemError</kind>\n" );
-            emiN( "  <what>%t contains unaddressable byte(s)</what>\n",
+            emiN( "  <what>%pS contains unaddressable byte(s)</what>\n",
                   VG_(get_error_string)(err));
             VG_(pp_ExeContext)( VG_(get_error_where)(err) );
          } else {
@@ -505,7 +520,7 @@ void MC_(pp_Error) ( Error* err )
          MC_(any_value_errors) = True;
          if (xml) {
             emit( "  <kind>SyscallParam</kind>\n" );
-            emiN( "  <what>Syscall param %t contains "
+            emiN( "  <what>Syscall param %pS contains "
                   "uninitialised byte(s)</what>\n",
                   VG_(get_error_string)(err) );
             VG_(pp_ExeContext)( VG_(get_error_where)(err) );
@@ -527,7 +542,7 @@ void MC_(pp_Error) ( Error* err )
             MC_(any_value_errors) = True;
          if (xml) {
             emit( "  <kind>SyscallParam</kind>\n" );
-            emiN( "  <what>Syscall param %t points to %s byte(s)</what>\n",
+            emiN( "  <what>Syscall param %pS points to %s byte(s)</what>\n",
                   VG_(get_error_string)(err),
                   extra->Err.MemParam.isAddrErr 
                      ? "unaddressable" : "uninitialised" );
@@ -584,12 +599,13 @@ void MC_(pp_Error) ( Error* err )
       case Err_Free:
          if (xml) {
             emit( "  <kind>InvalidFree</kind>\n" );
-            emit( "  <what>Invalid free() / delete / delete[]</what>\n" );
+            emit( "  <what>Invalid free() / delete / delete[]"
+                  " / realloc()</what>\n" );
             VG_(pp_ExeContext)( VG_(get_error_where)(err) );
             mc_pp_AddrInfo( VG_(get_error_address)(err),
                             &extra->Err.Free.ai, False );
          } else {
-            emit( "Invalid free() / delete / delete[]\n" );
+            emit( "Invalid free() / delete / delete[] / realloc()\n" );
             VG_(pp_ExeContext)( VG_(get_error_where)(err) );
             mc_pp_AddrInfo( VG_(get_error_address)(err),
                             &extra->Err.Free.ai, False );
@@ -655,7 +671,7 @@ void MC_(pp_Error) ( Error* err )
             emit( "  <kind>Overlap</kind>\n" );
             if (extra->Err.Overlap.szB == 0) {
                emiN( "  <what>Source and destination overlap "
-                     "in %t(%#lx, %#lx)\n</what>\n",
+                     "in %pS(%#lx, %#lx)\n</what>\n",
                      VG_(get_error_string)(err),
                      extra->Err.Overlap.dst, extra->Err.Overlap.src );
             } else {
@@ -668,7 +684,7 @@ void MC_(pp_Error) ( Error* err )
             VG_(pp_ExeContext)( VG_(get_error_where)(err) );
          } else {
             if (extra->Err.Overlap.szB == 0) {
-               emiN( "Source and destination overlap in %t(%#lx, %#lx)\n",
+               emiN( "Source and destination overlap in %pS(%#lx, %#lx)\n",
                      VG_(get_error_string)(err),
                      extra->Err.Overlap.dst, extra->Err.Overlap.src );
             } else {
@@ -702,15 +718,41 @@ void MC_(pp_Error) ( Error* err )
          UInt        n_this_record   = extra->Err.Leak.n_this_record;
          UInt        n_total_records = extra->Err.Leak.n_total_records;
          LossRecord* lr              = extra->Err.Leak.lr;
+         // char arrays to produce the indication of increase/decrease in case
+         // of delta_mode != LCD_Any
+         char        d_bytes[20];
+         char        d_direct_bytes[20];
+         char        d_indirect_bytes[20];
+         char        d_num_blocks[20];
+
+         MC_(snprintf_delta) (d_bytes, 20, 
+                              lr->szB + lr->indirect_szB, 
+                              lr->old_szB + lr->old_indirect_szB,
+                              MC_(detect_memory_leaks_last_delta_mode));
+         MC_(snprintf_delta) (d_direct_bytes, 20,
+                              lr->szB,
+                              lr->old_szB,
+                              MC_(detect_memory_leaks_last_delta_mode));
+         MC_(snprintf_delta) (d_indirect_bytes, 20,
+                              lr->indirect_szB,
+                              lr->old_indirect_szB,
+                              MC_(detect_memory_leaks_last_delta_mode));
+         MC_(snprintf_delta) (d_num_blocks, 20,
+                              (SizeT) lr->num_blocks,
+                              (SizeT) lr->old_num_blocks,
+                              MC_(detect_memory_leaks_last_delta_mode));
+
          if (xml) {
             emit("  <kind>%s</kind>\n", xml_leak_kind(lr->key.state));
             if (lr->indirect_szB > 0) {
                emit( "  <xwhat>\n" );
-               emit( "    <text>%'lu (%'lu direct, %'lu indirect) bytes "
-                     "in %'u blocks"
+               emit( "    <text>%'lu%s (%'lu%s direct, %'lu%s indirect) bytes "
+                     "in %'u%s blocks"
                      " are %s in loss record %'u of %'u</text>\n",
-                     lr->szB + lr->indirect_szB, lr->szB, lr->indirect_szB,
-                     lr->num_blocks,
+                     lr->szB + lr->indirect_szB, d_bytes,
+                     lr->szB, d_direct_bytes,
+                     lr->indirect_szB, d_indirect_bytes,
+                     lr->num_blocks, d_num_blocks,
                      str_leak_lossmode(lr->key.state),
                      n_this_record, n_total_records );
                // Nb: don't put commas in these XML numbers 
@@ -720,9 +762,10 @@ void MC_(pp_Error) ( Error* err )
                emit( "  </xwhat>\n" );
             } else {
                emit( "  <xwhat>\n" );
-               emit( "    <text>%'lu bytes in %'u blocks"
+               emit( "    <text>%'lu%s bytes in %'u%s blocks"
                      " are %s in loss record %'u of %'u</text>\n",
-                     lr->szB, lr->num_blocks,
+                     lr->szB, d_direct_bytes,
+                     lr->num_blocks, d_num_blocks,
                      str_leak_lossmode(lr->key.state), 
                      n_this_record, n_total_records );
                emit( "    <leakedbytes>%ld</leakedbytes>\n", lr->szB);
@@ -733,16 +776,21 @@ void MC_(pp_Error) ( Error* err )
          } else { /* ! if (xml) */
             if (lr->indirect_szB > 0) {
                emit(
-                  "%'lu (%'lu direct, %'lu indirect) bytes in %'u blocks"
+                  "%'lu%s (%'lu%s direct, %'lu%s indirect) bytes in %'u%s blocks"
                   " are %s in loss record %'u of %'u\n",
-                  lr->szB + lr->indirect_szB, lr->szB, lr->indirect_szB,
-                  lr->num_blocks, str_leak_lossmode(lr->key.state),
+                  lr->szB + lr->indirect_szB, d_bytes,
+                  lr->szB, d_direct_bytes,
+                  lr->indirect_szB, d_indirect_bytes,
+                  lr->num_blocks, d_num_blocks,
+                  str_leak_lossmode(lr->key.state),
                   n_this_record, n_total_records
                );
             } else {
                emit(
-                  "%'lu bytes in %'u blocks are %s in loss record %'u of %'u\n",
-                  lr->szB, lr->num_blocks, str_leak_lossmode(lr->key.state),
+                  "%'lu%s bytes in %'u%s blocks are %s in loss record %'u of %'u\n",
+                  lr->szB, d_direct_bytes,
+                  lr->num_blocks, d_num_blocks,
+                  str_leak_lossmode(lr->key.state),
                   n_this_record, n_total_records
                );
             }
@@ -812,34 +860,8 @@ void MC_(record_address_error) ( ThreadId tid, Addr a, Int szB,
    if (MC_(in_ignored_range)(a)) 
       return;
 
-#  if defined(VGP_ppc32_aix5) || defined(VGP_ppc64_aix5)
-   /* AIX zero-page handling.  On AIX, reads from page zero are,
-      bizarrely enough, legitimate.  Writes to page zero aren't,
-      though.  Since memcheck can't distinguish reads from writes, the
-      best we can do is to 'act normal' and mark the A bits in the
-      normal way as noaccess, but then hide any reads from that page
-      that get reported here. */
-   if ((!isWrite) && a >= 0 && a < 4096 && a+szB <= 4096) 
+   if (VG_(is_watched)( (isWrite ? write_watchpoint : read_watchpoint), a, szB))
       return;
-
-   /* Appalling AIX hack.  It suppresses reads done by glink
-      fragments.  Getting rid of this would require figuring out
-      somehow where the referenced data areas are (and their
-      sizes). */
-   if ((!isWrite) && szB == sizeof(Word)) { 
-      UInt i1, i2;
-      UInt* pc = (UInt*)VG_(get_IP)(tid);
-      if (sizeof(Word) == 4) {
-         i1 = 0x800c0000; /* lwz r0,0(r12) */
-         i2 = 0x804c0004; /* lwz r2,4(r12) */
-      } else {
-         i1 = 0xe80c0000; /* ld  r0,0(r12) */
-         i2 = 0xe84c0008; /* ld  r2,8(r12) */
-      }
-      if (pc[0] == i1 && pc[1] == i2) return;
-      if (pc[0] == i2 && pc[-1] == i1) return;
-   }
-#  endif
 
    just_below_esp = is_just_below_ESP( VG_(get_SP)(tid), a );
 
@@ -1107,18 +1129,15 @@ static void describe_addr ( Addr a, /*OUT*/AddrInfo* ai )
       return;
    }
    /* -- Search for a recently freed block which might bracket it. -- */
-   mc = MC_(get_freed_list_head)();
-   while (mc) {
-      if (addr_is_in_MC_Chunk_default_REDZONE_SZB(mc, a)) {
-         ai->tag = Addr_Block;
-         ai->Addr.Block.block_kind = Block_Freed;
-         ai->Addr.Block.block_desc = "block";
-         ai->Addr.Block.block_szB  = mc->szB;
-         ai->Addr.Block.rwoffset   = (Word)a - (Word)mc->data;
-         ai->Addr.Block.lastchange = mc->where;
-         return;
-      }
-      mc = mc->next; 
+   mc = MC_(get_freed_block_bracketting)( a );
+   if (mc) {
+      ai->tag = Addr_Block;
+      ai->Addr.Block.block_kind = Block_Freed;
+      ai->Addr.Block.block_desc = "block";
+      ai->Addr.Block.block_szB  = mc->szB;
+      ai->Addr.Block.rwoffset   = (Word)a - (Word)mc->data;
+      ai->Addr.Block.lastchange = mc->where;
+      return;
    }
    /* -- Search for a currently malloc'd block which might bracket it. -- */
    VG_(HT_ResetIter)(MC_(malloc_list));
@@ -1205,6 +1224,15 @@ static void describe_addr ( Addr a, /*OUT*/AddrInfo* ai )
    /* -- Clueless ... -- */
    ai->tag = Addr_Unknown;
    return;
+}
+
+void MC_(pp_describe_addr) ( Addr a )
+{
+   AddrInfo ai;
+
+   ai.tag = Addr_Undescribed;
+   describe_addr (a, &ai);
+   mc_pp_AddrInfo (a, &ai, /* maybe_gcc */ False);
 }
 
 /* Fill in *origin_ec as specified by otag, or NULL it out if otag
@@ -1377,6 +1405,10 @@ typedef
       // Unaddressable read/write attempt at given size
       Addr1Supp, Addr2Supp, Addr4Supp, Addr8Supp, Addr16Supp,
 
+      // https://bugs.kde.org/show_bug.cgi?id=256525
+      UnaddrSupp,    // Matches Addr*.
+      UninitSupp,    // Matches Value*, Param and Cond.
+
       JumpSupp,      // Jump to unaddressable target
       FreeSupp,      // Invalid or mismatching free
       OverlapSupp,   // Overlapping blocks in memcpy(), strcpy(), etc
@@ -1409,6 +1441,12 @@ Bool MC_(is_recognised_suppression) ( Char* name, Supp* su )
    else if (VG_STREQ(name, "Value4"))  skind = Value4Supp;
    else if (VG_STREQ(name, "Value8"))  skind = Value8Supp;
    else if (VG_STREQ(name, "Value16")) skind = Value16Supp;
+   // https://bugs.kde.org/show_bug.cgi?id=256525
+   else if (VG_STREQ(name, "Unaddressable")) skind = UnaddrSupp;
+   else if (VG_STREQ(name, "Unaddr"))  skind = UnaddrSupp;
+   else if (VG_STREQ(name, "Uninitialised")) skind = UninitSupp;
+   else if (VG_STREQ(name, "Uninitialized")) skind = UninitSupp;
+   else if (VG_STREQ(name, "Uninit"))  skind = UninitSupp;
    else 
       return False;
 
@@ -1467,6 +1505,16 @@ Bool MC_(error_matches_suppression) ( Error* err, Supp* su )
       case Addr16Supp:su_szB =16; goto addr_case;
       addr_case:
          return (ekind == Err_Addr && extra->Err.Addr.szB == su_szB);
+
+      // https://bugs.kde.org/show_bug.cgi?id=256525
+      case UnaddrSupp:
+         return (ekind == Err_Addr ||
+                 (ekind == Err_MemParam && extra->Err.MemParam.isAddrErr));
+
+      case UninitSupp:
+         return (ekind == Err_Cond || ekind == Err_Value ||
+                 ekind == Err_RegParam ||
+                 (ekind == Err_MemParam && !extra->Err.MemParam.isAddrErr));
 
       case JumpSupp:
          return (ekind == Err_Jump);

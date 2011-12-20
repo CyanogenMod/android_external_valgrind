@@ -7,7 +7,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2000-2010 Julian Seward
+   Copyright (C) 2000-2011 Julian Seward
       jseward@acm.org
 
    This program is free software; you can redistribute it and/or
@@ -58,12 +58,11 @@
 #  include "libvex_guest_ppc64.h"
 #elif defined(VGA_arm)
 #  include "libvex_guest_arm.h"
+#elif defined(VGA_s390x)
+#  include "libvex_guest_s390x.h"
 #else
 #  error Unknown arch
 #endif
-
-// For jmp_buf
-#include <setjmp.h>
 
 
 /* ---------------------------------------------------------------------
@@ -105,6 +104,10 @@ typedef
             UInt r11;
             UInt r7;
          } ARM;
+         struct {
+            ULong r_fp;
+            ULong r_lr;
+         } S390X;
       } misc;
    }
    UnwindStartRegs;

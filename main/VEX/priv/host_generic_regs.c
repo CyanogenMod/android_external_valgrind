@@ -7,7 +7,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2004-2010 OpenWorks LLP
+   Copyright (C) 2004-2011 OpenWorks LLP
       info@open-works.net
 
    This program is free software; you can redistribute it and/or
@@ -166,7 +166,7 @@ void addToHRegRemap ( HRegRemap* map, HReg orig, HReg replacement )
    if (!hregIsVirtual(orig))
       vpanic("addToHRegMap: orig is not a vreg");
    if (hregIsVirtual(replacement))
-      vpanic("addToHRegMap: replacement is not a vreg");
+      vpanic("addToHRegMap: replacement is a vreg");
 
    vassert(map->n_used+1 < N_HREG_REMAP);
    map->orig[map->n_used]        = orig;

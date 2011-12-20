@@ -7,7 +7,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2000-2010 Julian Seward 
+   Copyright (C) 2000-2011 Julian Seward 
       jseward@acm.org
 
    This program is free software; you can redistribute it and/or
@@ -306,7 +306,7 @@ Int VG_(load_ELF)(Int fd, const HChar* name, /*MOD*/ExeInfo* info)
    ESZ(Addr) maxaddr = 0;       /* highest mapped address */
    ESZ(Addr) interp_addr = 0;   /* interpreter (ld.so) address */
    ESZ(Word) interp_size = 0;   /* interpreter size */
-   ESZ(Word) interp_align = VKI_PAGE_SIZE;
+   /* ESZ(Word) interp_align = VKI_PAGE_SIZE; */ /* UNUSED */
    Int i;
    void *entry;
    ESZ(Addr) ebase = 0;
@@ -391,7 +391,7 @@ Int VG_(load_ELF)(Int fd, const HChar* name, /*MOD*/ExeInfo* info)
             ESZ(Phdr) *iph = &interp->p[j];
             ESZ(Addr) end;
 
-            if (iph->p_type != PT_LOAD)
+            if (iph->p_type != PT_LOAD || iph->p_memsz == 0)
                continue;
             
 #ifdef ANDROID
@@ -407,7 +407,7 @@ Int VG_(load_ELF)(Int fd, const HChar* name, /*MOD*/ExeInfo* info)
             if (!baseaddr_set) {
 #endif
                interp_addr  = iph->p_vaddr;
-               interp_align = iph->p_align;
+               /* interp_align = iph->p_align; */ /* UNUSED */
                baseaddr_set = 1;
             }
 
@@ -524,6 +524,7 @@ Int VG_(load_ELF)(Int fd, const HChar* name, /*MOD*/ExeInfo* info)
 #else
    info->init_ip  = (Addr)entry;
    info->init_toc = 0; /* meaningless on this platform */
+   (void) interp_offset; /* stop gcc complaining it is unused */
 #endif
    VG_(free)(e->p);
    VG_(free)(e);

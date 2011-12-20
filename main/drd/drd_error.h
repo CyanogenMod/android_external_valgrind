@@ -1,8 +1,8 @@
-/* -*- mode: C; c-basic-offset: 3; -*- */
+/* -*- mode: C; c-basic-offset: 3; indent-tabs-mode: nil; -*- */
 /*
   This file is part of drd, a thread error detector.
 
-  Copyright (C) 2006-2010 Bart Van Assche <bvanassche@acm.org>.
+  Copyright (C) 2006-2011 Bart Van Assche <bvanassche@acm.org>.
 
   This program is free software; you can redistribute it and/or
   modify it under the terms of the GNU General Public License as
@@ -180,6 +180,8 @@ typedef struct {
 
 void DRD_(set_show_conflicting_segments)(const Bool scs);
 void DRD_(register_error_handlers)(void);
+void DRD_(trace_msg)(const char* format, ...) PRINTF_CHECK(1, 2);
+void DRD_(trace_msg_w_bt)(const char* format, ...) PRINTF_CHECK(1, 2);
 
 
 #endif /* __DRD_ERROR_H */

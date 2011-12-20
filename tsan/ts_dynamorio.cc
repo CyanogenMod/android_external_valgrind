@@ -488,12 +488,19 @@ DR_EXPORT void dr_init(client_id_t id) {
   ReplaceFunc3(img, rtn, "memchr", (AFUNPTR)Replace_memchr);
   ReplaceFunc3(img, rtn, "strchr", (AFUNPTR)Replace_strchr);
   ReplaceFunc3(img, rtn, "index", (AFUNPTR)Replace_strchr);
+  ReplaceFunc3(img, rtn, "strchrnul", (AFUNPTR)Replace_strchrnul);
   ReplaceFunc3(img, rtn, "strrchr", (AFUNPTR)Replace_strrchr);
   ReplaceFunc3(img, rtn, "rindex", (AFUNPTR)Replace_strrchr);
   ReplaceFunc3(img, rtn, "strlen", (AFUNPTR)Replace_strlen);
-  ReplaceFunc3(img, rtn, "strcmp", (AFUNPTR)Replace_strcmp);
   ReplaceFunc3(img, rtn, "memcpy", (AFUNPTR)Replace_memcpy);
+  ReplaceFunc3(img, rtn, "memmove", (AFUNPTR)Replace_memmove);
+  ReplaceFunc3(img, rtn, "memcmp", (AFUNPTR)Replace_memcmp);
   ReplaceFunc3(img, rtn, "strcpy", (AFUNPTR)Replace_strcpy);
+  ReplaceFunc3(img, rtn, "stpcpy", (AFUNPTR)Replace_stpcpy);
+  ReplaceFunc3(img, rtn, "strncpy", (AFUNPTR)Replace_strncpy);
+  ReplaceFunc3(img, rtn, "strcmp", (AFUNPTR)Replace_strcmp);
+  ReplaceFunc3(img, rtn, "strncmp", (AFUNPTR)Replace_strncmp);
+  ReplaceFunc3(img, rtn, "strcat", (AFUNPTR)Replace_strcat);
   ReplaceFunc3(img, rtn, "*foo_to_replace*", (AFUNPTR)replace_foo);
 }
 // end. {{{1

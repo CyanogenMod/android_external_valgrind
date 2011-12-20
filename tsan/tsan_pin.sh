@@ -17,6 +17,7 @@ elif [ "$UNAME_OS" == "Cygwin" ]; then
 fi
 
 export MSM_THREAD_SANITIZER=1
+export INSTRUMENTATION_FRAMEWORK=PIN_LINUX
 
 
 FOLLOW=-follow_execv
