@@ -15,11 +15,14 @@
 LOCAL_PATH:= $(call my-dir)
 include $(CLEAR_VARS)
 
+local_cflags := -DDYNAMIC_ANNOTATIONS_ENABLED=1
+local_src_files := dynamic_annotations.c
+
 LOCAL_MODULE := libdynamic_annotations
 LOCAL_MODULE_TAGS := optional
 LOCAL_ARM_MODE := arm
-LOCAL_CFLAGS += -DDYNAMIC_ANNOTATIONS_ENABLED=1
-LOCAL_SRC_FILES := dynamic_annotations.c
+LOCAL_CFLAGS += $(local_cflags)
+LOCAL_SRC_FILES := $(local_src_files)
 LOCAL_PRELINK_MODULE := false
 
 # Remove this when the all toolchains are GCC 4.4
@@ -28,3 +31,11 @@ ifeq ($(TARGET_ARCH),arm)
 endif
 
 include $(BUILD_SHARED_LIBRARY)
+
+
+include $(CLEAR_VARS)
+LOCAL_MODULE := libdynamic_annotations-host
+LOCAL_MODULE_TAGS := optional
+LOCAL_CFLAGS += $(local_cflags)
+LOCAL_SRC_FILES := $(local_src_files)
+include $(BUILD_HOST_SHARED_LIBRARY)
