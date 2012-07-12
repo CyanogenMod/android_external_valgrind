@@ -29,7 +29,8 @@ common_cflags := \
 	-DVGO_linux=1 \
 	-DVGP_$(arch)_linux=1 \
 	-DVG_PLATFORM=\"$(arch)-linux\" \
-	-D_STLP_NO_IOSTREAMS=1
+	-D_STLP_NO_IOSTREAMS=1 \
+	-U_FORTIFY_SOURCE
 
 common_includes := \
 	external/valgrind/main \
