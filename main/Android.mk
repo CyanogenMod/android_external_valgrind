@@ -246,7 +246,9 @@ LOCAL_C_INCLUDES := $(common_includes)
 
 LOCAL_LDFLAGS := $(vex_ldflags)
 
+# TODO: split asflags out from cflags.
 LOCAL_CFLAGS := $(common_cflags)
+LOCAL_ASFLAGS := $(common_cflags)
 
 include $(BUILD_STATIC_LIBRARY)
 
