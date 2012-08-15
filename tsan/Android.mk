@@ -14,21 +14,16 @@
 
 LOCAL_PATH:= $(call my-dir)
 
-ifeq ($(TARGET_ARCH),arm)
-	arch := arm
-else ifeq ($(TARGET_ARCH),x86)
-	arch := x86
-endif
-ifdef arch
+ifneq ($(filter arm x86,$(TARGET_ARCH)),)
 
 common_cflags := \
 	-Wall -Wno-deprecated -fno-exceptions -fno-stack-protector \
 	-DTS_VALGRIND=1 \
 	-DTS_VERSION=\"exported\" \
-	-DVGA_$(arch)=1 \
+	-DVGA_$(TARGET_ARCH)=1 \
 	-DVGO_linux=1 \
-	-DVGP_$(arch)_linux=1 \
-	-DVG_PLATFORM=\"$(arch)-linux\" \
+	-DVGP_$(TARGET_ARCH)_linux=1 \
+	-DVG_PLATFORM=\"$(TARGET_ARCH)-linux\" \
 	-D_STLP_NO_IOSTREAMS=1 \
 	-U_FORTIFY_SOURCE
 
@@ -52,10 +47,10 @@ endif
 
 # TODO(eugenis): Add ts_event_names.h generation step
 
-# Build tsan-$(arch)-linux
+# Build tsan-$(TARGET_ARCH)-linux
 include $(CLEAR_VARS)
 
-LOCAL_MODULE := tsan-$(arch)-linux
+LOCAL_MODULE := tsan-$(TARGET_ARCH)-linux
 LOCAL_MODULE_TAGS := optional
 LOCAL_MODULE_CLASS := SHARED_LIBRARIES
 LOCAL_MODULE_PATH := $(TARGET_OUT_SHARED_LIBRARIES)/valgrind
@@ -81,15 +76,15 @@ LOCAL_LDFLAGS := $(tool_ldflags)
 LOCAL_CFLAGS := $(common_cflags)
 LOCAL_CXXFLAGS := $(common_cxxflags)
 LOCAL_RTTI_FLAG := -fno-rtti
-LOCAL_STATIC_LIBRARIES := libcoregrind-$(arch)-linux libvex-$(arch)-linux
+LOCAL_STATIC_LIBRARIES := libcoregrind-$(TARGET_ARCH)-linux libvex-$(TARGET_ARCH)-linux
 
 include $(BUILD_EXECUTABLE)
 
 
-# Build vgpreload_tsan-$(arch)-linux.so
+# Build vgpreload_tsan-$(TARGET_ARCH)-linux.so
 include $(CLEAR_VARS)
 
-LOCAL_MODULE := vgpreload_tsan-$(arch)-linux
+LOCAL_MODULE := vgpreload_tsan-$(TARGET_ARCH)-linux
 LOCAL_MODULE_TAGS := optional
 LOCAL_MODULE_CLASS := SHARED_LIBRARIES
 LOCAL_MODULE_PATH := $(TARGET_OUT_SHARED_LIBRARIES)/valgrind

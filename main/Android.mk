@@ -14,22 +14,17 @@
 
 LOCAL_PATH:= $(call my-dir)
 
-ifeq ($(TARGET_ARCH),arm)
-	arch := arm
-else ifeq ($(TARGET_ARCH),x86)
-	arch := x86
-endif
-ifdef arch
+ifneq ($(filter arm x86,$(TARGET_ARCH)),)
 
 common_cflags := \
 	-Wall -Wmissing-prototypes -Wshadow -Wpointer-arith -Wmissing-declarations \
 	-Wno-pointer-sign -Wno-sign-compare -Wno-unused-parameter -Wno-shadow \
 	-fno-strict-aliasing -fno-stack-protector \
-	-DVGA_$(arch)=1 \
+	-DVGA_$(TARGET_ARCH)=1 \
 	-DVGO_linux=1 \
-	-DVGP_$(arch)_linux=1 \
-	-DVGPV_$(arch)_linux_android=1 \
-	-DVG_PLATFORM=\"$(arch)-linux\" \
+	-DVGP_$(TARGET_ARCH)_linux=1 \
+	-DVGPV_$(TARGET_ARCH)_linux_android=1 \
+	-DVG_PLATFORM=\"$(TARGET_ARCH)-linux\" \
 	-DVG_LIBDIR=\"/system/lib/valgrind\" \
 	-DANDROID_SYMBOLS_DIR=\"/data/local/symbols\" \
 	-DANDROID_HARDWARE_nexus_s
@@ -54,10 +49,10 @@ ifeq ($(TARGET_ARCH),arm)
   preload_ldflags += -Wl,--icf=none
 endif
 
-# Build libvex-($arch)-linux.a
+# Build libvex-($TARGET_ARCH)-linux.a
 include $(CLEAR_VARS)
 
-LOCAL_MODULE := libvex-$(arch)-linux
+LOCAL_MODULE := libvex-$(TARGET_ARCH)-linux
 LOCAL_MODULE_TAGS := optional
 LOCAL_ARM_MODE := arm
 
@@ -107,10 +102,10 @@ LOCAL_CFLAGS := $(common_cflags) \
 
 include $(BUILD_STATIC_LIBRARY)
 
-# Build libcoregrind-$(arch)-linux.a
+# Build libcoregrind-$(TARGET_ARCH)-linux.a
 include $(CLEAR_VARS)
 
-LOCAL_MODULE := libcoregrind-$(arch)-linux
+LOCAL_MODULE := libcoregrind-$(TARGET_ARCH)-linux
 LOCAL_MODULE_TAGS := optional
 LOCAL_ARM_MODE := arm
 
@@ -252,10 +247,10 @@ LOCAL_ASFLAGS := $(common_cflags)
 
 include $(BUILD_STATIC_LIBRARY)
 
-# Build libreplacemalloc_toolpreload-$(arch)-linux.a
+# Build libreplacemalloc_toolpreload-$(TARGET_ARCH)-linux.a
 include $(CLEAR_VARS)
 
-LOCAL_MODULE := libreplacemalloc_toolpreload-$(arch)-linux
+LOCAL_MODULE := libreplacemalloc_toolpreload-$(TARGET_ARCH)-linux
 LOCAL_MODULE_TAGS := optional
 LOCAL_ARM_MODE := arm
 
@@ -270,10 +265,10 @@ LOCAL_CFLAGS := $(common_cflags)
 
 include $(BUILD_STATIC_LIBRARY)
 
-# Build vgpreload_core-$(arch)-linux.so
+# Build vgpreload_core-$(TARGET_ARCH)-linux.so
 include $(CLEAR_VARS)
 
-LOCAL_MODULE := vgpreload_core-$(arch)-linux
+LOCAL_MODULE := vgpreload_core-$(TARGET_ARCH)-linux
 LOCAL_MODULE_TAGS := optional
 LOCAL_MODULE_CLASS := SHARED_LIBRARIES
 LOCAL_MODULE_PATH := $(TARGET_OUT_SHARED_LIBRARIES)/valgrind
@@ -293,10 +288,10 @@ LOCAL_CFLAGS := $(common_cflags)
 
 include $(BUILD_SHARED_LIBRARY)
 
-# Build memcheck-$(arch)-linux
+# Build memcheck-$(TARGET_ARCH)-linux
 include $(CLEAR_VARS)
 
-LOCAL_MODULE := memcheck-$(arch)-linux
+LOCAL_MODULE := memcheck-$(TARGET_ARCH)-linux
 LOCAL_MODULE_TAGS := optional
 LOCAL_MODULE_CLASS := SHARED_LIBRARIES
 LOCAL_MODULE_PATH := $(TARGET_OUT_SHARED_LIBRARIES)/valgrind
@@ -319,14 +314,14 @@ LOCAL_LDFLAGS := $(tool_ldflags)
 
 LOCAL_CFLAGS := $(common_cflags)
 
-LOCAL_STATIC_LIBRARIES := libcoregrind-$(arch)-linux libvex-$(arch)-linux
+LOCAL_STATIC_LIBRARIES := libcoregrind-$(TARGET_ARCH)-linux libvex-$(TARGET_ARCH)-linux
 
 include $(BUILD_EXECUTABLE)
 
-# Build vgpreload_memcheck-$(arch)-linux.so
+# Build vgpreload_memcheck-$(TARGET_ARCH)-linux.so
 include $(CLEAR_VARS)
 
-LOCAL_MODULE := vgpreload_memcheck-$(arch)-linux
+LOCAL_MODULE := vgpreload_memcheck-$(TARGET_ARCH)-linux
 LOCAL_MODULE_TAGS := optional
 LOCAL_MODULE_CLASS := SHARED_LIBRARIES
 LOCAL_MODULE_PATH := $(TARGET_OUT_SHARED_LIBRARIES)/valgrind
@@ -344,14 +339,14 @@ LOCAL_LDFLAGS := $(preload_ldflags)
 
 LOCAL_CFLAGS := $(common_cflags)
 
-LOCAL_WHOLE_STATIC_LIBRARIES := libreplacemalloc_toolpreload-$(arch)-linux
+LOCAL_WHOLE_STATIC_LIBRARIES := libreplacemalloc_toolpreload-$(TARGET_ARCH)-linux
 
 include $(BUILD_SHARED_LIBRARY)
 
-# Build cachegrind-$(arch)-linux
+# Build cachegrind-$(TARGET_ARCH)-linux
 include $(CLEAR_VARS)
 
-LOCAL_MODULE := cachegrind-$(arch)-linux
+LOCAL_MODULE := cachegrind-$(TARGET_ARCH)-linux
 LOCAL_MODULE_TAGS := optional
 LOCAL_MODULE_CLASS := SHARED_LIBRARIES
 LOCAL_MODULE_PATH := $(TARGET_OUT_SHARED_LIBRARIES)/valgrind
@@ -375,14 +370,14 @@ LOCAL_LDFLAGS := $(tool_ldflags)
 
 LOCAL_CFLAGS := $(common_cflags)
 
-LOCAL_STATIC_LIBRARIES := libcoregrind-$(arch)-linux libvex-$(arch)-linux
+LOCAL_STATIC_LIBRARIES := libcoregrind-$(TARGET_ARCH)-linux libvex-$(TARGET_ARCH)-linux
 
 include $(BUILD_EXECUTABLE)
 
-# Build callgrind-$(arch)-linux
+# Build callgrind-$(TARGET_ARCH)-linux
 include $(CLEAR_VARS)
 
-LOCAL_MODULE := callgrind-$(arch)-linux
+LOCAL_MODULE := callgrind-$(TARGET_ARCH)-linux
 LOCAL_MODULE_TAGS := optional
 LOCAL_MODULE_CLASS := SHARED_LIBRARIES
 LOCAL_MODULE_PATH := $(TARGET_OUT_SHARED_LIBRARIES)/valgrind
@@ -421,14 +416,14 @@ LOCAL_LDFLAGS := $(tool_ldflags)
 
 LOCAL_CFLAGS := $(common_cflags)
 
-LOCAL_STATIC_LIBRARIES := libcoregrind-$(arch)-linux libvex-$(arch)-linux
+LOCAL_STATIC_LIBRARIES := libcoregrind-$(TARGET_ARCH)-linux libvex-$(TARGET_ARCH)-linux
 
 include $(BUILD_EXECUTABLE)
 
-# Build helgrind-$(arch)-linux
+# Build helgrind-$(TARGET_ARCH)-linux
 include $(CLEAR_VARS)
 
-LOCAL_MODULE := helgrind-$(arch)-linux
+LOCAL_MODULE := helgrind-$(TARGET_ARCH)-linux
 LOCAL_MODULE_TAGS := optional
 LOCAL_MODULE_CLASS := SHARED_LIBRARIES
 LOCAL_MODULE_PATH := $(TARGET_OUT_SHARED_LIBRARIES)/valgrind
@@ -451,14 +446,14 @@ LOCAL_LDFLAGS := $(tool_ldflags)
 
 LOCAL_CFLAGS := $(common_cflags)
 
-LOCAL_STATIC_LIBRARIES := libcoregrind-$(arch)-linux libvex-$(arch)-linux
+LOCAL_STATIC_LIBRARIES := libcoregrind-$(TARGET_ARCH)-linux libvex-$(TARGET_ARCH)-linux
 
 include $(BUILD_EXECUTABLE)
 
-# Build vgpreload_helgrind-$(arch)-linux.so
+# Build vgpreload_helgrind-$(TARGET_ARCH)-linux.so
 include $(CLEAR_VARS)
 
-LOCAL_MODULE := vgpreload_helgrind-$(arch)-linux
+LOCAL_MODULE := vgpreload_helgrind-$(TARGET_ARCH)-linux
 LOCAL_MODULE_TAGS := optional
 LOCAL_MODULE_CLASS := SHARED_LIBRARIES
 LOCAL_MODULE_PATH := $(TARGET_OUT_SHARED_LIBRARIES)/valgrind
@@ -476,14 +471,14 @@ LOCAL_LDFLAGS := $(preload_ldflags)
 
 LOCAL_CFLAGS := $(common_cflags)
 
-LOCAL_WHOLE_STATIC_LIBRARIES := libreplacemalloc_toolpreload-$(arch)-linux
+LOCAL_WHOLE_STATIC_LIBRARIES := libreplacemalloc_toolpreload-$(TARGET_ARCH)-linux
 
 include $(BUILD_SHARED_LIBRARY)
 
-# Build drd-$(arch)-linux
+# Build drd-$(TARGET_ARCH)-linux
 include $(CLEAR_VARS)
 
-LOCAL_MODULE := drd-$(arch)-linux
+LOCAL_MODULE := drd-$(TARGET_ARCH)-linux
 LOCAL_MODULE_TAGS := optional
 LOCAL_MODULE_CLASS := SHARED_LIBRARIES
 LOCAL_MODULE_PATH := $(TARGET_OUT_SHARED_LIBRARIES)/valgrind
@@ -515,14 +510,14 @@ LOCAL_LDFLAGS := $(tool_ldflags)
 
 LOCAL_CFLAGS := $(common_cflags)
 
-LOCAL_STATIC_LIBRARIES := libcoregrind-$(arch)-linux libvex-$(arch)-linux
+LOCAL_STATIC_LIBRARIES := libcoregrind-$(TARGET_ARCH)-linux libvex-$(TARGET_ARCH)-linux
 
 include $(BUILD_EXECUTABLE)
 
-# Build vgpreload_drd-$(arch)-linux.so
+# Build vgpreload_drd-$(TARGET_ARCH)-linux.so
 include $(CLEAR_VARS)
 
-LOCAL_MODULE := vgpreload_drd-$(arch)-linux
+LOCAL_MODULE := vgpreload_drd-$(TARGET_ARCH)-linux
 LOCAL_MODULE_TAGS := optional
 LOCAL_MODULE_CLASS := SHARED_LIBRARIES
 LOCAL_MODULE_PATH := $(TARGET_OUT_SHARED_LIBRARIES)/valgrind
@@ -542,14 +537,14 @@ LOCAL_LDFLAGS := $(preload_ldflags)
 
 LOCAL_CFLAGS := $(common_cflags)
 
-LOCAL_WHOLE_STATIC_LIBRARIES := libreplacemalloc_toolpreload-$(arch)-linux
+LOCAL_WHOLE_STATIC_LIBRARIES := libreplacemalloc_toolpreload-$(TARGET_ARCH)-linux
 
 include $(BUILD_SHARED_LIBRARY)
 
-# Build massif-$(arch)-linux
+# Build massif-$(TARGET_ARCH)-linux
 include $(CLEAR_VARS)
 
-LOCAL_MODULE := massif-$(arch)-linux
+LOCAL_MODULE := massif-$(TARGET_ARCH)-linux
 LOCAL_MODULE_TAGS := optional
 LOCAL_MODULE_CLASS := SHARED_LIBRARIES
 LOCAL_MODULE_PATH := $(TARGET_OUT_SHARED_LIBRARIES)/valgrind
@@ -567,14 +562,14 @@ LOCAL_LDFLAGS := $(tool_ldflags)
 
 LOCAL_CFLAGS := $(common_cflags)
 
-LOCAL_STATIC_LIBRARIES := libcoregrind-$(arch)-linux libvex-$(arch)-linux
+LOCAL_STATIC_LIBRARIES := libcoregrind-$(TARGET_ARCH)-linux libvex-$(TARGET_ARCH)-linux
 
 include $(BUILD_EXECUTABLE)
 
-# Build vgpreload_massif-$(arch)-linux.so
+# Build vgpreload_massif-$(TARGET_ARCH)-linux.so
 include $(CLEAR_VARS)
 
-LOCAL_MODULE := vgpreload_massif-$(arch)-linux
+LOCAL_MODULE := vgpreload_massif-$(TARGET_ARCH)-linux
 LOCAL_MODULE_TAGS := optional
 LOCAL_MODULE_CLASS := SHARED_LIBRARIES
 LOCAL_MODULE_PATH := $(TARGET_OUT_SHARED_LIBRARIES)/valgrind
@@ -591,14 +586,14 @@ LOCAL_LDFLAGS := $(preload_ldflags)
 
 LOCAL_CFLAGS := $(common_cflags)
 
-LOCAL_WHOLE_STATIC_LIBRARIES := libreplacemalloc_toolpreload-$(arch)-linux
+LOCAL_WHOLE_STATIC_LIBRARIES := libreplacemalloc_toolpreload-$(TARGET_ARCH)-linux
 
 include $(BUILD_SHARED_LIBRARY)
 
-# Build none-$(arch)-linux
+# Build none-$(TARGET_ARCH)-linux
 include $(CLEAR_VARS)
 
-LOCAL_MODULE := none-$(arch)-linux
+LOCAL_MODULE := none-$(TARGET_ARCH)-linux
 LOCAL_MODULE_TAGS := optional
 LOCAL_MODULE_CLASS := SHARED_LIBRARIES
 LOCAL_MODULE_PATH := $(TARGET_OUT_SHARED_LIBRARIES)/valgrind
@@ -616,7 +611,7 @@ LOCAL_LDFLAGS := $(tool_ldflags)
 
 LOCAL_CFLAGS := $(common_cflags)
 
-LOCAL_STATIC_LIBRARIES := libcoregrind-$(arch)-linux libvex-$(arch)-linux
+LOCAL_STATIC_LIBRARIES := libcoregrind-$(TARGET_ARCH)-linux libvex-$(TARGET_ARCH)-linux
 
 include $(BUILD_EXECUTABLE)
 
