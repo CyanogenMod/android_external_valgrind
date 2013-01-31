@@ -1,8 +1,7 @@
-/* -*- mode: C; c-basic-offset: 3; indent-tabs-mode: nil; -*- */
 /*
   This file is part of drd, a thread error detector.
 
-  Copyright (C) 2006-2011 Bart Van Assche <bvanassche@acm.org>.
+  Copyright (C) 2006-2012 Bart Van Assche <bvanassche@acm.org>.
 
   This program is free software; you can redistribute it and/or
   modify it under the terms of the GNU General Public License as
@@ -211,14 +210,14 @@ void DRD_(hb_happens_after)(const DrdThreadId tid, const Addr hb)
     * Combine all vector clocks that were stored because of happens-before
     * annotations with the vector clock of the current thread.
     */
-   DRD_(vc_copy)(&old_vc, &DRD_(g_threadinfo)[tid].last->vc);
+   DRD_(vc_copy)(&old_vc, DRD_(thread_get_vc)(tid));
    VG_(OSetGen_ResetIter)(p->oset);
    for ( ; (q = VG_(OSetGen_Next)(p->oset)) != 0; )
    {
       if (q->tid != tid)
       {
          tl_assert(q->sg);
-         DRD_(vc_combine)(&DRD_(g_threadinfo)[tid].last->vc, &q->sg->vc);
+         DRD_(vc_combine)(DRD_(thread_get_vc)(tid), &q->sg->vc);
       }
    }
    DRD_(thread_update_conflict_set)(tid, &old_vc);

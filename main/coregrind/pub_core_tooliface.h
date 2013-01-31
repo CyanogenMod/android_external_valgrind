@@ -7,7 +7,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2000-2011 Julian Seward
+   Copyright (C) 2000-2012 Julian Seward
       jseward@acm.org
 
    This program is free software; you can redistribute it and/or
@@ -226,7 +226,6 @@ typedef struct {
    void (*track_stop_client_code) (ThreadId, ULong);
 
    void (*track_pre_thread_ll_create)(ThreadId, ThreadId);
-   void (*track_workq_task_start)(ThreadId, Addr);
    void (*track_pre_thread_first_insn)(ThreadId);
    void (*track_pre_thread_ll_exit)  (ThreadId);
 

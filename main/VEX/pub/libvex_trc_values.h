@@ -7,7 +7,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2004-2011 OpenWorks LLP
+   Copyright (C) 2004-2012 OpenWorks LLP
       info@open-works.net
 
    This program is free software; you can redistribute it and/or
@@ -69,9 +69,6 @@
 #define VEX_TRC_JMP_CLIENTREQ  65  /* do a client req before continuing */
 #define VEX_TRC_JMP_YIELD      67  /* yield to thread sched 
                                       before continuing */
-#define VEX_TRC_JMP_YIELD_NOREDIR 111  /* yield to thread sched before
-                                          continuing AND jump to undirected
-                                          guest addr */
 #define VEX_TRC_JMP_NODECODE   69  /* next instruction is not decodable */
 #define VEX_TRC_JMP_MAPFAIL    71  /* address translation failed */
 
@@ -82,6 +79,9 @@
 #define VEX_TRC_JMP_SYS_INT130   91 /* do syscall before continuing */
 
 #define VEX_TRC_JMP_SYS_SYSENTER 79 /* do syscall before continuing */
+
+#define VEX_TRC_JMP_BORING       95 /* return to sched, but just 
+                                       keep going; no special action */
 
 #endif /* ndef __LIBVEX_TRC_VALUES_H */
 

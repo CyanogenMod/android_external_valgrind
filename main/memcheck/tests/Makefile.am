@@ -10,12 +10,14 @@ endif
 if VGCONF_ARCHS_INCLUDE_AMD64
 SUBDIRS += amd64
 endif
-
 if VGCONF_ARCHS_INCLUDE_PPC32
 SUBDIRS += ppc32
 endif
 if VGCONF_ARCHS_INCLUDE_PPC64
 SUBDIRS += ppc64
+endif
+if VGCONF_ARCHS_INCLUDE_S390X
+SUBDIRS += s390x
 endif
 
 # OS-specific tests
@@ -34,7 +36,7 @@ if VGCONF_PLATFORMS_INCLUDE_AMD64_LINUX
 SUBDIRS += amd64-linux
 endif
 
-DIST_SUBDIRS = x86 amd64 ppc32 ppc64 linux darwin x86-linux amd64-linux .
+DIST_SUBDIRS = x86 amd64 ppc32 ppc64 s390x linux darwin x86-linux amd64-linux .
 
 dist_noinst_SCRIPTS = \
 	filter_addressable \
@@ -47,6 +49,7 @@ dist_noinst_SCRIPTS = \
 noinst_HEADERS = leak.h
 
 EXTRA_DIST = \
+	accounting.stderr.exp accounting.vgtest \
 	addressable.stderr.exp addressable.stdout.exp addressable.vgtest \
 	atomic_incs.stderr.exp atomic_incs.vgtest \
 	atomic_incs.stdout.exp-32bit atomic_incs.stdout.exp-64bit \
@@ -54,6 +57,7 @@ EXTRA_DIST = \
 	badaddrvalue.stdout.exp badaddrvalue.vgtest \
 	badfree-2trace.stderr.exp badfree-2trace.vgtest \
 	badfree.stderr.exp badfree.vgtest \
+	badfree3.stderr.exp badfree3.vgtest \
 	badjump.stderr.exp badjump.vgtest \
 	badjump2.stderr.exp badjump2.vgtest \
 	badjump.stderr.exp-kfail \
@@ -64,15 +68,22 @@ EXTRA_DIST = \
 	big_blocks_freed_list.stderr.exp big_blocks_freed_list.vgtest \
 	brk2.stderr.exp brk2.vgtest \
 	buflen_check.stderr.exp buflen_check.vgtest buflen_check.stderr.exp-kfail \
+	bug287260.stderr.exp bug287260.vgtest \
 	calloc-overflow.stderr.exp calloc-overflow.vgtest\
 	clientperm.stderr.exp \
 	clientperm.stdout.exp clientperm.vgtest \
+	clireq_nofill.stderr.exp \
+	clireq_nofill.stdout.exp clireq_nofill.vgtest \
+	clo_redzone_default.vgtest clo_redzone_128.vgtest \
+	clo_redzone_default.stderr.exp clo_redzone_128.stderr.exp \
 	custom_alloc.stderr.exp custom_alloc.vgtest custom_alloc.stderr.exp-s390x-mvc \
 	custom-overlap.stderr.exp custom-overlap.vgtest \
+	deep-backtrace.vgtest deep-backtrace.stderr.exp \
 	deep_templates.vgtest \
 	deep_templates.stdout.exp deep_templates.stderr.exp \
 	describe-block.stderr.exp describe-block.vgtest \
 	doublefree.stderr.exp doublefree.vgtest \
+	dw4.vgtest dw4.stderr.exp dw4.stdout.exp \
 	err_disable1.vgtest err_disable1.stderr.exp \
 	err_disable2.vgtest err_disable2.stderr.exp \
 	err_disable3.vgtest err_disable3.stderr.exp \
@@ -171,11 +182,13 @@ EXTRA_DIST = \
 	sh-mem-random.stderr.exp sh-mem-random.stdout.exp64 \
 	sh-mem-random.stdout.exp sh-mem-random.vgtest \
 	sigaltstack.stderr.exp sigaltstack.vgtest \
-	sigkill.stderr.exp sigkill.stderr.exp-darwin sigkill.vgtest \
+	sigkill.stderr.exp sigkill.stderr.exp-darwin sigkill.stderr.exp-mips32 \
+	sigkill.vgtest \
 	signal2.stderr.exp signal2.stdout.exp signal2.vgtest \
 	sigprocmask.stderr.exp sigprocmask.stderr.exp2 sigprocmask.vgtest \
+	static_malloc.stderr.exp static_malloc.vgtest \
 	strchr.stderr.exp strchr.stderr.exp2 strchr.stderr.exp-darwin \
-	    strchr.vgtest \
+	    strchr.stderr.exp3 strchr.vgtest \
 	str_tester.stderr.exp str_tester.vgtest \
 	supp-dir.vgtest supp-dir.stderr.exp \
 	supp_unknown.stderr.exp supp_unknown.vgtest supp_unknown.supp \
@@ -183,16 +196,21 @@ EXTRA_DIST = \
 	supp1.stderr.exp supp1.vgtest \
 	supp2.stderr.exp supp2.vgtest \
 	supp.supp \
-	suppfree.stderr.exp suppfree.vgtest \
+	suppfree.stderr.exp suppfree.supp suppfree.vgtest \
+	test-plo-no.vgtest test-plo-no.stdout.exp \
+	    test-plo-no.stderr.exp-le64 test-plo-no.stderr.exp-le32 \
+	test-plo-yes.vgtest test-plo-yes.stdout.exp \
+	    test-plo-yes.stderr.exp-le64 test-plo-yes.stderr.exp-le32 \
+	    test-plo-no.stderr.exp-s390x-mvc \
 	trivialleak.stderr.exp trivialleak.vgtest trivialleak.stderr.exp2 \
 	unit_libcbase.stderr.exp unit_libcbase.vgtest \
 	unit_oset.stderr.exp unit_oset.stdout.exp unit_oset.vgtest \
-	varinfo1.vgtest varinfo1.stdout.exp varinfo1.stderr.exp varinfo1.stderr.exp-ppc64\
-	varinfo2.vgtest varinfo2.stdout.exp varinfo2.stderr.exp varinfo2.stderr.exp-ppc64\
-	varinfo3.vgtest varinfo3.stdout.exp varinfo3.stderr.exp varinfo3.stderr.exp-ppc64\
-	varinfo4.vgtest varinfo4.stdout.exp varinfo4.stderr.exp varinfo4.stderr.exp-ppc64\
-	varinfo5.vgtest varinfo5.stdout.exp varinfo5.stderr.exp varinfo5.stderr.exp-ppc64\
-	varinfo6.vgtest varinfo6.stdout.exp varinfo6.stderr.exp varinfo6.stderr.exp-ppc64\
+	varinfo1.vgtest varinfo1.stdout.exp varinfo1.stderr.exp varinfo1.stderr.exp-ppc64 \
+	varinfo2.vgtest varinfo2.stdout.exp varinfo2.stderr.exp varinfo2.stderr.exp-ppc64 \
+	varinfo3.vgtest varinfo3.stdout.exp varinfo3.stderr.exp varinfo3.stderr.exp-ppc64 \
+	varinfo4.vgtest varinfo4.stdout.exp varinfo4.stderr.exp varinfo4.stderr.exp-ppc64 \
+	varinfo5.vgtest varinfo5.stdout.exp varinfo5.stderr.exp varinfo5.stderr.exp-ppc64 \
+	varinfo6.vgtest varinfo6.stdout.exp varinfo6.stderr.exp varinfo6.stderr.exp-ppc64 \
 	vcpu_bz2.stdout.exp vcpu_bz2.stderr.exp vcpu_bz2.vgtest \
 	vcpu_fbench.stdout.exp vcpu_fbench.stderr.exp vcpu_fbench.vgtest \
 	vcpu_fnfns.stdout.exp vcpu_fnfns.stdout.exp-glibc28-amd64 \
@@ -210,6 +228,7 @@ EXTRA_DIST = \
 	xml1.stderr.exp xml1.stdout.exp xml1.vgtest xml1.stderr.exp-s390x-mvc
 
 check_PROGRAMS = \
+	accounting \
 	addressable \
 	atomic_incs \
 	badaddrvalue badfree badjump badjump2 \
@@ -219,10 +238,14 @@ check_PROGRAMS = \
 	big_blocks_freed_list \
 	brk2 \
 	buflen_check \
+	bug287260 \
 	calloc-overflow \
 	clientperm \
+	clireq_nofill \
+	clo_redzone \
 	custom_alloc \
 	custom-overlap \
+	deep-backtrace \
 	deep_templates \
 	describe-block \
 	doublefree error_counts errs1 exitprog execve1 execve2 erringfds \
@@ -257,10 +280,11 @@ check_PROGRAMS = \
 	realloc1 realloc2 realloc3 \
 	sbfragment \
 	sh-mem sh-mem-random \
-	sigaltstack signal2 sigprocmask sigkill \
+	sigaltstack signal2 sigprocmask static_malloc sigkill \
 	strchr \
 	str_tester \
 	supp_unknown supp1 supp2 suppfree \
+	test-plo \
 	trivialleak \
 	unit_libcbase unit_oset \
 	varinfo1 varinfo2 varinfo3 varinfo4 \
@@ -270,13 +294,16 @@ check_PROGRAMS = \
 	wrap1 wrap2 wrap3 wrap4 wrap5 wrap6 wrap7 wrap7so.so wrap8 \
 	writev1
 
+if DWARF4
+check_PROGRAMS += dw4
+endif
 
 AM_CFLAGS   += $(AM_FLAG_M3264_PRI)
 AM_CXXFLAGS += $(AM_FLAG_M3264_PRI)
 
 if VGCONF_PLATFORMS_INCLUDE_ARM_LINUX
-AM_CFLAGS   += -mfloat-abi=softfp
-AM_CXXFLAGS += -mfloat-abi=softfp
+#AM_CFLAGS   += -mfloat-abi=softfp
+#AM_CXXFLAGS += -mfloat-abi=softfp
 endif
 
 if VGCONF_OS_IS_DARWIN
@@ -287,6 +314,8 @@ endif
 
 deep_templates_SOURCES	= deep_templates.cpp
 deep_templates_CXXFLAGS	= $(AM_CFLAGS) -O -gstabs
+
+dw4_CFLAGS		= $(AM_CFLAGS) -gdwarf-4 -fdebug-types-section
 
 err_disable3_LDADD 	= -lpthread
 err_disable4_LDADD 	= -lpthread

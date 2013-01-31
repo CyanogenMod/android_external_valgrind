@@ -7,7 +7,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2000-2011 Julian Seward
+   Copyright (C) 2000-2012 Julian Seward
       jseward@acm.org
 
    This program is free software; you can redistribute it and/or
@@ -87,6 +87,8 @@ typedef
    typedef VexGuestARMState   VexGuestArchState;
 #elif defined(VGA_s390x)
    typedef VexGuestS390XState VexGuestArchState;
+#elif defined(VGA_mips32)
+   typedef VexGuestMIPS32State VexGuestArchState;
 #else
 #  error Unknown architecture
 #endif
@@ -372,6 +374,9 @@ extern ThreadId VG_(running_tid);
 /*------------------------------------------------------------*/
 /*--- Basic operations on the thread table.                ---*/
 /*------------------------------------------------------------*/
+
+/* Initialize the m_threadstate module. */
+void VG_(init_Threads)(void);
 
 // Convert a ThreadStatus to a string.
 const HChar* VG_(name_of_ThreadStatus) ( ThreadStatus status );

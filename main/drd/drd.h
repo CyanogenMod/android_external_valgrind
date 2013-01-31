@@ -1,5 +1,3 @@
-/* -*- mode: C; c-basic-offset: 3; indent-tabs-mode: nil; -*- */
-
 /*
   ----------------------------------------------------------------
 
@@ -14,7 +12,7 @@
   This file is part of DRD, a Valgrind tool for verification of
   multithreaded programs.
 
-  Copyright (C) 2006-2011 Bart Van Assche <bvanassche@acm.org>.
+  Copyright (C) 2006-2012 Bart Van Assche <bvanassche@acm.org>.
   All rights reserved.
 
   Redistribution and use in source and binary forms, with or without
@@ -87,11 +85,18 @@
                                    &(x), sizeof(x), 0, 0, 0)
 
 /**
- * Tell DRD to trace all memory accesses on the specified variable.
+ * Tell DRD to trace all memory accesses for the specified variable
  * until the memory that was allocated for the variable is freed.
  */
 #define DRD_TRACE_VAR(x)                                             \
    VALGRIND_DO_CLIENT_REQUEST_STMT(VG_USERREQ__DRD_START_TRACE_ADDR, \
+                                   &(x), sizeof(x), 0, 0, 0)
+
+/**
+ * Tell DRD to stop tracing memory accesses for the specified variable.
+ */
+#define DRD_STOP_TRACING_VAR(x)                                       \
+   VALGRIND_DO_CLIENT_REQUEST_STMT(VG_USERREQ__DRD_STOP_TRACE_ADDR, \
                                    &(x), sizeof(x), 0, 0, 0)
 
 /**
@@ -102,6 +107,8 @@
  * in the ThreadSanitizer project.
  */
 /*@{*/
+
+#ifndef __HELGRIND_H
 
 /**
  * Tell DRD to insert a happens-before mark. addr is the address of an object
@@ -122,6 +129,36 @@
 #define ANNOTATE_HAPPENS_AFTER(addr)                                       \
    VALGRIND_DO_CLIENT_REQUEST_STMT(VG_USERREQ__DRD_ANNOTATE_HAPPENS_AFTER, \
                                    addr, 0, 0, 0, 0)
+
+#else /* __HELGRIND_H */
+
+#undef ANNOTATE_CONDVAR_LOCK_WAIT
+#undef ANNOTATE_CONDVAR_WAIT
+#undef ANNOTATE_CONDVAR_SIGNAL
+#undef ANNOTATE_CONDVAR_SIGNAL_ALL
+#undef ANNOTATE_PURE_HAPPENS_BEFORE_MUTEX
+#undef ANNOTATE_PUBLISH_MEMORY_RANGE
+#undef ANNOTATE_BARRIER_INIT
+#undef ANNOTATE_BARRIER_WAIT_BEFORE
+#undef ANNOTATE_BARRIER_WAIT_AFTER
+#undef ANNOTATE_BARRIER_DESTROY
+#undef ANNOTATE_PCQ_CREATE
+#undef ANNOTATE_PCQ_DESTROY
+#undef ANNOTATE_PCQ_PUT
+#undef ANNOTATE_PCQ_GET
+#undef ANNOTATE_BENIGN_RACE
+#undef ANNOTATE_BENIGN_RACE_SIZED
+#undef ANNOTATE_IGNORE_READS_BEGIN
+#undef ANNOTATE_IGNORE_READS_END
+#undef ANNOTATE_IGNORE_WRITES_BEGIN
+#undef ANNOTATE_IGNORE_WRITES_END
+#undef ANNOTATE_IGNORE_READS_AND_WRITES_BEGIN
+#undef ANNOTATE_IGNORE_READS_AND_WRITES_END
+#undef ANNOTATE_NEW_MEMORY
+#undef ANNOTATE_TRACE_MEMORY
+#undef ANNOTATE_THREAD_NAME
+
+#endif /* __HELGRIND_H */
 
 /**
  * Tell DRD that waiting on the condition variable at address cv has succeeded
@@ -176,6 +213,8 @@
 /** Deprecated -- don't use this annotation. */
 #define ANNOTATE_SWAP_MEMORY_RANGE(addr, size) do { } while(0)
 
+#ifndef __HELGRIND_H
+
 /** Tell DRD that a reader-writer lock object has been initialized. */
 #define ANNOTATE_RWLOCK_CREATE(rwlock)                                     \
    VALGRIND_DO_CLIENT_REQUEST_STMT(VG_USERREQ__DRD_ANNOTATE_RWLOCK_CREATE, \
@@ -195,6 +234,8 @@
    VALGRIND_DO_CLIENT_REQUEST_STMT(VG_USERREQ__DRD_ANNOTATE_RWLOCK_ACQUIRED, \
                                    rwlock, is_w, 0, 0, 0)
 
+#endif /* __HELGRIND_H */
+
 /**
  * Tell DRD that a reader lock has been acquired on a reader-writer
  * synchronization object.
@@ -207,6 +248,8 @@
  */
 #define ANNOTATE_WRITERLOCK_ACQUIRED(rwlock) ANNOTATE_RWLOCK_ACQUIRED(rwlock, 1)
 
+#ifndef __HELGRIND_H
+
 /**
  * Tell DRD that a reader-writer lock is about to be released. is_w == 1 means
  * that a write lock is about to be released, is_w == 0 means that a read lock
@@ -215,6 +258,8 @@
 #define ANNOTATE_RWLOCK_RELEASED(rwlock, is_w)                               \
    VALGRIND_DO_CLIENT_REQUEST_STMT(VG_USERREQ__DRD_ANNOTATE_RWLOCK_RELEASED, \
                                    rwlock, is_w, 0, 0, 0);
+
+#endif /* __HELGRIND_H */
 
 /**
  * Tell DRD that a reader lock is about to be released.

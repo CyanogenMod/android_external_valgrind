@@ -7,7 +7,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2000-2011 Julian Seward
+   Copyright (C) 2000-2012 Julian Seward
       jseward@acm.org
 
    This program is free software; you can redistribute it and/or
@@ -83,6 +83,12 @@
 #  define VG_CLREQ_SZB             19
 #  define VG_STACK_REDZONE_SZB    128
 
+#elif defined(VGP_mips32_linux)
+#  define VG_MIN_INSTR_SZB          4
+#  define VG_MAX_INSTR_SZB          4 
+#  define VG_CLREQ_SZB             20
+#  define VG_STACK_REDZONE_SZB      0
+
 #else
 #  error Unknown platform
 #endif
@@ -121,7 +127,8 @@ void VG_(set_syscall_return_shadows) ( ThreadId tid,
 // current threads.
 // This is very Memcheck-specific -- it's used to find the roots when
 // doing leak checking.
-extern void VG_(apply_to_GP_regs)(void (*f)(UWord val));
+extern void VG_(apply_to_GP_regs)(void (*f)(ThreadId tid,
+                                            HChar* regname, UWord val));
 
 // This iterator lets you inspect each live thread's stack bounds.
 // Returns False at the end.  'tid' is the iterator and you can only
@@ -150,6 +157,12 @@ extern SizeT VG_(thread_get_altstack_size) ( ThreadId tid );
 // most platforms it's the identity function.  Unfortunately, on
 // ppc64-linux it isn't (sigh).
 extern void* VG_(fnptr_to_fnentry)( void* );
+
+/* Returns the size of the largest guest register that we will
+   simulate in this run.  This depends on both the guest architecture
+   and on the specific capabilities we are simulating for that guest
+   (eg, AVX or non-AVX ?, for amd64). */
+extern Int VG_(machine_get_size_of_largest_guest_register) ( void );
 
 #endif   // __PUB_TOOL_MACHINE_H
 

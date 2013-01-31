@@ -7,11 +7,11 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2004-2011 OpenWorks LLP
+   Copyright (C) 2004-2012 OpenWorks LLP
       info@open-works.net
 
    NEON support is
-   Copyright (C) 2010-2011 Samsung Electronics
+   Copyright (C) 2010-2012 Samsung Electronics
    contributed by Dmitry Zhurikhin <zhur@ispras.ru>
               and Kirill Batuzov <batuzovk@ispras.ru>
 
@@ -1398,7 +1398,8 @@ static void mk_skip_over_A32_if_cond_is_false (
    stmt( IRStmt_Exit(
             unop(Iop_Not1, unop(Iop_32to1, mkexpr(guardT))),
             Ijk_Boring,
-            IRConst_U32(toUInt(guest_R15_curr_instr_notENC + 4))
+            IRConst_U32(toUInt(guest_R15_curr_instr_notENC + 4)),
+            OFFB_R15T
        ));
 }
 
@@ -1414,7 +1415,8 @@ static void mk_skip_over_T16_if_cond_is_false (
    stmt( IRStmt_Exit(
             unop(Iop_Not1, unop(Iop_32to1, mkexpr(guardT))),
             Ijk_Boring,
-            IRConst_U32(toUInt((guest_R15_curr_instr_notENC + 2) | 1))
+            IRConst_U32(toUInt((guest_R15_curr_instr_notENC + 2) | 1)),
+            OFFB_R15T
        ));
 }
 
@@ -1431,7 +1433,8 @@ static void mk_skip_over_T32_if_cond_is_false (
    stmt( IRStmt_Exit(
             unop(Iop_Not1, unop(Iop_32to1, mkexpr(guardT))),
             Ijk_Boring,
-            IRConst_U32(toUInt((guest_R15_curr_instr_notENC + 4) | 1))
+            IRConst_U32(toUInt((guest_R15_curr_instr_notENC + 4) | 1)),
+            OFFB_R15T
        ));
 }
 
@@ -1448,7 +1451,8 @@ static void gen_SIGILL_T_if_nonzero ( IRTemp t /* :: Ity_I32 */ )
       IRStmt_Exit(
          binop(Iop_CmpNE32, mkexpr(t), mkU32(0)),
          Ijk_NoDecode,
-         IRConst_U32(toUInt(guest_R15_curr_instr_notENC | 1))
+         IRConst_U32(toUInt(guest_R15_curr_instr_notENC | 1)),
+         OFFB_R15T
       )
    );
 }
@@ -1680,6 +1684,21 @@ IRExpr* signed_overflow_after_Add32 ( IRExpr* resE,
              binop( Iop_And32,
                     binop( Iop_Xor32, mkexpr(res), mkexpr(argL) ),
                     binop( Iop_Xor32, mkexpr(res), mkexpr(argR) )), 
+             mkU8(31) );
+}
+
+/* Similarly .. also from HD p27 .. */
+static
+IRExpr* signed_overflow_after_Sub32 ( IRExpr* resE,
+                                      IRTemp argL, IRTemp argR )
+{
+   IRTemp res = newTemp(Ity_I32);
+   assign(res, resE);
+   return
+      binop( Iop_Shr32, 
+             binop( Iop_And32,
+                    binop( Iop_Xor32, mkexpr(argL), mkexpr(argR) ),
+                    binop( Iop_Xor32, mkexpr(res),  mkexpr(argL) )), 
              mkU8(31) );
 }
 
@@ -9337,6 +9356,51 @@ static Bool decode_V6MEDIA_instruction (
      /* fall through */
    }
 
+   /* ----------------- uhadd16<c> <Rd>,<Rn>,<Rm> ------------------- */
+   {
+     UInt regD = 99, regN = 99, regM = 99;
+     Bool gate = False;
+
+     if (isT) {
+        if (INSNT0(15,4) == 0xFA9 && (INSNT1(15,0) & 0xF0F0) == 0xF060) {
+           regN = INSNT0(3,0);
+           regD = INSNT1(11,8);
+           regM = INSNT1(3,0);
+           if (!isBadRegT(regD) && !isBadRegT(regN) && !isBadRegT(regM))
+              gate = True;
+        }
+     } else {
+        if (INSNA(27,20) == BITS8(0,1,1,0,0,1,1,1) &&
+            INSNA(11,8)  == BITS4(1,1,1,1)         &&
+            INSNA(7,4)   == BITS4(0,0,0,1)) {
+           regD = INSNA(15,12);
+           regN = INSNA(19,16);
+           regM = INSNA(3,0);
+           if (regD != 15 && regN != 15 && regM != 15)
+              gate = True;
+        }
+     }
+
+     if (gate) {
+        IRTemp rNt   = newTemp(Ity_I32);
+        IRTemp rMt   = newTemp(Ity_I32);
+        IRTemp res_q = newTemp(Ity_I32);
+
+        assign( rNt, isT ? getIRegT(regN) : getIRegA(regN) );
+        assign( rMt, isT ? getIRegT(regM) : getIRegA(regM) );
+
+        assign(res_q, binop(Iop_HAdd16Ux2, mkexpr(rNt), mkexpr(rMt)));
+        if (isT)
+           putIRegT( regD, mkexpr(res_q), condT );
+        else
+           putIRegA( regD, mkexpr(res_q), condT, Ijk_Boring );
+
+        DIP("uhadd16%s r%u, r%u, r%u\n", nCC(conq),regD,regN,regM);
+        return True;
+     }
+     /* fall through */
+   }
+
    /* ----------------- shadd8<c> <Rd>,<Rn>,<Rm> ------------------- */
    {
      UInt regD = 99, regN = 99, regM = 99;
@@ -10201,6 +10265,406 @@ static Bool decode_V6MEDIA_instruction (
            DIP( "usada8%s r%u, r%u, r%u, r%u\n", 
                 nCC(conq), rD, rN, rM, rA );
         }
+        return True;
+     }
+     /* fall through */
+   }
+
+   /* ------------------ qadd<c> <Rd>,<Rn>,<Rm> ------------------- */
+   {
+     UInt regD = 99, regN = 99, regM = 99;
+     Bool gate = False;
+
+     if (isT) {
+        if (INSNT0(15,4) == 0xFA8 && (INSNT1(15,0) & 0xF0F0) == 0xF080) {
+           regN = INSNT0(3,0);
+           regD = INSNT1(11,8);
+           regM = INSNT1(3,0);
+           if (!isBadRegT(regD) && !isBadRegT(regN) && !isBadRegT(regM))
+              gate = True;
+        }
+     } else {
+        if (INSNA(27,20) == BITS8(0,0,0,1,0,0,0,0) &&
+            INSNA(11,8)  == BITS4(0,0,0,0)         &&
+            INSNA(7,4)   == BITS4(0,1,0,1)) {
+           regD = INSNA(15,12);
+           regN = INSNA(19,16);
+           regM = INSNA(3,0);
+           if (regD != 15 && regN != 15 && regM != 15)
+              gate = True;
+        }
+     }
+
+     if (gate) {
+        IRTemp rNt   = newTemp(Ity_I32);
+        IRTemp rMt   = newTemp(Ity_I32);
+        IRTemp res_q = newTemp(Ity_I32);
+
+        assign( rNt, isT ? getIRegT(regN) : getIRegA(regN) );
+        assign( rMt, isT ? getIRegT(regM) : getIRegA(regM) );
+
+        assign(res_q, binop(Iop_QAdd32S, mkexpr(rMt), mkexpr(rNt)));
+        if (isT)
+           putIRegT( regD, mkexpr(res_q), condT );
+        else
+           putIRegA( regD, mkexpr(res_q), condT, Ijk_Boring );
+
+        or_into_QFLAG32(
+           signed_overflow_after_Add32(
+              binop(Iop_Add32, mkexpr(rMt), mkexpr(rNt)), rMt, rNt),
+           condT
+        );
+
+        DIP("qadd%s r%u, r%u, r%u\n", nCC(conq),regD,regM,regN);
+        return True;
+     }
+     /* fall through */
+   }
+
+   /* ------------------ qdadd<c> <Rd>,<Rm>,<Rn> ------------------- */
+   {
+     UInt regD = 99, regN = 99, regM = 99;
+     Bool gate = False;
+
+     if (isT) {
+        if (INSNT0(15,4) == 0xFA8 && (INSNT1(15,0) & 0xF0F0) == 0xF090) {
+           regN = INSNT0(3,0);
+           regD = INSNT1(11,8);
+           regM = INSNT1(3,0);
+           if (!isBadRegT(regD) && !isBadRegT(regN) && !isBadRegT(regM))
+              gate = True;
+        }
+     } else {
+        if (INSNA(27,20) == BITS8(0,0,0,1,0,1,0,0) &&
+            INSNA(11,8)  == BITS4(0,0,0,0)         &&
+            INSNA(7,4)   == BITS4(0,1,0,1)) {
+           regD = INSNA(15,12);
+           regN = INSNA(19,16);
+           regM = INSNA(3,0);
+           if (regD != 15 && regN != 15 && regM != 15)
+              gate = True;
+        }
+     }
+
+     if (gate) {
+        IRTemp rNt   = newTemp(Ity_I32);
+        IRTemp rMt   = newTemp(Ity_I32);
+        IRTemp rN_d  = newTemp(Ity_I32);
+        IRTemp res_q = newTemp(Ity_I32);
+
+        assign( rNt, isT ? getIRegT(regN) : getIRegA(regN) );
+        assign( rMt, isT ? getIRegT(regM) : getIRegA(regM) );
+
+        or_into_QFLAG32(
+           signed_overflow_after_Add32(
+              binop(Iop_Add32, mkexpr(rNt), mkexpr(rNt)), rNt, rNt),
+           condT
+        );
+
+        assign(rN_d,  binop(Iop_QAdd32S, mkexpr(rNt), mkexpr(rNt)));
+        assign(res_q, binop(Iop_QAdd32S, mkexpr(rMt), mkexpr(rN_d)));
+        if (isT)
+           putIRegT( regD, mkexpr(res_q), condT );
+        else
+           putIRegA( regD, mkexpr(res_q), condT, Ijk_Boring );
+
+        or_into_QFLAG32(
+           signed_overflow_after_Add32(
+              binop(Iop_Add32, mkexpr(rMt), mkexpr(rN_d)), rMt, rN_d),
+           condT
+        );
+
+        DIP("qdadd%s r%u, r%u, r%u\n", nCC(conq),regD,regM,regN);
+        return True;
+     }
+     /* fall through */
+   }
+
+   /* ------------------ qsub<c> <Rd>,<Rn>,<Rm> ------------------- */
+   {
+     UInt regD = 99, regN = 99, regM = 99;
+     Bool gate = False;
+
+     if (isT) {
+        if (INSNT0(15,4) == 0xFA8 && (INSNT1(15,0) & 0xF0F0) == 0xF0A0) {
+           regN = INSNT0(3,0);
+           regD = INSNT1(11,8);
+           regM = INSNT1(3,0);
+           if (!isBadRegT(regD) && !isBadRegT(regN) && !isBadRegT(regM))
+              gate = True;
+        }
+     } else {
+        if (INSNA(27,20) == BITS8(0,0,0,1,0,0,1,0) &&
+            INSNA(11,8)  == BITS4(0,0,0,0)         &&
+            INSNA(7,4)   == BITS4(0,1,0,1)) {
+           regD = INSNA(15,12);
+           regN = INSNA(19,16);
+           regM = INSNA(3,0);
+           if (regD != 15 && regN != 15 && regM != 15)
+              gate = True;
+        }
+     }
+
+     if (gate) {
+        IRTemp rNt   = newTemp(Ity_I32);
+        IRTemp rMt   = newTemp(Ity_I32);
+        IRTemp res_q = newTemp(Ity_I32);
+
+        assign( rNt, isT ? getIRegT(regN) : getIRegA(regN) );
+        assign( rMt, isT ? getIRegT(regM) : getIRegA(regM) );
+
+        assign(res_q, binop(Iop_QSub32S, mkexpr(rMt), mkexpr(rNt)));
+        if (isT)
+           putIRegT( regD, mkexpr(res_q), condT );
+        else
+           putIRegA( regD, mkexpr(res_q), condT, Ijk_Boring );
+
+        or_into_QFLAG32(
+           signed_overflow_after_Sub32(
+              binop(Iop_Sub32, mkexpr(rMt), mkexpr(rNt)), rMt, rNt),
+           condT
+        );
+
+        DIP("qsub%s r%u, r%u, r%u\n", nCC(conq),regD,regM,regN);
+        return True;
+     }
+     /* fall through */
+   }
+
+   /* ------------------ qdsub<c> <Rd>,<Rm>,<Rn> ------------------- */
+   {
+     UInt regD = 99, regN = 99, regM = 99;
+     Bool gate = False;
+
+     if (isT) {
+        if (INSNT0(15,4) == 0xFA8 && (INSNT1(15,0) & 0xF0F0) == 0xF0B0) {
+           regN = INSNT0(3,0);
+           regD = INSNT1(11,8);
+           regM = INSNT1(3,0);
+           if (!isBadRegT(regD) && !isBadRegT(regN) && !isBadRegT(regM))
+              gate = True;
+        }
+     } else {
+        if (INSNA(27,20) == BITS8(0,0,0,1,0,1,1,0) &&
+            INSNA(11,8)  == BITS4(0,0,0,0)         &&
+            INSNA(7,4)   == BITS4(0,1,0,1)) {
+           regD = INSNA(15,12);
+           regN = INSNA(19,16);
+           regM = INSNA(3,0);
+           if (regD != 15 && regN != 15 && regM != 15)
+              gate = True;
+        }
+     }
+
+     if (gate) {
+        IRTemp rNt   = newTemp(Ity_I32);
+        IRTemp rMt   = newTemp(Ity_I32);
+        IRTemp rN_d  = newTemp(Ity_I32);
+        IRTemp res_q = newTemp(Ity_I32);
+
+        assign( rNt, isT ? getIRegT(regN) : getIRegA(regN) );
+        assign( rMt, isT ? getIRegT(regM) : getIRegA(regM) );
+
+        or_into_QFLAG32(
+           signed_overflow_after_Add32(
+              binop(Iop_Add32, mkexpr(rNt), mkexpr(rNt)), rNt, rNt),
+           condT
+        );
+
+        assign(rN_d,  binop(Iop_QAdd32S, mkexpr(rNt), mkexpr(rNt)));
+        assign(res_q, binop(Iop_QSub32S, mkexpr(rMt), mkexpr(rN_d)));
+        if (isT)
+           putIRegT( regD, mkexpr(res_q), condT );
+        else
+           putIRegA( regD, mkexpr(res_q), condT, Ijk_Boring );
+
+        or_into_QFLAG32(
+           signed_overflow_after_Sub32(
+              binop(Iop_Sub32, mkexpr(rMt), mkexpr(rN_d)), rMt, rN_d),
+           condT
+        );
+
+        DIP("qdsub%s r%u, r%u, r%u\n", nCC(conq),regD,regM,regN);
+        return True;
+     }
+     /* fall through */
+   }
+
+   /* ------------------ uqsub16<c> <Rd>,<Rn>,<Rm> ------------------ */
+   {
+     UInt regD = 99, regN = 99, regM = 99;
+     Bool gate = False;
+
+     if (isT) {
+        if (INSNT0(15,4) == 0xFAD && (INSNT1(15,0) & 0xF0F0) == 0xF050) {
+           regN = INSNT0(3,0);
+           regD = INSNT1(11,8);
+           regM = INSNT1(3,0);
+           if (!isBadRegT(regD) && !isBadRegT(regN) && !isBadRegT(regM))
+              gate = True;
+        }
+     } else {
+        if (INSNA(27,20) == BITS8(0,1,1,0,0,1,1,0) &&
+            INSNA(11,8)  == BITS4(1,1,1,1)         &&
+            INSNA(7,4)   == BITS4(0,1,1,1)) {
+           regD = INSNA(15,12);
+           regN = INSNA(19,16);
+           regM = INSNA(3,0);
+           if (regD != 15 && regN != 15 && regM != 15)
+             gate = True;
+        }
+     }
+
+     if (gate) {
+        IRTemp rNt   = newTemp(Ity_I32);
+        IRTemp rMt   = newTemp(Ity_I32);
+        IRTemp res_q = newTemp(Ity_I32);
+
+        assign( rNt, isT ? getIRegT(regN) : getIRegA(regN) );
+        assign( rMt, isT ? getIRegT(regM) : getIRegA(regM) );
+
+        assign(res_q, binop(Iop_QSub16Ux2, mkexpr(rNt), mkexpr(rMt)));
+        if (isT)
+           putIRegT( regD, mkexpr(res_q), condT );
+        else
+           putIRegA( regD, mkexpr(res_q), condT, Ijk_Boring );
+
+        DIP("uqsub16%s r%u, r%u, r%u\n", nCC(conq),regD,regN,regM);
+        return True;
+     }
+     /* fall through */
+   }
+
+   /* ----------------- shadd16<c> <Rd>,<Rn>,<Rm> ------------------- */
+   {
+     UInt regD = 99, regN = 99, regM = 99;
+     Bool gate = False;
+
+     if (isT) {
+        if (INSNT0(15,4) == 0xFA9 && (INSNT1(15,0) & 0xF0F0) == 0xF020) {
+           regN = INSNT0(3,0);
+           regD = INSNT1(11,8);
+           regM = INSNT1(3,0);
+           if (!isBadRegT(regD) && !isBadRegT(regN) && !isBadRegT(regM))
+              gate = True;
+        }
+     } else {
+        if (INSNA(27,20) == BITS8(0,1,1,0,0,0,1,1) &&
+            INSNA(11,8)  == BITS4(1,1,1,1)         &&
+            INSNA(7,4)   == BITS4(0,0,0,1)) {
+           regD = INSNA(15,12);
+           regN = INSNA(19,16);
+           regM = INSNA(3,0);
+           if (regD != 15 && regN != 15 && regM != 15)
+              gate = True;
+        }
+     }
+
+     if (gate) {
+        IRTemp rNt   = newTemp(Ity_I32);
+        IRTemp rMt   = newTemp(Ity_I32);
+        IRTemp res_q = newTemp(Ity_I32);
+
+        assign( rNt, isT ? getIRegT(regN) : getIRegA(regN) );
+        assign( rMt, isT ? getIRegT(regM) : getIRegA(regM) );
+
+        assign(res_q, binop(Iop_HAdd16Sx2, mkexpr(rNt), mkexpr(rMt)));
+        if (isT)
+           putIRegT( regD, mkexpr(res_q), condT );
+        else
+           putIRegA( regD, mkexpr(res_q), condT, Ijk_Boring );
+
+        DIP("shadd16%s r%u, r%u, r%u\n", nCC(conq),regD,regN,regM);
+        return True;
+     }
+     /* fall through */
+   }
+
+   /* ----------------- uhsub8<c> <Rd>,<Rn>,<Rm> ------------------- */
+   {
+     UInt regD = 99, regN = 99, regM = 99;
+     Bool gate = False;
+
+     if (isT) {
+        if (INSNT0(15,4) == 0xFAC && (INSNT1(15,0) & 0xF0F0) == 0xF060) {
+           regN = INSNT0(3,0);
+           regD = INSNT1(11,8);
+           regM = INSNT1(3,0);
+           if (!isBadRegT(regD) && !isBadRegT(regN) && !isBadRegT(regM))
+              gate = True;
+        }
+     } else {
+        if (INSNA(27,20) == BITS8(0,1,1,0,0,1,1,1) &&
+            INSNA(11,8)  == BITS4(1,1,1,1)         &&
+            INSNA(7,4)   == BITS4(1,1,1,1)) {
+           regD = INSNA(15,12);
+           regN = INSNA(19,16);
+           regM = INSNA(3,0);
+           if (regD != 15 && regN != 15 && regM != 15)
+              gate = True;
+        }
+     }
+
+     if (gate) {
+        IRTemp rNt   = newTemp(Ity_I32);
+        IRTemp rMt   = newTemp(Ity_I32);
+        IRTemp res_q = newTemp(Ity_I32);
+
+        assign( rNt, isT ? getIRegT(regN) : getIRegA(regN) );
+        assign( rMt, isT ? getIRegT(regM) : getIRegA(regM) );
+
+        assign(res_q, binop(Iop_HSub8Ux4, mkexpr(rNt), mkexpr(rMt)));
+        if (isT)
+           putIRegT( regD, mkexpr(res_q), condT );
+        else
+           putIRegA( regD, mkexpr(res_q), condT, Ijk_Boring );
+
+        DIP("uhsub8%s r%u, r%u, r%u\n", nCC(conq),regD,regN,regM);
+        return True;
+     }
+     /* fall through */
+   }
+
+   /* ----------------- uhsub16<c> <Rd>,<Rn>,<Rm> ------------------- */
+   {
+     UInt regD = 99, regN = 99, regM = 99;
+     Bool gate = False;
+
+     if (isT) {
+        if (INSNT0(15,4) == 0xFAD && (INSNT1(15,0) & 0xF0F0) == 0xF060) {
+           regN = INSNT0(3,0);
+           regD = INSNT1(11,8);
+           regM = INSNT1(3,0);
+           if (!isBadRegT(regD) && !isBadRegT(regN) && !isBadRegT(regM))
+              gate = True;
+        }
+     } else {
+        if (INSNA(27,20) == BITS8(0,1,1,0,0,1,1,1) &&
+            INSNA(11,8)  == BITS4(1,1,1,1)         &&
+            INSNA(7,4)   == BITS4(0,1,1,1)) {
+           regD = INSNA(15,12);
+           regN = INSNA(19,16);
+           regM = INSNA(3,0);
+           if (regD != 15 && regN != 15 && regM != 15)
+              gate = True;
+        }
+     }
+
+     if (gate) {
+        IRTemp rNt   = newTemp(Ity_I32);
+        IRTemp rMt   = newTemp(Ity_I32);
+        IRTemp res_q = newTemp(Ity_I32);
+
+        assign( rNt, isT ? getIRegT(regN) : getIRegA(regN) );
+        assign( rMt, isT ? getIRegT(regM) : getIRegA(regM) );
+
+        assign(res_q, binop(Iop_HSub16Ux2, mkexpr(rNt), mkexpr(rMt)));
+        if (isT)
+           putIRegT( regD, mkexpr(res_q), condT );
+        else
+           putIRegA( regD, mkexpr(res_q), condT, Ijk_Boring );
+
+        DIP("uhsub16%s r%u, r%u, r%u\n", nCC(conq),regD,regN,regM);
         return True;
      }
      /* fall through */
@@ -11863,6 +12327,61 @@ static Bool decode_CP10_CP11_instruction (
       goto decode_success_vfp;
    }
 
+   /* --------------- VCVT fixed<->floating, VFP --------------- */
+   /*          31   27   23   19   15 11   7    3
+                 28   24   20   16 12    8    4    0 
+
+               cond 1110 1D11 1p1U Vd 101f x1i0 imm4
+
+      VCVT<c>.<Td>.F64 <Dd>, <Dd>, #fbits
+      VCVT<c>.<Td>.F32 <Dd>, <Dd>, #fbits
+      VCVT<c>.F64.<Td> <Dd>, <Dd>, #fbits
+      VCVT<c>.F32.<Td> <Dd>, <Dd>, #fbits
+      are of this form.  We only handle a subset of the cases though.
+   */
+   if (BITS8(1,1,1,0,1,0,1,1) == (INSN(27,20) & BITS8(1,1,1,1,1,0,1,1))
+       && BITS4(1,0,1,0) == (INSN(19,16) & BITS4(1,0,1,0))
+       && BITS3(1,0,1) == INSN(11,9)
+       && BITS3(1,0,0) == (INSN(6,4) & BITS3(1,0,1))) {
+      UInt bD   = INSN(22,22);
+      UInt bOP  = INSN(18,18);
+      UInt bU   = INSN(16,16);
+      UInt Vd   = INSN(15,12);
+      UInt bSF  = INSN(8,8);
+      UInt bSX  = INSN(7,7);
+      UInt bI   = INSN(5,5);
+      UInt imm4 = INSN(3,0);
+      Bool to_fixed = bOP == 1;
+      Bool dp_op    = bSF == 1;
+      Bool unsyned = bU == 1;
+      UInt size = bSX == 0 ? 16 : 32;
+      Int frac_bits = size - ((imm4 << 1) | bI);
+      UInt d = dp_op  ? ((bD << 4) | Vd)  : ((Vd << 1) | bD);
+      if (frac_bits >= 1 && frac_bits <= 32 && !to_fixed && !dp_op && size == 32) {
+         /* VCVT.F32.{S,U}32 S[d], S[d], #frac_bits */
+         /* This generates really horrible code.  We could potentially
+            do much better. */
+         IRTemp rmode = newTemp(Ity_I32);
+         assign(rmode, mkU32(Irrm_NEAREST)); // rmode that this insn is defd to use
+         IRTemp src32 = newTemp(Ity_I32);
+         assign(src32,  unop(Iop_ReinterpF32asI32, getFReg(d)));
+         IRExpr* as_F64 = unop( unsyned ? Iop_I32UtoF64 : Iop_I32StoF64,
+                                mkexpr(src32 ) );
+         IRTemp scale = newTemp(Ity_F64);
+         assign(scale, unop(Iop_I32UtoF64, mkU32( 1 << (frac_bits-1) )));
+         IRExpr* rm     = mkU32(Irrm_NEAREST);
+         IRExpr* resF64 = triop(Iop_DivF64,
+                                rm, as_F64, 
+                                triop(Iop_AddF64, rm, mkexpr(scale), mkexpr(scale)));
+         IRExpr* resF32 = binop(Iop_F64toF32, mkexpr(rmode), resF64);
+         putFReg(d, resF32, condT);
+         DIP("vcvt.f32.%c32, s%u, s%u, #%d\n",
+             unsyned ? 'u' : 's', d, d, frac_bits);
+         goto decode_success_vfp;
+      }
+      /* fall through */
+   }
+
    /* FAILURE */
    return False;
 
@@ -11962,9 +12481,9 @@ static Bool decode_NV_instruction ( /*MOD*/DisResult* dres,
       UInt dst = guest_R15_curr_instr_notENC + 8 + (simm24 | 1);
       putIRegA( 14, mkU32(guest_R15_curr_instr_notENC + 4),
                     IRTemp_INVALID/*because AL*/, Ijk_Boring );
-      irsb->next     = mkU32(dst);
-      irsb->jumpkind = Ijk_Call;
-      dres->whatNext = Dis_StopHere;
+      llPutIReg(15, mkU32(dst));
+      dres->jk_StopHere = Ijk_Call;
+      dres->whatNext    = Dis_StopHere;
       DIP("blx 0x%x (and switch to Thumb mode)\n", dst - 1);
       return True;
    }
@@ -12040,7 +12559,6 @@ static Bool decode_NV_instruction ( /*MOD*/DisResult* dres,
 
 static
 DisResult disInstr_ARM_WRK (
-             Bool         put_IP,
              Bool         (*resteerOkFn) ( /*opaque*/void*, Addr64 ),
              Bool         resteerCisOk,
              void*        callback_opaque,
@@ -12066,9 +12584,10 @@ DisResult disInstr_ARM_WRK (
    // etc etc
 
    /* Set result defaults. */
-   dres.whatNext   = Dis_Continue;
-   dres.len        = 4;
-   dres.continueAt = 0;
+   dres.whatNext    = Dis_Continue;
+   dres.len         = 4;
+   dres.continueAt  = 0;
+   dres.jk_StopHere = Ijk_INVALID;
 
    /* Set default actions for post-insn handling of writes to r15, if
       required. */
@@ -12085,11 +12604,7 @@ DisResult disInstr_ARM_WRK (
 
    DIP("\t(arm) 0x%x:  ", (UInt)guest_R15_curr_instr_notENC);
 
-   /* We may be asked to update the guest R15 before going further. */
    vassert(0 == (guest_R15_curr_instr_notENC & 3));
-   if (put_IP) {
-      llPutIReg( 15, mkU32(guest_R15_curr_instr_notENC) );
-   }
 
    /* ----------------------------------------------------------- */
 
@@ -12116,9 +12631,9 @@ DisResult disInstr_ARM_WRK (
                                                /* orr r10,r10,r10 */) {
             /* R3 = client_request ( R4 ) */
             DIP("r3 = client_request ( %%r4 )\n");
-            irsb->next     = mkU32( guest_R15_curr_instr_notENC + 20 );
-            irsb->jumpkind = Ijk_ClientReq;
-            dres.whatNext  = Dis_StopHere;
+            llPutIReg(15, mkU32( guest_R15_curr_instr_notENC + 20 ));
+            dres.jk_StopHere = Ijk_ClientReq;
+            dres.whatNext    = Dis_StopHere;
             goto decode_success;
          }
          else
@@ -12136,9 +12651,9 @@ DisResult disInstr_ARM_WRK (
             /*  branch-and-link-to-noredir R4 */
             DIP("branch-and-link-to-noredir r4\n");
             llPutIReg(14, mkU32( guest_R15_curr_instr_notENC + 20) );
-            irsb->next     = llGetIReg(4);
-            irsb->jumpkind = Ijk_NoRedir;
-            dres.whatNext  = Dis_StopHere;
+            llPutIReg(15, llGetIReg(4));
+            dres.jk_StopHere = Ijk_NoRedir;
+            dres.whatNext    = Dis_StopHere;
             goto decode_success;
          }
          /* We don't know what it is.  Set opc1/opc2 so decode_failure
@@ -12977,9 +13492,9 @@ DisResult disInstr_ARM_WRK (
             dres.continueAt = (Addr64)dst;
          } else {
             /* no; terminate the SB at this point. */
-            irsb->next     = mkU32(dst);
-            irsb->jumpkind = jk;
-            dres.whatNext  = Dis_StopHere;
+            llPutIReg(15, mkU32(dst));
+            dres.jk_StopHere = jk;
+            dres.whatNext    = Dis_StopHere;
          }
          DIP("b%s 0x%x\n", link ? "l" : "", dst);
       } else {
@@ -13002,7 +13517,8 @@ DisResult disInstr_ARM_WRK (
             stmt( IRStmt_Exit( unop(Iop_Not1,
                                     unop(Iop_32to1, mkexpr(condT))),
                                Ijk_Boring,
-                               IRConst_U32(guest_R15_curr_instr_notENC+4) ));
+                               IRConst_U32(guest_R15_curr_instr_notENC+4),
+                               OFFB_R15T ));
             dres.whatNext   = Dis_ResteerC;
             dres.continueAt = (Addr64)(Addr32)dst;
             comment = "(assumed taken)";
@@ -13021,7 +13537,8 @@ DisResult disInstr_ARM_WRK (
                following this one. */
             stmt( IRStmt_Exit( unop(Iop_32to1, mkexpr(condT)),
                                Ijk_Boring,
-                               IRConst_U32(dst) ));
+                               IRConst_U32(dst),
+                               OFFB_R15T ));
             dres.whatNext   = Dis_ResteerC;
             dres.continueAt = (Addr64)(Addr32)
                                       (guest_R15_curr_instr_notENC+4);
@@ -13031,10 +13548,10 @@ DisResult disInstr_ARM_WRK (
             /* Conservative default translation - end the block at
                this point. */
             stmt( IRStmt_Exit( unop(Iop_32to1, mkexpr(condT)),
-                               jk, IRConst_U32(dst) ));
-            irsb->next     = mkU32(guest_R15_curr_instr_notENC + 4);
-            irsb->jumpkind = Ijk_Boring;
-            dres.whatNext  = Dis_StopHere;
+                               jk, IRConst_U32(dst), OFFB_R15T ));
+            llPutIReg(15, mkU32(guest_R15_curr_instr_notENC + 4));
+            dres.jk_StopHere = Ijk_Boring;
+            dres.whatNext    = Dis_StopHere;
          }
          DIP("b%s%s 0x%x %s\n", link ? "l" : "", nCC(INSN_COND),
              dst, comment);
@@ -13065,10 +13582,10 @@ DisResult disInstr_ARM_WRK (
             putIRegA( 14, mkU32(guest_R15_curr_instr_notENC + 4),
                       IRTemp_INVALID/*because AL*/, Ijk_Boring );
          }
-         irsb->next     = mkexpr(dst);
-         irsb->jumpkind = link ? Ijk_Call
-                               : (rM == 14 ? Ijk_Ret : Ijk_Boring);
-         dres.whatNext  = Dis_StopHere;
+         llPutIReg(15, mkexpr(dst));
+         dres.jk_StopHere = link ? Ijk_Call
+                                 : (rM == 14 ? Ijk_Ret : Ijk_Boring);
+         dres.whatNext    = Dis_StopHere;
          if (condT == IRTemp_INVALID) {
             DIP("b%sx r%u\n", link ? "l" : "", rM);
          } else {
@@ -13363,9 +13880,9 @@ DisResult disInstr_ARM_WRK (
             mk_skip_over_A32_if_cond_is_false( condT );
          }
          // AL after here
-         irsb->next     = mkU32( guest_R15_curr_instr_notENC + 4 );
-         irsb->jumpkind = Ijk_Sys_syscall;
-         dres.whatNext  = Dis_StopHere;
+         llPutIReg(15, mkU32( guest_R15_curr_instr_notENC + 4 ));
+         dres.jk_StopHere = Ijk_Sys_syscall;
+         dres.whatNext    = Dis_StopHere;
          DIP("svc%s #0x%08x\n", nCC(INSN_COND), imm24);
          goto decode_success;
       }
@@ -13415,7 +13932,8 @@ DisResult disInstr_ARM_WRK (
          }
          stmt( IRStmt_Exit(unop(Iop_Not1, mkexpr(tSC1)),
                            /*Ijk_NoRedir*/Ijk_Boring,
-                           IRConst_U32(guest_R15_curr_instr_notENC)) );
+                           IRConst_U32(guest_R15_curr_instr_notENC),
+                           OFFB_R15T ));
          putIRegA(rD, isB ? unop(Iop_8Uto32, mkexpr(tOld)) : mkexpr(tOld),
                       IRTemp_INVALID, Ijk_Boring);
          DIP("swp%s%s r%u, r%u, [r%u]\n",
@@ -14051,29 +14569,37 @@ DisResult disInstr_ARM_WRK (
       means we don't know which they are, so the back end has to
       re-emit them all when it comes acrosss an IR Fence.
    */
-   if (0xEE070F9A == (insn & 0xFFFF0FFF)) { /* v6 */
-      /* mcr 15, 0, r0, c7, c10, 4 (v6) equiv to DSB (v7).  Data
-         Synch Barrier -- ensures completion of memory accesses. */
-      stmt( IRStmt_MBE(Imbe_Fence) );
-      DIP("mcr 15, 0, rX, c7, c10, 4 (data synch barrier)\n");
-      goto decode_success;
+   /* v6 */ /* mcr 15, 0, rT, c7, c10, 5 */
+   if (0xEE070FBA == (insn & 0xFFFF0FFF)) {
+      UInt rT = INSN(15,12);
+      if (rT <= 14) {
+         /* mcr 15, 0, rT, c7, c10, 5 (v6) equiv to DMB (v7).  Data
+            Memory Barrier -- ensures ordering of memory accesses. */
+         stmt( IRStmt_MBE(Imbe_Fence) );
+         DIP("mcr 15, 0, r%u, c7, c10, 5 (data memory barrier)\n", rT);
+         goto decode_success;
+      }
+      /* fall through */
    }
-   if (0xEE070FBA == (insn & 0xFFFF0FFF)) { /* v6 */
-      /* mcr 15, 0, r0, c7, c10, 5 (v6) equiv to DMB (v7).  Data
-         Memory Barrier -- ensures ordering of memory accesses. */
-      stmt( IRStmt_MBE(Imbe_Fence) );
-      DIP("mcr 15, 0, rX, c7, c10, 5 (data memory barrier)\n");
-      goto decode_success;
-   }
-   if (0xEE070F95 == (insn & 0xFFFF0FFF)) { /* v6 */
-      /* mcr 15, 0, r0, c7, c5, 4 (v6) equiv to ISB (v7).
-         Instruction Synchronisation Barrier (or Flush Prefetch
-         Buffer) -- a pipe flush, I think.  I suspect we could
-         ignore those, but to be on the safe side emit a fence
-         anyway. */
-      stmt( IRStmt_MBE(Imbe_Fence) );
-      DIP("mcr 15, 0, rX, c7, c5, 4 (insn synch barrier)\n");
-      goto decode_success;
+   /* other flavours of barrier */
+   switch (insn) {
+      case 0xEE070F9A: /* v6 */
+         /* mcr 15, 0, r0, c7, c10, 4 (v6) equiv to DSB (v7).  Data
+            Synch Barrier -- ensures completion of memory accesses. */
+         stmt( IRStmt_MBE(Imbe_Fence) );
+         DIP("mcr 15, 0, r0, c7, c10, 4 (data synch barrier)\n");
+         goto decode_success;
+      case 0xEE070F95: /* v6 */
+         /* mcr 15, 0, r0, c7, c5, 4 (v6) equiv to ISB (v7).
+            Instruction Synchronisation Barrier (or Flush Prefetch
+            Buffer) -- a pipe flush, I think.  I suspect we could
+            ignore those, but to be on the safe side emit a fence
+            anyway. */
+         stmt( IRStmt_MBE(Imbe_Fence) );
+         DIP("mcr 15, 0, r0, c7, c5, 4 (insn synch barrier)\n");
+         goto decode_success;
+      default:
+         break;
    }
 
    /* ----------------------------------------------------------- */
@@ -14134,10 +14660,9 @@ DisResult disInstr_ARM_WRK (
       now. */
    vassert(0 == (guest_R15_curr_instr_notENC & 3));
    llPutIReg( 15, mkU32(guest_R15_curr_instr_notENC) );
-   irsb->next     = mkU32(guest_R15_curr_instr_notENC);
-   irsb->jumpkind = Ijk_NoDecode;
-   dres.whatNext  = Dis_StopHere;
-   dres.len       = 0;
+   dres.whatNext    = Dis_StopHere;
+   dres.jk_StopHere = Ijk_NoDecode;
+   dres.len         = 0;
    return dres;
 
   decode_success:
@@ -14178,12 +14703,31 @@ DisResult disInstr_ARM_WRK (
                        binop(Iop_Xor32,
                              mkexpr(r15guard), mkU32(1))),
                   r15kind,
-                  IRConst_U32(guest_R15_curr_instr_notENC + 4)
+                  IRConst_U32(guest_R15_curr_instr_notENC + 4),
+                  OFFB_R15T
          ));
       }
-      irsb->next     = llGetIReg(15);
-      irsb->jumpkind = r15kind;
-      dres.whatNext  = Dis_StopHere;
+      /* This seems crazy, but we're required to finish the insn with
+         a write to the guest PC.  As usual we rely on ir_opt to tidy
+         up later. */
+      llPutIReg(15, llGetIReg(15));
+      dres.whatNext    = Dis_StopHere;
+      dres.jk_StopHere = r15kind;
+   } else {
+      /* Set up the end-state in the normal way. */
+      switch (dres.whatNext) {
+         case Dis_Continue:
+            llPutIReg(15, mkU32(dres.len + guest_R15_curr_instr_notENC));
+            break;
+         case Dis_ResteerU:
+         case Dis_ResteerC:
+            llPutIReg(15, mkU32(dres.continueAt));
+            break;
+         case Dis_StopHere:
+            break;
+         default:
+            vassert(0);
+      }
    }
 
    return dres;
@@ -14211,7 +14755,6 @@ static const UChar it_length_table[256]; /* fwds */
 
 static   
 DisResult disInstr_THUMB_WRK (
-             Bool         put_IP,
              Bool         (*resteerOkFn) ( /*opaque*/void*, Addr64 ),
              Bool         resteerCisOk,
              void*        callback_opaque,
@@ -14227,7 +14770,8 @@ DisResult disInstr_THUMB_WRK (
 #  define INSN0(_bMax,_bMin)  SLICE_UInt(((UInt)insn0), (_bMax), (_bMin))
 
    DisResult dres;
-   UShort    insn0; /* first 16 bits of the insn */
+   UShort    insn0; /*  first 16 bits of the insn */
+   UShort    insn1; /* second 16 bits of the insn */
    //Bool      allow_VFP = False;
    //UInt      hwcaps = archinfo->hwcaps;
    HChar     dis_buf[128];  // big enough to hold LDMIA etc text
@@ -14241,9 +14785,10 @@ DisResult disInstr_THUMB_WRK (
    // etc etc
 
    /* Set result defaults. */
-   dres.whatNext   = Dis_Continue;
-   dres.len        = 2;
-   dres.continueAt = 0;
+   dres.whatNext    = Dis_Continue;
+   dres.len         = 2;
+   dres.continueAt  = 0;
+   dres.jk_StopHere = Ijk_INVALID;
 
    /* Set default actions for post-insn handling of writes to r15, if
       required. */
@@ -14257,16 +14802,16 @@ DisResult disInstr_THUMB_WRK (
       unlikely, but ..) if the second 16 bits aren't actually
       necessary. */
    insn0 = getUShortLittleEndianly( guest_instr );
+   insn1 = 0; /* We'll get it later, once we know we need it. */
+
+   /* Similarly, will set this later. */
+   IRTemp old_itstate = IRTemp_INVALID;
 
    if (0) vex_printf("insn: 0x%x\n", insn0);
 
    DIP("\t(thumb) 0x%x:  ", (UInt)guest_R15_curr_instr_notENC);
 
-   /* We may be asked to update the guest R15 before going further. */
    vassert(0 == (guest_R15_curr_instr_notENC & 1));
-   if (put_IP) {
-      llPutIReg( 15, mkU32(guest_R15_curr_instr_notENC | 1) );
-   }
 
    /* ----------------------------------------------------------- */
    /* Spot "Special" instructions (see comment at top of file). */
@@ -14293,9 +14838,9 @@ DisResult disInstr_THUMB_WRK (
                                                /* orr.w r10,r10,r10 */) {
             /* R3 = client_request ( R4 ) */
             DIP("r3 = client_request ( %%r4 )\n");
-            irsb->next     = mkU32( (guest_R15_curr_instr_notENC + 20) | 1 );
-            irsb->jumpkind = Ijk_ClientReq;
-            dres.whatNext  = Dis_StopHere;
+            llPutIReg(15, mkU32( (guest_R15_curr_instr_notENC + 20) | 1 ));
+            dres.jk_StopHere = Ijk_ClientReq;
+            dres.whatNext    = Dis_StopHere;
             goto decode_success;
          }
          else
@@ -14315,9 +14860,9 @@ DisResult disInstr_THUMB_WRK (
             /*  branch-and-link-to-noredir R4 */
             DIP("branch-and-link-to-noredir r4\n");
             llPutIReg(14, mkU32( (guest_R15_curr_instr_notENC + 20) | 1 ));
-            irsb->next     = getIRegT(4);
-            irsb->jumpkind = Ijk_NoRedir;
-            dres.whatNext  = Dis_StopHere;
+            llPutIReg(15, getIRegT(4));
+            dres.jk_StopHere = Ijk_NoRedir;
+            dres.whatNext    = Dis_StopHere;
             goto decode_success;
          }
          /* We don't know what it is.  Set insn0 so decode_failure
@@ -14440,9 +14985,10 @@ DisResult disInstr_THUMB_WRK (
       that through the full preamble (which completely disappears). */
 
    IRTemp condT              = IRTemp_INVALID;
-   IRTemp old_itstate        = IRTemp_INVALID;
-   IRTemp new_itstate        = IRTemp_INVALID;
    IRTemp cond_AND_notInIT_T = IRTemp_INVALID;
+
+   IRTemp new_itstate        = IRTemp_INVALID;
+   vassert(old_itstate == IRTemp_INVALID);
 
    if (guaranteedUnconditional) {
       /* BEGIN "partial eval { ITSTATE = 0; STANDARD_PREAMBLE; }" */
@@ -14974,9 +15520,9 @@ DisResult disInstr_THUMB_WRK (
             vassert(rM == 15);
             assign( dst, mkU32(guest_R15_curr_instr_notENC + 4) );
          }
-         irsb->next     = mkexpr(dst);
-         irsb->jumpkind = rM == 14 ? Ijk_Ret : Ijk_Boring;
-         dres.whatNext  = Dis_StopHere;
+         llPutIReg(15, mkexpr(dst));
+         dres.jk_StopHere = rM == 14 ? Ijk_Ret : Ijk_Boring;
+         dres.whatNext    = Dis_StopHere;
          DIP("bx r%u (possibly switch to ARM mode)\n", rM);
          goto decode_success;
       }
@@ -14998,9 +15544,9 @@ DisResult disInstr_THUMB_WRK (
             assign( dst, getIRegT(rM) );
             putIRegT( 14, mkU32( (guest_R15_curr_instr_notENC + 2) | 1 ),
                           IRTemp_INVALID );
-            irsb->next     = mkexpr(dst);
-            irsb->jumpkind = Ijk_Call;
-            dres.whatNext  = Dis_StopHere;
+            llPutIReg(15, mkexpr(dst));
+            dres.jk_StopHere = Ijk_Call;
+            dres.whatNext    = Dis_StopHere;
             DIP("blx r%u (possibly switch to ARM mode)\n", rM);
             goto decode_success;
          }
@@ -15031,9 +15577,9 @@ DisResult disInstr_THUMB_WRK (
          // stash pseudo-reg, and back up from that if we have to
          // restart.
          // uncond after here
-         irsb->next     = mkU32( (guest_R15_curr_instr_notENC + 2) | 1 );
-         irsb->jumpkind = Ijk_Sys_syscall;
-         dres.whatNext  = Dis_StopHere;
+         llPutIReg(15, mkU32( (guest_R15_curr_instr_notENC + 2) | 1 ));
+         dres.jk_StopHere = Ijk_Sys_syscall;
+         dres.whatNext    = Dis_StopHere;
          DIP("svc #0x%08x\n", imm8);
          goto decode_success;
       }
@@ -15113,9 +15659,9 @@ DisResult disInstr_THUMB_WRK (
             condT = IRTemp_INVALID;
             // now uncond
             /* non-interworking branch */
-            irsb->next = binop(Iop_Or32, mkexpr(val), mkU32(1));
-            irsb->jumpkind = rM == 14 ? Ijk_Ret : Ijk_Boring;
-            dres.whatNext = Dis_StopHere;
+            llPutIReg(15, binop(Iop_Or32, mkexpr(val), mkU32(1)));
+            dres.jk_StopHere = rM == 14 ? Ijk_Ret : Ijk_Boring;
+            dres.whatNext    = Dis_StopHere;
          }
          DIP("mov r%u, r%u\n", rD, rM);
          goto decode_success;
@@ -15170,7 +15716,8 @@ DisResult disInstr_THUMB_WRK (
       UInt dst = (guest_R15_curr_instr_notENC + 4 + imm32) | 1;
       stmt(IRStmt_Exit( mkexpr(kond),
                         Ijk_Boring,
-                        IRConst_U32(toUInt(dst)) ));
+                        IRConst_U32(toUInt(dst)),
+                        OFFB_R15T ));
       DIP("cb%s r%u, 0x%x\n", bOP ? "nz" : "z", rN, dst - 1);
       goto decode_success;
    }
@@ -15198,6 +15745,8 @@ DisResult disInstr_THUMB_WRK (
       UInt regList = INSN0(7,0);
       if (bitR) regList |= (1 << 14);
    
+      /* At least one register must be transferred, else result is
+         UNPREDICTABLE. */
       if (regList != 0) {
          /* Since we can't generate a guaranteed non-trapping IR
             sequence, (1) jump over the insn if it is gated false, and
@@ -15212,7 +15761,7 @@ DisResult disInstr_THUMB_WRK (
             if ((regList & (1 << i)) != 0)
                nRegs++;
          }
-         vassert(nRegs >= 1 && nRegs <= 8);
+         vassert(nRegs >= 1 && nRegs <= 9);
 
          /* Move SP down first of all, so we're "covered".  And don't
             mess with its alignment. */
@@ -15250,6 +15799,8 @@ DisResult disInstr_THUMB_WRK (
       UInt bitR    = INSN0(8,8);
       UInt regList = INSN0(7,0);
    
+      /* At least one register must be transferred, else result is
+         UNPREDICTABLE. */
       if (regList != 0 || bitR) {
          /* Since we can't generate a guaranteed non-trapping IR
             sequence, (1) jump over the insn if it is gated false, and
@@ -15264,7 +15815,7 @@ DisResult disInstr_THUMB_WRK (
             if ((regList & (1 << i)) != 0)
                nRegs++;
          }
-         vassert(nRegs >= 0 && nRegs <= 7);
+         vassert(nRegs >= 0 && nRegs <= 8);
          vassert(bitR == 0 || bitR == 1);
 
          IRTemp oldSP = newTemp(Ity_I32);
@@ -15314,9 +15865,9 @@ DisResult disInstr_THUMB_WRK (
             it as is, no need to mess with it.  Note, therefore, this
             is an interworking return. */
          if (bitR) {
-            irsb->next     = mkexpr(newPC);
-            irsb->jumpkind = Ijk_Ret;
-            dres.whatNext  = Dis_StopHere;
+            llPutIReg(15, mkexpr(newPC));
+            dres.jk_StopHere = Ijk_Ret;
+            dres.whatNext    = Dis_StopHere;
          }
 
          DIP("pop {%s0x%04x}\n", bitR ? "pc," : "", regList & 0xFF);
@@ -15861,9 +16412,9 @@ DisResult disInstr_THUMB_WRK (
       mk_skip_over_T16_if_cond_is_false(condT);
       condT = IRTemp_INVALID;
       // now uncond
-      irsb->next     = mkU32( dst | 1 /*CPSR.T*/ );
-      irsb->jumpkind = Ijk_Boring;
-      dres.whatNext  = Dis_StopHere;
+      llPutIReg(15, mkU32( dst | 1 /*CPSR.T*/ ));
+      dres.jk_StopHere = Ijk_Boring;
+      dres.whatNext    = Dis_StopHere;
       DIP("b 0x%x\n", dst);
       goto decode_success;
    }
@@ -15892,11 +16443,12 @@ DisResult disInstr_THUMB_WRK (
          assign( kondT, mk_armg_calculate_condition(cond) );
          stmt( IRStmt_Exit( unop(Iop_32to1, mkexpr(kondT)),
                             Ijk_Boring,
-                            IRConst_U32(dst | 1/*CPSR.T*/) ));
-         irsb->next = mkU32( (guest_R15_curr_instr_notENC + 2) 
-                             | 1 /*CPSR.T*/ );
-         irsb->jumpkind = Ijk_Boring;
-         dres.whatNext  = Dis_StopHere;
+                            IRConst_U32(dst | 1/*CPSR.T*/),
+                            OFFB_R15T ));
+         llPutIReg(15, mkU32( (guest_R15_curr_instr_notENC + 2) 
+                              | 1 /*CPSR.T*/ ));
+         dres.jk_StopHere = Ijk_Boring;
+         dres.whatNext    = Dis_StopHere;
          DIP("b%s 0x%x\n", nCC(cond), dst);
          goto decode_success;
       }
@@ -15925,7 +16477,8 @@ DisResult disInstr_THUMB_WRK (
 #  define INSN1(_bMax,_bMin)  SLICE_UInt(((UInt)insn1), (_bMax), (_bMin))
 
    /* second 16 bits of the instruction, if any */
-   UShort insn1 = getUShortLittleEndianly( guest_instr+2 );
+   vassert(insn1 == 0);
+   insn1 = getUShortLittleEndianly( guest_instr+2 );
 
    anOp   = Iop_INVALID; /* paranoia */
    anOpNm = NULL;        /* paranoia */
@@ -15935,29 +16488,6 @@ DisResult disInstr_THUMB_WRK (
    vassert(dres.len        == 2);
    vassert(dres.continueAt == 0);
    dres.len = 4;
-
-   /* ------------------- (T1) SMMUL{R} ------------------ */
-   if (INSN0(15,7) == BITS9(1,1,1,1,1,0,1,1,0)
-       && INSN0(6,4) == BITS3(1,0,1)
-       && INSN1(15,12) == BITS4(1,1,1,1)
-       && INSN1(7,5) == BITS3(0,0,0)) {
-      UInt bitR = INSN1(4,4);
-      UInt rD = INSN1(11,8);
-      UInt rM = INSN1(3,0);
-      UInt rN = INSN0(3,0);
-      if (!isBadRegT(rD) && !isBadRegT(rN) && !isBadRegT(rM)) {
-        IRExpr* res = newTemp(Ity_I32);
-        assign(res, unop(Iop_64HIto32,
-                binop(Iop_Add64,
-                      binop(Iop_MullS32, getIRegT(rN), getIRegT(rM)),
-                    mkU64(bitR ? 0x80000000ULL : 0ULL))));
-         putIRegT(rD, mkexpr(res), condT);
-         DIP("smmul%s r%u, r%u, r%u\n",
-             bitR ? "r" : "", rD, rN, rM);
-         goto decode_success;
-      }
-   }
-
 
    /* ---------------- BL/BLX simm26 ---------------- */
    if (BITS5(1,1,1,1,0) == INSN0(15,11) && BITS2(1,1) == INSN1(15,14)) {
@@ -15997,17 +16527,17 @@ DisResult disInstr_THUMB_WRK (
          if (isBL) {
             /* BL: unconditional T -> T call */
             /* we're calling Thumb code, hence "| 1" */
-            irsb->next = mkU32( dst | 1 );
+            llPutIReg(15, mkU32( dst | 1 ));
             DIP("bl 0x%x (stay in Thumb mode)\n", dst);
          } else {
             /* BLX: unconditional T -> A call */
             /* we're calling ARM code, hence "& 3" to align to a
                valid ARM insn address */
-            irsb->next = mkU32( dst & ~3 );
+            llPutIReg(15, mkU32( dst & ~3 ));
             DIP("blx 0x%x (switch to ARM mode)\n", dst & ~3);
          }
-         irsb->jumpkind = Ijk_Call;
-         dres.whatNext = Dis_StopHere;
+         dres.whatNext    = Dis_StopHere;
+         dres.jk_StopHere = Ijk_Call;
          goto decode_success;
       }
    }
@@ -16049,15 +16579,6 @@ DisResult disInstr_THUMB_WRK (
          if (rN == 15)                       valid = False;
          if (popcount32(regList) < 2)        valid = False;
          if (bW == 1 && (regList & (1<<rN))) valid = False;
-         if (regList & (1<<rN)) {
-            UInt i;
-            /* if Rn is in the list, then it must be the
-               lowest numbered entry */
-            for (i = 0; i < rN; i++) {
-               if (regList & (1<<i))
-                  valid = False;
-            }
-         }
       }
 
       if (valid) {
@@ -16072,15 +16593,15 @@ DisResult disInstr_THUMB_WRK (
          condT = IRTemp_INVALID;
          // now uncond
 
-         /* Generate the IR.  This might generate a write to R15, */
+         /* Generate the IR.  This might generate a write to R15. */
          mk_ldm_stm(False/*!arm*/, rN, bINC, bBEFORE, bW, bL, regList);
 
          if (bL == 1 && (regList & (1<<15))) {
             // If we wrote to R15, we have an interworking return to
             // deal with.
-            irsb->next     = llGetIReg(15);
-            irsb->jumpkind = Ijk_Ret;
-            dres.whatNext  = Dis_StopHere;
+            llPutIReg(15, llGetIReg(15));
+            dres.jk_StopHere = Ijk_Ret;
+            dres.whatNext    = Dis_StopHere;
          }
 
          DIP("%sm%c%c r%u%s, {0x%04x}\n",
@@ -16099,8 +16620,8 @@ DisResult disInstr_THUMB_WRK (
       UInt rN = INSN0(3,0);
       UInt rD = INSN1(11,8);
       Bool valid = !isBadRegT(rN) && !isBadRegT(rD);
-      /* but allow "add.w reg, sp, #constT" */ 
-      if (!valid && rN == 13 && rD != 15)
+      /* but allow "add.w reg, sp, #constT" for reg != PC */ 
+      if (!valid && rD <= 14 && rN == 13)
          valid = True;
       if (valid) {
          IRTemp argL  = newTemp(Ity_I32);
@@ -16126,8 +16647,8 @@ DisResult disInstr_THUMB_WRK (
       UInt rN = INSN0(3,0);
       UInt rD = INSN1(11,8);
       Bool valid = !isBadRegT(rN) && !isBadRegT(rD);
-      /* but allow "addw sp, sp, #uimm12" */
-      if (!valid && rD == 13 && rN == 13)
+      /* but allow "addw reg, sp, #uimm12" for reg != PC */
+      if (!valid && rD <= 14 && rN == 13)
          valid = True;
       if (valid) {
          IRTemp argL = newTemp(Ity_I32);
@@ -16380,10 +16901,10 @@ DisResult disInstr_THUMB_WRK (
       UInt how  = INSN1(5,4);
 
       Bool valid = !isBadRegT(rD) && !isBadRegT(rN) && !isBadRegT(rM);
-      /* but allow "add.w reg, sp, reg   w/ no shift
+      /* but allow "add.w reg, sp, reg, lsl #N for N=0,1,2 or 3
          (T3) "ADD (SP plus register) */
       if (!valid && INSN0(8,5) == BITS4(1,0,0,0) // add
-          && rD != 15 && rN == 13 && imm5 == 0 && how == 0) {
+          && rD != 15 && rN == 13 && imm5 <= 3 && how == 0) {
          valid = True;
       }
       /* also allow "sub.w reg, sp, reg   w/ no shift
@@ -16945,17 +17466,18 @@ DisResult disInstr_THUMB_WRK (
                putIRegT(rT, mkexpr(newRt), IRTemp_INVALID);
             }
 
-            if (loadsPC) {
-               /* Presumably this is an interworking branch. */
-               irsb->next = mkexpr(newRt);
-               irsb->jumpkind = Ijk_Boring;  /* or _Ret ? */
-               dres.whatNext  = Dis_StopHere;
-            }
-
             /* Update Rn if necessary. */
             if (bW == 1) {
                vassert(rN != rT); // assured by validity check above
                putIRegT(rN, mkexpr(postAddr), IRTemp_INVALID);
+            }
+
+            if (loadsPC) {
+               /* Presumably this is an interworking branch. */
+               vassert(rN != 15); // assured by validity check above
+               llPutIReg(15, mkexpr(newRt));
+               dres.jk_StopHere = Ijk_Boring;  /* or _Ret ? */
+               dres.whatNext    = Dis_StopHere;
             }
          }
 
@@ -17102,9 +17624,9 @@ DisResult disInstr_THUMB_WRK (
 
             if (loadsPC) {
                /* Presumably this is an interworking branch. */
-               irsb->next = mkexpr(newRt);
-               irsb->jumpkind = Ijk_Boring;  /* or _Ret ? */
-               dres.whatNext  = Dis_StopHere;
+               llPutIReg(15, mkexpr(newRt));
+               dres.jk_StopHere = Ijk_Boring;  /* or _Ret ? */
+               dres.whatNext    = Dis_StopHere;
             }
          }
 
@@ -17360,11 +17882,12 @@ DisResult disInstr_THUMB_WRK (
          assign( kondT, mk_armg_calculate_condition(cond) );
          stmt( IRStmt_Exit( unop(Iop_32to1, mkexpr(kondT)),
                             Ijk_Boring,
-                            IRConst_U32(dst | 1/*CPSR.T*/) ));
-         irsb->next = mkU32( (guest_R15_curr_instr_notENC + 4) 
-                             | 1 /*CPSR.T*/ );
-         irsb->jumpkind = Ijk_Boring;
-         dres.whatNext  = Dis_StopHere;
+                            IRConst_U32(dst | 1/*CPSR.T*/),
+                            OFFB_R15T ));
+         llPutIReg(15, mkU32( (guest_R15_curr_instr_notENC + 4) 
+                              | 1 /*CPSR.T*/ ));
+         dres.jk_StopHere = Ijk_Boring;
+         dres.whatNext    = Dis_StopHere;
          DIP("b%s.w 0x%x\n", nCC(cond), dst);
          goto decode_success;
       }
@@ -17405,9 +17928,9 @@ DisResult disInstr_THUMB_WRK (
          // now uncond
 
          // branch to dst
-         irsb->next = mkU32( dst | 1 /*CPSR.T*/ );
-         irsb->jumpkind = Ijk_Boring;
-         dres.whatNext  = Dis_StopHere;
+         llPutIReg(15, mkU32( dst | 1 /*CPSR.T*/ ));
+         dres.jk_StopHere = Ijk_Boring;
+         dres.whatNext    = Dis_StopHere;
          DIP("b.w 0x%x\n", dst);
          goto decode_success;
       }
@@ -17438,16 +17961,17 @@ DisResult disInstr_THUMB_WRK (
             assign(delta, unop(Iop_8Uto32, loadLE(Ity_I8, ea)));
          }
 
-         irsb->next
-            = binop(Iop_Or32,
-                    binop(Iop_Add32,
-                          getIRegT(15),
-                          binop(Iop_Shl32, mkexpr(delta), mkU8(1))
-                    ),
-                    mkU32(1)
-              );
-         irsb->jumpkind = Ijk_Boring;
-         dres.whatNext = Dis_StopHere;
+         llPutIReg(
+            15,
+            binop(Iop_Or32,
+                  binop(Iop_Add32,
+                        getIRegT(15),
+                        binop(Iop_Shl32, mkexpr(delta), mkU8(1))
+                  ),
+                  mkU32(1)
+         ));
+         dres.jk_StopHere = Ijk_Boring;
+         dres.whatNext    = Dis_StopHere;
          DIP("tb%c [r%u, r%u%s]\n",
              bH ? 'h' : 'b', rN, rM, bH ? ", LSL #1" : "");
          goto decode_success;
@@ -18151,6 +18675,28 @@ DisResult disInstr_THUMB_WRK (
       goto decode_success;
    }
 
+   /* ------------------- (T1) SMMUL{R} ------------------ */
+   if (INSN0(15,7) == BITS9(1,1,1,1,1,0,1,1,0)
+       && INSN0(6,4) == BITS3(1,0,1)
+       && INSN1(15,12) == BITS4(1,1,1,1)
+       && INSN1(7,5) == BITS3(0,0,0)) {
+      UInt bitR = INSN1(4,4);
+      UInt rD = INSN1(11,8);
+      UInt rM = INSN1(3,0);
+      UInt rN = INSN0(3,0);
+      if (!isBadRegT(rD) && !isBadRegT(rN) && !isBadRegT(rM)) {
+         IRExpr* res
+         = unop(Iop_64HIto32,
+                binop(Iop_Add64,
+                      binop(Iop_MullS32, getIRegT(rN), getIRegT(rM)),
+                      mkU64(bitR ? 0x80000000ULL : 0ULL)));
+         putIRegT(rD, res, condT);
+         DIP("smmul%s r%u, r%u, r%u\n",
+             bitR ? "r" : "", rD, rN, rM);
+         goto decode_success;
+      }
+   }
+
    /* ----------------------------------------------------------- */
    /* -- VFP (CP 10, CP 11) instructions (in Thumb mode)       -- */
    /* ----------------------------------------------------------- */
@@ -18206,7 +18752,9 @@ DisResult disInstr_THUMB_WRK (
    /* Back up ITSTATE to the initial value for this instruction.
       If we don't do that, any subsequent restart of the instruction
       will restart with the wrong value. */
-   put_ITSTATE(old_itstate);
+   if (old_itstate != IRTemp_INVALID)
+      put_ITSTATE(old_itstate);
+
    /* Tell the dispatcher that this insn cannot be decoded, and so has
       not been executed, and (is currently) the next to be executed.
       R15 should be up-to-date since it made so at the start of each
@@ -18214,60 +18762,29 @@ DisResult disInstr_THUMB_WRK (
       now. */
    vassert(0 == (guest_R15_curr_instr_notENC & 1));
    llPutIReg( 15, mkU32(guest_R15_curr_instr_notENC | 1) );
-   irsb->next     = mkU32(guest_R15_curr_instr_notENC | 1 /* CPSR.T */);
-   irsb->jumpkind = Ijk_NoDecode;
-   dres.whatNext  = Dis_StopHere;
-   dres.len       = 0;
+   dres.whatNext    = Dis_StopHere;
+   dres.jk_StopHere = Ijk_NoDecode;
+   dres.len         = 0;
    return dres;
 
   decode_success:
    /* All decode successes end up here. */
-   DIP("\n");
-
-   vassert(dres.len == 2 || dres.len == 4 || dres.len == 20);
-
-#if 0
-   // XXX is this necessary on Thumb?
-   /* Now then.  Do we have an implicit jump to r15 to deal with? */
-   if (r15written) {
-      /* If we get jump to deal with, we assume that there's been no
-         other competing branch stuff previously generated for this
-         insn.  That's reasonable, in the sense that the ARM insn set
-         appears to declare as "Unpredictable" any instruction which
-         generates more than one possible new value for r15.  Hence
-         just assert.  The decoders themselves should check against
-         all such instructions which are thusly Unpredictable, and
-         decline to decode them.  Hence we should never get here if we
-         have competing new values for r15, and hence it is safe to
-         assert here. */
-      vassert(dres.whatNext == Dis_Continue);
-      vassert(irsb->next == NULL);
-      vassert(irsb->jumpkind == Ijk_Boring);
-      /* If r15 is unconditionally written, terminate the block by
-         jumping to it.  If it's conditionally written, still
-         terminate the block (a shame, but we can't do side exits to
-         arbitrary destinations), but first jump to the next
-         instruction if the condition doesn't hold. */
-      /* We can't use getIRegT(15) to get the destination, since that
-         will produce r15+4, which isn't what we want.  Must use
-         llGetIReg(15) instead. */
-      if (r15guard == IRTemp_INVALID) {
-         /* unconditional */
-      } else {
-         /* conditional */
-         stmt( IRStmt_Exit(
-                  unop(Iop_32to1,
-                       binop(Iop_Xor32,
-                             mkexpr(r15guard), mkU32(1))),
-                  r15kind,
-                  IRConst_U32(guest_R15_curr_instr_notENC + 4)
-         ));
-      }
-      irsb->next     = llGetIReg(15);
-      irsb->jumpkind = r15kind;
-      dres.whatNext  = Dis_StopHere;
+   vassert(dres.len == 4 || dres.len == 2 || dres.len == 20);
+   switch (dres.whatNext) {
+      case Dis_Continue:
+         llPutIReg(15, mkU32(dres.len + (guest_R15_curr_instr_notENC | 1)));
+         break;
+      case Dis_ResteerU:
+      case Dis_ResteerC:
+         llPutIReg(15, mkU32(dres.continueAt));
+         break;
+      case Dis_StopHere:
+         break;
+      default:
+         vassert(0);
    }
-#endif
+
+   DIP("\n");
 
    return dres;
 
@@ -18366,7 +18883,6 @@ static const UChar it_length_table[256]
    is located in host memory at &guest_code[delta]. */
 
 DisResult disInstr_ARM ( IRSB*        irsb_IN,
-                         Bool         put_IP,
                          Bool         (*resteerOkFn) ( void*, Addr64 ),
                          Bool         resteerCisOk,
                          void*        callback_opaque,
@@ -18395,12 +18911,12 @@ DisResult disInstr_ARM ( IRSB*        irsb_IN,
    }
 
    if (isThumb) {
-      dres = disInstr_THUMB_WRK ( put_IP, resteerOkFn,
+      dres = disInstr_THUMB_WRK ( resteerOkFn,
                                   resteerCisOk, callback_opaque,
                                   &guest_code_IN[delta_ENCODED - 1],
                                   archinfo, abiinfo );
    } else {
-      dres = disInstr_ARM_WRK ( put_IP, resteerOkFn,
+      dres = disInstr_ARM_WRK ( resteerOkFn,
                                 resteerCisOk, callback_opaque,
                                 &guest_code_IN[delta_ENCODED],
                                 archinfo, abiinfo );

@@ -7,7 +7,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2000-2011 Julian Seward 
+   Copyright (C) 2000-2012 Julian Seward 
       jseward@acm.org
 
    This program is free software; you can redistribute it and/or
@@ -62,6 +62,7 @@
 
 SysRes VG_(mk_SysRes_x86_linux) ( Int val ) {
    SysRes res;
+   res._valEx   = 0; /* unused except on mips-linux */
    res._isError = val >= -4095 && val <= -1;
    if (res._isError) {
       res._val = (UInt)(-val);
@@ -74,6 +75,7 @@ SysRes VG_(mk_SysRes_x86_linux) ( Int val ) {
 /* Similarly .. */
 SysRes VG_(mk_SysRes_amd64_linux) ( Long val ) {
    SysRes res;
+   res._valEx   = 0; /* unused except on mips-linux */
    res._isError = val >= -4095 && val <= -1;
    if (res._isError) {
       res._val = (ULong)(-val);
@@ -87,6 +89,7 @@ SysRes VG_(mk_SysRes_amd64_linux) ( Long val ) {
 /* Note this must be in the bottom bit of the second arg */
 SysRes VG_(mk_SysRes_ppc32_linux) ( UInt val, UInt cr0so ) {
    SysRes res;
+   res._valEx   = 0; /* unused except on mips-linux */
    res._isError = (cr0so & 1) != 0;
    res._val     = val;
    return res;
@@ -95,6 +98,7 @@ SysRes VG_(mk_SysRes_ppc32_linux) ( UInt val, UInt cr0so ) {
 /* As per ppc32 version, cr0.so must be in l.s.b. of 2nd arg */
 SysRes VG_(mk_SysRes_ppc64_linux) ( ULong val, ULong cr0so ) {
    SysRes res;
+   res._valEx   = 0; /* unused except on mips-linux */
    res._isError = (cr0so & 1) != 0;
    res._val     = val;
    return res;
@@ -102,6 +106,7 @@ SysRes VG_(mk_SysRes_ppc64_linux) ( ULong val, ULong cr0so ) {
 
 SysRes VG_(mk_SysRes_s390x_linux) ( Long val ) {
    SysRes res;
+   res._valEx   = 0; /* unused except on mips-linux */
    res._isError = val >= -4095 && val <= -1;
    if (res._isError) {
       res._val = -val;
@@ -113,6 +118,7 @@ SysRes VG_(mk_SysRes_s390x_linux) ( Long val ) {
 
 SysRes VG_(mk_SysRes_arm_linux) ( Int val ) {
    SysRes res;
+   res._valEx   = 0; /* unused except on mips-linux */
    res._isError = val >= -4095 && val <= -1;
    if (res._isError) {
       res._val = (UInt)(-val);
@@ -122,9 +128,19 @@ SysRes VG_(mk_SysRes_arm_linux) ( Int val ) {
    return res;
 }
 
+/* MIPS uses a3 != 0 to flag an error */
+SysRes VG_(mk_SysRes_mips32_linux) ( UWord v0, UWord v1, UWord a3 ) {
+   SysRes res;
+   res._isError = (a3 != (UWord)0);
+   res._val     = v0;
+   res._valEx   = v1;
+   return res;
+}
+
 /* Generic constructors. */
 SysRes VG_(mk_SysRes_Error) ( UWord err ) {
    SysRes r;
+   r._valEx   = 0; /* unused except on mips-linux */
    r._isError = True;
    r._val     = err;
    return r;
@@ -132,6 +148,7 @@ SysRes VG_(mk_SysRes_Error) ( UWord err ) {
 
 SysRes VG_(mk_SysRes_Success) ( UWord res ) {
    SysRes r;
+   r._valEx   = 0; /* unused except on mips-linux */
    r._isError = False;
    r._val     = res;
    return r;
@@ -255,6 +272,7 @@ extern UWord do_syscall_WRK (
        );
 asm(
 ".text\n"
+".globl do_syscall_WRK\n"
 "do_syscall_WRK:\n"
 "	push	%esi\n"
 "	push	%edi\n"
@@ -296,6 +314,7 @@ extern UWord do_syscall_WRK (
        );
 asm(
 ".text\n"
+".globl do_syscall_WRK\n"
 "do_syscall_WRK:\n"
         /* Convert function calling convention --> syscall calling
            convention */
@@ -330,6 +349,7 @@ extern ULong do_syscall_WRK (
        );
 asm(
 ".text\n"
+".globl do_syscall_WRK\n"
 "do_syscall_WRK:\n"
 "        mr      0,3\n"
 "        mr      3,4\n"
@@ -396,6 +416,7 @@ extern UWord do_syscall_WRK (
        );
 asm(
 ".text\n"
+".globl do_syscall_WRK\n"
 "do_syscall_WRK:\n"
 "         push    {r4, r5, r7}\n"
 "         ldr     r4, [sp, #12]\n"
@@ -571,6 +592,40 @@ static UWord do_syscall_WRK (
    return (UWord) (__svcres);
 }
 
+#elif defined(VGP_mips32_linux)
+/* Incoming args (syscall number + up to 6 args) come in a0 - a3 and stack.
+
+   The syscall number goes in v0.  The args are passed to the syscall in
+   the regs a0 - a3 and stack, i.e. the kernel's syscall calling convention.
+
+   (a3 != 0) flags an error.
+   We return the syscall return value in v0.
+   MIPS version
+*/
+extern int do_syscall_WRK (
+          int a1, int a2, int a3,
+          int a4, int a5, int a6, int syscall_no, UWord *err,
+          UWord *valHi, UWord* valLo
+       );
+asm(
+".globl do_syscall_WRK\n"
+".ent do_syscall_WRK\n"
+".text\n"
+"do_syscall_WRK:\n"   
+"   lw $2, 24($29)\n"    
+"   syscall\n"
+"   lw $8, 28($29)\n" 
+"   sw $7, ($8)\n"
+"   lw $8, 32($29)\n" 
+"   sw $3, ($8)\n"   // store valHi
+"   lw $8, 36($29)\n" 
+"   sw $2, ($8)\n"   // store valLo
+"   jr $31\n"
+"   nop\n"
+".previous\n"
+".end do_syscall_WRK\n"
+);
+
 #else
 #  error Unknown platform
 #endif
@@ -678,6 +733,13 @@ SysRes VG_(do_syscall) ( UWord sysno, UWord a1, UWord a2, UWord a3,
    }
 
    return VG_(mk_SysRes_s390x_linux)( val );
+
+#elif defined(VGP_mips32_linux)
+   UWord err   = 0;
+   UWord valHi = 0;
+   UWord valLo = 0;
+   (void) do_syscall_WRK(a1,a2,a3,a4,a5,a6, sysno,&err,&valHi,&valLo);
+   return VG_(mk_SysRes_mips32_linux)( valLo, valHi, (ULong)err );
 #else
 #  error Unknown platform
 #endif
@@ -695,28 +757,51 @@ SysRes VG_(do_syscall) ( UWord sysno, UWord a1, UWord a2, UWord a3,
 const HChar* VG_(strerror) ( UWord errnum )
 {
    switch (errnum) {
-      case VKI_EPERM:       return "Operation not permitted";
-      case VKI_ENOENT:      return "No such file or directory";
-      case VKI_ESRCH:       return "No such process";
-      case VKI_EINTR:       return "Interrupted system call";
-      case VKI_EBADF:       return "Bad file number";
-      case VKI_EAGAIN:      return "Try again";
-      case VKI_ENOMEM:      return "Out of memory";
-      case VKI_EACCES:      return "Permission denied";
-      case VKI_EFAULT:      return "Bad address";
-      case VKI_EEXIST:      return "File exists";
-      case VKI_EINVAL:      return "Invalid argument";
-      case VKI_EMFILE:      return "Too many open files";
-      case VKI_ENOSYS:      return "Function not implemented";
-      case VKI_EOVERFLOW:   return "Value too large for defined data type";
+   case VKI_EPERM:       return "Operation not permitted";
+   case VKI_ENOENT:      return "No such file or directory";
+   case VKI_ESRCH:       return "No such process";
+   case VKI_EINTR:       return "Interrupted system call";
+   case VKI_EIO:         return "Input/output error";
+   case VKI_ENXIO:       return "No such device or address";
+   case VKI_E2BIG:       return "Argument list too long";
+   case VKI_ENOEXEC:     return "Exec format error";
+   case VKI_EBADF:       return "Bad file descriptor";
+   case VKI_ECHILD:      return "No child processes";
+   case VKI_EAGAIN:      return "Resource temporarily unavailable";
+   case VKI_ENOMEM:      return "Cannot allocate memory";
+   case VKI_EACCES:      return "Permission denied";
+   case VKI_EFAULT:      return "Bad address";
+   case VKI_ENOTBLK:     return "Block device required";
+   case VKI_EBUSY:       return "Device or resource busy";
+   case VKI_EEXIST:      return "File exists";
+   case VKI_EXDEV:       return "Invalid cross-device link";
+   case VKI_ENODEV:      return "No such device";
+   case VKI_ENOTDIR:     return "Not a directory";
+   case VKI_EISDIR:      return "Is a directory";
+   case VKI_EINVAL:      return "Invalid argument";
+   case VKI_ENFILE:      return "Too many open files in system";
+   case VKI_EMFILE:      return "Too many open files";
+   case VKI_ENOTTY:      return "Inappropriate ioctl for device";
+   case VKI_ETXTBSY:     return "Text file busy";
+   case VKI_EFBIG:       return "File too large";
+   case VKI_ENOSPC:      return "No space left on device";
+   case VKI_ESPIPE:      return "Illegal seek";
+   case VKI_EROFS:       return "Read-only file system";
+   case VKI_EMLINK:      return "Too many links";
+   case VKI_EPIPE:       return "Broken pipe";
+   case VKI_EDOM:        return "Numerical argument out of domain";
+   case VKI_ERANGE:      return "Numerical result out of range";
+
+   case VKI_ENOSYS:      return "Function not implemented";
+   case VKI_EOVERFLOW:   return "Value too large for defined data type";
 #     if defined(VKI_ERESTARTSYS)
       case VKI_ERESTARTSYS: return "ERESTARTSYS";
 #     endif
-      default:              return "VG_(strerror): unknown error";
+   default:              return "VG_(strerror): unknown error";
    }
 }
 
 
 /*--------------------------------------------------------------------*/
-/*--- end                                                        ---*/
+/*--- end                                                          ---*/
 /*--------------------------------------------------------------------*/

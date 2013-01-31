@@ -8,7 +8,7 @@
    This file is part of MemCheck, a heavyweight Valgrind tool for
    detecting memory errors.
 
-   Copyright (C) 2000-2011 Julian Seward 
+   Copyright (C) 2000-2012 Julian Seward 
       jseward@acm.org
 
    This program is free software; you can redistribute it and/or
@@ -31,6 +31,7 @@
 
 #include "pub_tool_basics.h"
 #include "pub_tool_gdbserver.h"
+#include "pub_tool_poolalloc.h"     // For mc_include.h
 #include "pub_tool_hashtable.h"     // For mc_include.h
 #include "pub_tool_libcbase.h"
 #include "pub_tool_libcassert.h"
@@ -43,8 +44,6 @@
 #include "pub_tool_threadstate.h"
 #include "pub_tool_debuginfo.h"     // VG_(get_dataname_and_offset)
 #include "pub_tool_xarray.h"
-#include "pub_tool_vki.h"
-#include "pub_tool_libcfile.h"
 
 #include "mc_include.h"
 
@@ -448,6 +447,95 @@ char * MC_(snprintf_delta) (char * buf, Int size,
    return buf;
 }
 
+static void pp_LossRecord(UInt n_this_record, UInt n_total_records,
+                          LossRecord* lr, Bool xml)
+{
+   // char arrays to produce the indication of increase/decrease in case
+   // of delta_mode != LCD_Any
+   char        d_bytes[20];
+   char        d_direct_bytes[20];
+   char        d_indirect_bytes[20];
+   char        d_num_blocks[20];
+
+   MC_(snprintf_delta) (d_bytes, 20, 
+                        lr->szB + lr->indirect_szB, 
+                        lr->old_szB + lr->old_indirect_szB,
+                        MC_(detect_memory_leaks_last_delta_mode));
+   MC_(snprintf_delta) (d_direct_bytes, 20,
+                        lr->szB,
+                        lr->old_szB,
+                        MC_(detect_memory_leaks_last_delta_mode));
+   MC_(snprintf_delta) (d_indirect_bytes, 20,
+                        lr->indirect_szB,
+                        lr->old_indirect_szB,
+                        MC_(detect_memory_leaks_last_delta_mode));
+   MC_(snprintf_delta) (d_num_blocks, 20,
+                        (SizeT) lr->num_blocks,
+                        (SizeT) lr->old_num_blocks,
+                        MC_(detect_memory_leaks_last_delta_mode));
+
+   if (xml) {
+      emit("  <kind>%s</kind>\n", xml_leak_kind(lr->key.state));
+      if (lr->indirect_szB > 0) {
+         emit( "  <xwhat>\n" );
+         emit( "    <text>%'lu%s (%'lu%s direct, %'lu%s indirect) bytes "
+               "in %'u%s blocks"
+               " are %s in loss record %'u of %'u</text>\n",
+               lr->szB + lr->indirect_szB, d_bytes,
+               lr->szB, d_direct_bytes,
+               lr->indirect_szB, d_indirect_bytes,
+               lr->num_blocks, d_num_blocks,
+               str_leak_lossmode(lr->key.state),
+               n_this_record, n_total_records );
+         // Nb: don't put commas in these XML numbers 
+         emit( "    <leakedbytes>%lu</leakedbytes>\n",
+               lr->szB + lr->indirect_szB );
+         emit( "    <leakedblocks>%u</leakedblocks>\n", lr->num_blocks );
+         emit( "  </xwhat>\n" );
+      } else {
+         emit( "  <xwhat>\n" );
+         emit( "    <text>%'lu%s bytes in %'u%s blocks"
+               " are %s in loss record %'u of %'u</text>\n",
+               lr->szB, d_direct_bytes,
+               lr->num_blocks, d_num_blocks,
+               str_leak_lossmode(lr->key.state), 
+               n_this_record, n_total_records );
+         emit( "    <leakedbytes>%ld</leakedbytes>\n", lr->szB);
+         emit( "    <leakedblocks>%d</leakedblocks>\n", lr->num_blocks);
+         emit( "  </xwhat>\n" );
+      }
+      VG_(pp_ExeContext)(lr->key.allocated_at);
+   } else { /* ! if (xml) */
+      if (lr->indirect_szB > 0) {
+         emit(
+            "%'lu%s (%'lu%s direct, %'lu%s indirect) bytes in %'u%s blocks"
+            " are %s in loss record %'u of %'u\n",
+            lr->szB + lr->indirect_szB, d_bytes,
+            lr->szB, d_direct_bytes,
+            lr->indirect_szB, d_indirect_bytes,
+            lr->num_blocks, d_num_blocks,
+            str_leak_lossmode(lr->key.state),
+            n_this_record, n_total_records
+         );
+      } else {
+         emit(
+            "%'lu%s bytes in %'u%s blocks are %s in loss record %'u of %'u\n",
+            lr->szB, d_direct_bytes,
+            lr->num_blocks, d_num_blocks,
+            str_leak_lossmode(lr->key.state),
+            n_this_record, n_total_records
+         );
+      }
+      VG_(pp_ExeContext)(lr->key.allocated_at);
+   } /* if (xml) */
+}
+
+void MC_(pp_LossRecord)(UInt n_this_record, UInt n_total_records,
+                        LossRecord* l)
+{
+   pp_LossRecord (n_this_record, n_total_records, l, /* xml */ False);
+}
+
 void MC_(pp_Error) ( Error* err )
 {
    const Bool xml  = VG_(clo_xml); /* a shorthand */
@@ -718,84 +806,7 @@ void MC_(pp_Error) ( Error* err )
          UInt        n_this_record   = extra->Err.Leak.n_this_record;
          UInt        n_total_records = extra->Err.Leak.n_total_records;
          LossRecord* lr              = extra->Err.Leak.lr;
-         // char arrays to produce the indication of increase/decrease in case
-         // of delta_mode != LCD_Any
-         char        d_bytes[20];
-         char        d_direct_bytes[20];
-         char        d_indirect_bytes[20];
-         char        d_num_blocks[20];
-
-         MC_(snprintf_delta) (d_bytes, 20, 
-                              lr->szB + lr->indirect_szB, 
-                              lr->old_szB + lr->old_indirect_szB,
-                              MC_(detect_memory_leaks_last_delta_mode));
-         MC_(snprintf_delta) (d_direct_bytes, 20,
-                              lr->szB,
-                              lr->old_szB,
-                              MC_(detect_memory_leaks_last_delta_mode));
-         MC_(snprintf_delta) (d_indirect_bytes, 20,
-                              lr->indirect_szB,
-                              lr->old_indirect_szB,
-                              MC_(detect_memory_leaks_last_delta_mode));
-         MC_(snprintf_delta) (d_num_blocks, 20,
-                              (SizeT) lr->num_blocks,
-                              (SizeT) lr->old_num_blocks,
-                              MC_(detect_memory_leaks_last_delta_mode));
-
-         if (xml) {
-            emit("  <kind>%s</kind>\n", xml_leak_kind(lr->key.state));
-            if (lr->indirect_szB > 0) {
-               emit( "  <xwhat>\n" );
-               emit( "    <text>%'lu%s (%'lu%s direct, %'lu%s indirect) bytes "
-                     "in %'u%s blocks"
-                     " are %s in loss record %'u of %'u</text>\n",
-                     lr->szB + lr->indirect_szB, d_bytes,
-                     lr->szB, d_direct_bytes,
-                     lr->indirect_szB, d_indirect_bytes,
-                     lr->num_blocks, d_num_blocks,
-                     str_leak_lossmode(lr->key.state),
-                     n_this_record, n_total_records );
-               // Nb: don't put commas in these XML numbers 
-               emit( "    <leakedbytes>%lu</leakedbytes>\n",
-                     lr->szB + lr->indirect_szB );
-               emit( "    <leakedblocks>%u</leakedblocks>\n", lr->num_blocks );
-               emit( "  </xwhat>\n" );
-            } else {
-               emit( "  <xwhat>\n" );
-               emit( "    <text>%'lu%s bytes in %'u%s blocks"
-                     " are %s in loss record %'u of %'u</text>\n",
-                     lr->szB, d_direct_bytes,
-                     lr->num_blocks, d_num_blocks,
-                     str_leak_lossmode(lr->key.state), 
-                     n_this_record, n_total_records );
-               emit( "    <leakedbytes>%ld</leakedbytes>\n", lr->szB);
-               emit( "    <leakedblocks>%d</leakedblocks>\n", lr->num_blocks);
-               emit( "  </xwhat>\n" );
-            }
-            VG_(pp_ExeContext)(lr->key.allocated_at);
-         } else { /* ! if (xml) */
-            if (lr->indirect_szB > 0) {
-               emit(
-                  "%'lu%s (%'lu%s direct, %'lu%s indirect) bytes in %'u%s blocks"
-                  " are %s in loss record %'u of %'u\n",
-                  lr->szB + lr->indirect_szB, d_bytes,
-                  lr->szB, d_direct_bytes,
-                  lr->indirect_szB, d_indirect_bytes,
-                  lr->num_blocks, d_num_blocks,
-                  str_leak_lossmode(lr->key.state),
-                  n_this_record, n_total_records
-               );
-            } else {
-               emit(
-                  "%'lu%s bytes in %'u%s blocks are %s in loss record %'u of %'u\n",
-                  lr->szB, d_direct_bytes,
-                  lr->num_blocks, d_num_blocks,
-                  str_leak_lossmode(lr->key.state),
-                  n_this_record, n_total_records
-               );
-            }
-            VG_(pp_ExeContext)(lr->key.allocated_at);
-         } /* if (xml) */
+         pp_LossRecord (n_this_record, n_total_records, lr, xml);
          break;
       }
 
@@ -803,30 +814,6 @@ void MC_(pp_Error) ( Error* err )
          VG_(printf)("Error:\n  unknown Memcheck error code %d\n",
                      VG_(get_error_kind)(err));
          VG_(tool_panic)("unknown error code in mc_pp_Error)");
-   }
-
-   if (MC_(clo_summary_file)) {
-      /* Each time we report a warning, we replace the contents of the summary
-       * file with one line indicating the number of reported warnings.
-       * This way, at the end of memcheck execution we will have a file with
-       * one line saying 
-       *   Memcheck: XX warnings reported
-       * If there were no warnings, the file will not be changed. 
-       * If memcheck crashes, the file will still contain the last summary.
-       * */
-      static int n_warnings = 0;
-      char buf[100];
-      SysRes sres = VG_(open)(MC_(clo_summary_file),
-                              VKI_O_WRONLY|VKI_O_CREAT|VKI_O_TRUNC,
-                              VKI_S_IRUSR|VKI_S_IWUSR);
-      if (sr_isError(sres)) {
-         VG_(tool_panic)("can not open the summary file");
-      }
-      n_warnings++;
-      VG_(snprintf)(buf, sizeof(buf), "Memcheck: %d warning(s) reported\n",
-                    n_warnings);
-      VG_(write)(sr_Res(sres), buf, VG_(strlen)(buf));
-      VG_(close)(sr_Res(sres));
    }
 }
 
@@ -1095,7 +1082,7 @@ static
 Bool addr_is_in_MC_Chunk_default_REDZONE_SZB(MC_Chunk* mc, Addr a)
 {
    return VG_(addr_is_in_block)( a, mc->data, mc->szB,
-                                 MC_MALLOC_REDZONE_SZB );
+                                 MC_(Malloc_Redzone_SzB) );
 }
 static
 Bool addr_is_in_MC_Chunk_with_REDZONE_SZB(MC_Chunk* mc, Addr a, SizeT rzB)
@@ -1128,6 +1115,30 @@ static void describe_addr ( Addr a, /*OUT*/AddrInfo* ai )
    if (mempool_block_maybe_describe( a, ai )) {
       return;
    }
+   /* Blocks allocated by memcheck malloc functions are either
+      on the recently freed list or on the malloc-ed list.
+      Custom blocks can be on both : a recently freed block might
+      have been just re-allocated.
+      So, first search the malloc-ed block, as the most recent
+      block is the probable cause of error.
+      We however detect and report that this is a recently re-allocated
+      block. */
+   /* -- Search for a currently malloc'd block which might bracket it. -- */
+   VG_(HT_ResetIter)(MC_(malloc_list));
+   while ( (mc = VG_(HT_Next)(MC_(malloc_list))) ) {
+      if (addr_is_in_MC_Chunk_default_REDZONE_SZB(mc, a)) {
+         ai->tag = Addr_Block;
+         ai->Addr.Block.block_kind = Block_Mallocd;
+         if (MC_(get_freed_block_bracketting)( a ))
+            ai->Addr.Block.block_desc = "recently re-allocated block";
+         else
+            ai->Addr.Block.block_desc = "block";
+         ai->Addr.Block.block_szB  = mc->szB;
+         ai->Addr.Block.rwoffset   = (Word)a - (Word)mc->data;
+         ai->Addr.Block.lastchange = mc->where;
+         return;
+      }
+   }
    /* -- Search for a recently freed block which might bracket it. -- */
    mc = MC_(get_freed_block_bracketting)( a );
    if (mc) {
@@ -1138,19 +1149,6 @@ static void describe_addr ( Addr a, /*OUT*/AddrInfo* ai )
       ai->Addr.Block.rwoffset   = (Word)a - (Word)mc->data;
       ai->Addr.Block.lastchange = mc->where;
       return;
-   }
-   /* -- Search for a currently malloc'd block which might bracket it. -- */
-   VG_(HT_ResetIter)(MC_(malloc_list));
-   while ( (mc = VG_(HT_Next)(MC_(malloc_list))) ) {
-      if (addr_is_in_MC_Chunk_default_REDZONE_SZB(mc, a)) {
-         ai->tag = Addr_Block;
-         ai->Addr.Block.block_kind = Block_Mallocd;
-         ai->Addr.Block.block_desc = "block";
-         ai->Addr.Block.block_szB  = mc->szB;
-         ai->Addr.Block.rwoffset   = (Word)a - (Word)mc->data;
-         ai->Addr.Block.lastchange = mc->where;
-         return;
-      }
    }
    /* -- Perhaps the variable type/location data describes it? -- */
    ai->Addr.Variable.descr1
@@ -1405,10 +1403,6 @@ typedef
       // Unaddressable read/write attempt at given size
       Addr1Supp, Addr2Supp, Addr4Supp, Addr8Supp, Addr16Supp,
 
-      // https://bugs.kde.org/show_bug.cgi?id=256525
-      UnaddrSupp,    // Matches Addr*.
-      UninitSupp,    // Matches Value*, Param and Cond.
-
       JumpSupp,      // Jump to unaddressable target
       FreeSupp,      // Invalid or mismatching free
       OverlapSupp,   // Overlapping blocks in memcpy(), strcpy(), etc
@@ -1441,12 +1435,6 @@ Bool MC_(is_recognised_suppression) ( Char* name, Supp* su )
    else if (VG_STREQ(name, "Value4"))  skind = Value4Supp;
    else if (VG_STREQ(name, "Value8"))  skind = Value8Supp;
    else if (VG_STREQ(name, "Value16")) skind = Value16Supp;
-   // https://bugs.kde.org/show_bug.cgi?id=256525
-   else if (VG_STREQ(name, "Unaddressable")) skind = UnaddrSupp;
-   else if (VG_STREQ(name, "Unaddr"))  skind = UnaddrSupp;
-   else if (VG_STREQ(name, "Uninitialised")) skind = UninitSupp;
-   else if (VG_STREQ(name, "Uninitialized")) skind = UninitSupp;
-   else if (VG_STREQ(name, "Uninit"))  skind = UninitSupp;
    else 
       return False;
 
@@ -1505,16 +1493,6 @@ Bool MC_(error_matches_suppression) ( Error* err, Supp* su )
       case Addr16Supp:su_szB =16; goto addr_case;
       addr_case:
          return (ekind == Err_Addr && extra->Err.Addr.szB == su_szB);
-
-      // https://bugs.kde.org/show_bug.cgi?id=256525
-      case UnaddrSupp:
-         return (ekind == Err_Addr ||
-                 (ekind == Err_MemParam && extra->Err.MemParam.isAddrErr));
-
-      case UninitSupp:
-         return (ekind == Err_Cond || ekind == Err_Value ||
-                 ekind == Err_RegParam ||
-                 (ekind == Err_MemParam && !extra->Err.MemParam.isAddrErr));
 
       case JumpSupp:
          return (ekind == Err_Jump);

@@ -9,7 +9,7 @@
    This file is part of MemCheck, a heavyweight Valgrind tool for
    detecting memory errors.
 
-   Copyright (C) 2000-2011 Julian Seward 
+   Copyright (C) 2000-2012 Julian Seward 
       jseward@acm.org
 
    This program is free software; you can redistribute it and/or
@@ -31,6 +31,7 @@
 */
 
 #include "pub_tool_basics.h"
+#include "pub_tool_poolalloc.h"
 #include "pub_tool_hashtable.h"
 #include "pub_tool_redir.h"
 #include "pub_tool_tooliface.h"
@@ -94,6 +95,8 @@
    20330 STRCSPN
    20340 STRSPN
    20350 STRCASESTR
+   20360 MEMRCHR
+   20370 WCSLEN
 */
 
 
@@ -140,6 +143,9 @@ static inline void my_exit ( int x )
 #  if defined(VGPV_arm_linux_android)
    __asm__ __volatile__(".word 0xFFFFFFFF");
    while (1) {}
+#  elif defined(VGPV_x86_linux_android)
+   __asm__ __volatile__("ud2");
+   while (1) {}
 #  else
    extern __attribute__ ((__noreturn__)) void _exit(int status);
    _exit(x);
@@ -177,12 +183,15 @@ static inline void my_exit ( int x )
  STRRCHR(VG_Z_LIBC_SONAME,   rindex)
  STRRCHR(VG_Z_LIBC_SONAME,   __GI_strrchr)
  STRRCHR(VG_Z_LD_LINUX_SO_2, rindex)
+#if defined(VGPV_arm_linux_android) || defined(VGPV_x86_linux_android)
+  STRRCHR(NONE, __dl_strrchr); /* in /system/bin/linker */
+#endif
 
 #elif defined(VGO_darwin)
  //STRRCHR(VG_Z_LIBC_SONAME,   strrchr)
- STRRCHR(VG_Z_LIBC_SONAME,   rindex)
- STRRCHR(VG_Z_DYLD,          strrchr)
- STRRCHR(VG_Z_DYLD,          rindex)
+ //STRRCHR(VG_Z_LIBC_SONAME,   rindex)
+ //STRRCHR(VG_Z_DYLD,          strrchr)
+ //STRRCHR(VG_Z_DYLD,          rindex)
  STRRCHR(VG_Z_LIBC_SONAME, strrchr)
 
 #endif
@@ -217,9 +226,9 @@ static inline void my_exit ( int x )
 
 #elif defined(VGO_darwin)
  //STRCHR(VG_Z_LIBC_SONAME,          strchr)
- STRCHR(VG_Z_LIBC_SONAME,          index)
- STRCHR(VG_Z_DYLD,                 strchr)
- STRCHR(VG_Z_DYLD,                 index)
+ //STRCHR(VG_Z_LIBC_SONAME,          index)
+ //STRCHR(VG_Z_DYLD,                 strchr)
+ //STRCHR(VG_Z_DYLD,                 index)
  STRCHR(VG_Z_LIBC_SONAME, strchr)
 
 #endif
@@ -255,7 +264,7 @@ static inline void my_exit ( int x )
  STRCAT(VG_Z_LIBC_SONAME, __GI_strcat)
 
 #elif defined(VGO_darwin)
- STRCAT(VG_Z_LIBC_SONAME, strcat)
+ //STRCAT(VG_Z_LIBC_SONAME, strcat)
 
 #endif
 
@@ -291,8 +300,8 @@ static inline void my_exit ( int x )
  STRNCAT(VG_Z_LIBC_SONAME, strncat)
 
 #elif defined(VGO_darwin)
- STRNCAT(VG_Z_LIBC_SONAME, strncat)
- STRNCAT(VG_Z_DYLD,        strncat)
+ //STRNCAT(VG_Z_LIBC_SONAME, strncat)
+ //STRNCAT(VG_Z_DYLD,        strncat)
 
 #endif
 
@@ -339,7 +348,7 @@ static inline void my_exit ( int x )
 
 #elif defined(VGO_darwin)
  //STRLCAT(VG_Z_LIBC_SONAME, strlcat)
- STRLCAT(VG_Z_DYLD,        strlcat)
+ //STRLCAT(VG_Z_DYLD,        strlcat)
  STRLCAT(VG_Z_LIBC_SONAME, strlcat)
 
 #endif
@@ -363,7 +372,7 @@ static inline void my_exit ( int x )
  STRNLEN(VG_Z_LIBC_SONAME, __GI_strnlen)
 
 #elif defined(VGO_darwin)
- STRNLEN(VG_Z_LIBC_SONAME, strnlen)
+ //STRNLEN(VG_Z_LIBC_SONAME, strnlen)
 
 #endif
    
@@ -389,7 +398,7 @@ static inline void my_exit ( int x )
 #if defined(VGO_linux)
  STRLEN(VG_Z_LIBC_SONAME,          strlen)
  STRLEN(VG_Z_LIBC_SONAME,          __GI_strlen)
-# if defined(VGPV_arm_linux_android)
+# if defined(VGPV_arm_linux_android) || defined(VGPV_x86_linux_android)
   STRLEN(NONE, __dl_strlen); /* in /system/bin/linker */
 # endif
 
@@ -431,7 +440,7 @@ static inline void my_exit ( int x )
 
 #elif defined(VGO_darwin)
  //STRCPY(VG_Z_LIBC_SONAME, strcpy)
- STRCPY(VG_Z_DYLD,        strcpy)
+ //STRCPY(VG_Z_DYLD,        strcpy)
  STRCPY(VG_Z_LIBC_SONAME, strcpy)
 
 #endif
@@ -465,7 +474,7 @@ static inline void my_exit ( int x )
 
 #elif defined(VGO_darwin)
  //STRNCPY(VG_Z_LIBC_SONAME, strncpy)
- STRNCPY(VG_Z_DYLD,        strncpy)
+ //STRNCPY(VG_Z_DYLD,        strncpy)
  STRNCPY(VG_Z_LIBC_SONAME, strncpy)
 
 #endif
@@ -500,9 +509,13 @@ static inline void my_exit ( int x )
 
 #if defined(VGO_linux)
 
+#if defined(VGPV_arm_linux_android) || defined(VGPV_x86_linux_android)
+ STRLCPY(VG_Z_LIBC_SONAME, strlcpy);
+#endif
+
 #elif defined(VGO_darwin)
  //STRLCPY(VG_Z_LIBC_SONAME, strlcpy)
- STRLCPY(VG_Z_DYLD,        strlcpy)
+ //STRLCPY(VG_Z_DYLD,        strlcpy)
  STRLCPY(VG_Z_LIBC_SONAME, strlcpy)
 
 #endif
@@ -536,7 +549,7 @@ static inline void my_exit ( int x )
 
 #elif defined(VGO_darwin)
  //STRNCMP(VG_Z_LIBC_SONAME, strncmp)
- STRNCMP(VG_Z_DYLD,        strncmp)
+ //STRNCMP(VG_Z_DYLD,        strncmp)
  STRNCMP(VG_Z_LIBC_SONAME,        strncmp)
 
 #endif
@@ -566,13 +579,13 @@ static inline void my_exit ( int x )
    }
 
 #if defined(VGO_linux)
-# if !defined(VGPV_arm_linux_android)
+# if !defined(VGPV_arm_linux_android) && !defined(VGPV_x86_linux_android)
   STRCASECMP(VG_Z_LIBC_SONAME, strcasecmp)
   STRCASECMP(VG_Z_LIBC_SONAME, __GI_strcasecmp)
 # endif
 
 #elif defined(VGO_darwin)
- STRCASECMP(VG_Z_LIBC_SONAME, strcasecmp)
+ //STRCASECMP(VG_Z_LIBC_SONAME, strcasecmp)
 
 #endif
 
@@ -603,14 +616,14 @@ static inline void my_exit ( int x )
    }
 
 #if defined(VGO_linux)
-# if !defined(VGPV_arm_linux_android)
+# if !defined(VGPV_arm_linux_android) && !defined(VGPV_x86_linux_android)
   STRNCASECMP(VG_Z_LIBC_SONAME, strncasecmp)
   STRNCASECMP(VG_Z_LIBC_SONAME, __GI_strncasecmp)
 # endif
 
 #elif defined(VGO_darwin)
- STRNCASECMP(VG_Z_LIBC_SONAME, strncasecmp)
- STRNCASECMP(VG_Z_DYLD,        strncasecmp)
+ //STRNCASECMP(VG_Z_LIBC_SONAME, strncasecmp)
+ //STRNCASECMP(VG_Z_DYLD,        strncasecmp)
 
 #endif
 
@@ -644,7 +657,7 @@ static inline void my_exit ( int x )
  STRCASECMP_L(VG_Z_LIBC_SONAME, __GI___strcasecmp_l)
 
 #elif defined(VGO_darwin)
- STRCASECMP_L(VG_Z_LIBC_SONAME, strcasecmp_l)
+ //STRCASECMP_L(VG_Z_LIBC_SONAME, strcasecmp_l)
 
 #endif
 
@@ -677,10 +690,11 @@ static inline void my_exit ( int x )
 #if defined(VGO_linux)
  STRNCASECMP_L(VG_Z_LIBC_SONAME, strncasecmp_l)
  STRNCASECMP_L(VG_Z_LIBC_SONAME, __GI_strncasecmp_l)
+ STRNCASECMP_L(VG_Z_LIBC_SONAME, __GI___strncasecmp_l)
 
 #elif defined(VGO_darwin)
- STRNCASECMP_L(VG_Z_LIBC_SONAME, strncasecmp_l)
- STRNCASECMP_L(VG_Z_DYLD,        strncasecmp_l)
+ //STRNCASECMP_L(VG_Z_LIBC_SONAME, strncasecmp_l)
+ //STRNCASECMP_L(VG_Z_DYLD,        strncasecmp_l)
 
 #endif
 
@@ -712,7 +726,7 @@ static inline void my_exit ( int x )
  STRCMP(VG_Z_LIBC_SONAME,          __GI_strcmp)
  STRCMP(VG_Z_LD_LINUX_X86_64_SO_2, strcmp)
  STRCMP(VG_Z_LD64_SO_1,            strcmp)
-# if defined(VGPV_arm_linux_android)
+# if defined(VGPV_arm_linux_android) || defined(VGPV_x86_linux_android)
   STRCMP(NONE, __dl_strcmp); /* in /system/bin/linker */
 # endif
 
@@ -743,8 +757,34 @@ static inline void my_exit ( int x )
  MEMCHR(VG_Z_LIBC_SONAME, memchr)
 
 #elif defined(VGO_darwin)
- MEMCHR(VG_Z_LIBC_SONAME, memchr)
- MEMCHR(VG_Z_DYLD,        memchr)
+ //MEMCHR(VG_Z_LIBC_SONAME, memchr)
+ //MEMCHR(VG_Z_DYLD,        memchr)
+
+#endif
+
+
+/*---------------------- memrchr ----------------------*/
+
+#define MEMRCHR(soname, fnname) \
+   void* VG_REPLACE_FUNCTION_EZU(20360,soname,fnname) \
+            (const void *s, int c, SizeT n); \
+   void* VG_REPLACE_FUNCTION_EZU(20360,soname,fnname) \
+            (const void *s, int c, SizeT n) \
+   { \
+      SizeT i; \
+      UChar c0 = (UChar)c; \
+      UChar* p = (UChar*)s; \
+      for (i = 0; i < n; i++) \
+         if (p[n-1-i] == c0) return (void*)(&p[n-1-i]); \
+      return NULL; \
+   }
+
+#if defined(VGO_linux)
+ MEMRCHR(VG_Z_LIBC_SONAME, memrchr)
+
+#elif defined(VGO_darwin)
+ //MEMRCHR(VG_Z_LIBC_SONAME, memrchr)
+ //MEMRCHR(VG_Z_DYLD,        memrchr)
 
 #endif
 
@@ -849,9 +889,9 @@ static inline void my_exit ( int x )
  MEMCPY(NONE, ZuintelZufastZumemcpy)
 
 #elif defined(VGO_darwin)
- // glider: see https://bugs.kde.org/show_bug.cgi?id=285662
- MEMCPY(VG_Z_LIBC_SONAME,  memcpy)
- MEMCPY(VG_Z_DYLD,         memcpy)
+# if DARWIN_VERS <= DARWIN_10_6
+  MEMCPY(VG_Z_LIBC_SONAME,  memcpy)
+# endif
  MEMCPY(VG_Z_LIBC_SONAME,  memcpyZDVARIANTZDsse3x) /* memcpy$VARIANT$sse3x */
  MEMCPY(VG_Z_LIBC_SONAME,  memcpyZDVARIANTZDsse42) /* memcpy$VARIANT$sse42 */
 
@@ -891,10 +931,10 @@ static inline void my_exit ( int x )
  MEMCMP(VG_Z_LD_SO_1,     bcmp)
 
 #elif defined(VGO_darwin)
- MEMCMP(VG_Z_LIBC_SONAME, memcmp)
- MEMCMP(VG_Z_LIBC_SONAME, bcmp)
- MEMCMP(VG_Z_DYLD,        memcmp)
- MEMCMP(VG_Z_DYLD,        bcmp)
+ //MEMCMP(VG_Z_LIBC_SONAME, memcmp)
+ //MEMCMP(VG_Z_LIBC_SONAME, bcmp)
+ //MEMCMP(VG_Z_DYLD,        memcmp)
+ //MEMCMP(VG_Z_DYLD,        bcmp)
 
 #endif
 
@@ -933,8 +973,8 @@ static inline void my_exit ( int x )
  STPCPY(VG_Z_LD_LINUX_X86_64_SO_2, stpcpy)
 
 #elif defined(VGO_darwin)
- STPCPY(VG_Z_LIBC_SONAME,          stpcpy)
- STPCPY(VG_Z_DYLD,                 stpcpy)
+ //STPCPY(VG_Z_LIBC_SONAME,          stpcpy)
+ //STPCPY(VG_Z_DYLD,                 stpcpy)
 
 #endif
 
@@ -968,7 +1008,7 @@ static inline void my_exit ( int x )
 
 #elif defined(VGO_darwin)
  //MEMSET(VG_Z_LIBC_SONAME, memset)
- MEMSET(VG_Z_DYLD,        memset)
+ //MEMSET(VG_Z_DYLD,        memset)
  MEMSET(VG_Z_LIBC_SONAME, memset)
 
 #endif
@@ -980,11 +1020,12 @@ static inline void my_exit ( int x )
 
 #if defined(VGO_linux)
  MEMMOVE(VG_Z_LIBC_SONAME, memmove)
+ MEMMOVE(VG_Z_LIBC_SONAME, __GI_memmove)
 
 #elif defined(VGO_darwin)
- // glider: see https://bugs.kde.org/show_bug.cgi?id=285662
- MEMMOVE(VG_Z_LIBC_SONAME, memmove)
- MEMMOVE(VG_Z_DYLD,        memmove)
+# if DARWIN_VERS <= DARWIN_10_6
+  MEMMOVE(VG_Z_LIBC_SONAME, memmove)
+# endif
  MEMMOVE(VG_Z_LIBC_SONAME,  memmoveZDVARIANTZDsse3x) /* memmove$VARIANT$sse3x */
  MEMMOVE(VG_Z_LIBC_SONAME,  memmoveZDVARIANTZDsse42) /* memmove$VARIANT$sse42 */
 
@@ -1013,14 +1054,14 @@ static inline void my_exit ( int x )
       } \
    }
 
-// kcc: enabled bcopy interceptor on non-mac targets.
-BCOPY(VG_Z_LIBC_SONAME, bcopy)
 #if defined(VGO_linux)
 
 #elif defined(VGO_darwin)
  //BCOPY(VG_Z_LIBC_SONAME, bcopy)
- BCOPY(VG_Z_DYLD,        bcopy)
+ //BCOPY(VG_Z_DYLD,        bcopy)
+
 #endif
+
 
 /*-------------------- memmove_chk --------------------*/
 
@@ -1223,7 +1264,7 @@ BCOPY(VG_Z_LIBC_SONAME, bcopy)
  GLIBC25_MEMPCPY(VG_Z_LD_SO_1,     mempcpy) /* ld.so.1 */
 
 #elif defined(VGO_darwin)
- GLIBC25_MEMPCPY(VG_Z_LIBC_SONAME, mempcpy)
+ //GLIBC25_MEMPCPY(VG_Z_LIBC_SONAME, mempcpy)
 
 #endif
 
@@ -1495,7 +1536,35 @@ BCOPY(VG_Z_LIBC_SONAME, bcopy)
    }
 
 #if defined(VGO_linux)
- STRCASESTR(VG_Z_LIBC_SONAME,      strcasestr)
+# if !defined(VGPV_arm_linux_android) && !defined(VGPV_x86_linux_android)
+  STRCASESTR(VG_Z_LIBC_SONAME,      strcasestr)
+# endif
+
+#elif defined(VGO_darwin)
+
+#endif
+
+
+/*---------------------- wcslen ----------------------*/
+
+// This is a wchar_t equivalent to strlen.  Unfortunately
+// we don't have wchar_t available here, but it looks like
+// a 32 bit int on Linux.  I don't know if that is also
+// valid on MacOSX.
+
+#define WCSLEN(soname, fnname) \
+   SizeT VG_REPLACE_FUNCTION_EZU(20370,soname,fnname) \
+      ( const UInt* str ); \
+   SizeT VG_REPLACE_FUNCTION_EZU(20370,soname,fnname) \
+      ( const UInt* str )  \
+   { \
+      SizeT i = 0; \
+      while (str[i] != 0) i++; \
+      return i; \
+   }
+
+#if defined(VGO_linux)
+ WCSLEN(VG_Z_LIBC_SONAME,          wcslen)
 
 #elif defined(VGO_darwin)
 

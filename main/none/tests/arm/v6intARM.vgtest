@@ -1,4 +1,2 @@
 prog: v6intARM
 vgopts: -q
-prog: v6intARM
-vgopts: -q

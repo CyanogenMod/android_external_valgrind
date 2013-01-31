@@ -196,7 +196,7 @@ static
 void safe_mknod (char *nod)
 {
    SysRes m;
-   m = VG_(mknod) (nod, VKI_S_IFIFO|0666, 0);
+   m = VG_(mknod) (nod, VKI_S_IFIFO|0600, 0);
    if (sr_isError (m)) {
       if (sr_Err (m) == VKI_EEXIST) {
          if (VG_(clo_verbosity) > 1) {
@@ -224,10 +224,11 @@ void remote_open (char *name)
    const HChar *user, *host;
    int save_fcntl_flags, len;
    VgdbShared vgdbinit = 
-      {0, 0, 0, (Addr) VG_(invoke_gdbserver),
+      {0, 0, (Addr) VG_(invoke_gdbserver),
        (Addr) VG_(threads), sizeof(ThreadState), 
        offsetof(ThreadState, status),
-       offsetof(ThreadState, os_state) + offsetof(ThreadOSstate, lwpid)};
+       offsetof(ThreadState, os_state) + offsetof(ThreadOSstate, lwpid),
+       0};
    const int pid = VG_(getpid)();
    const int name_default = strcmp(name, VG_(vgdb_prefix_default)()) == 0;
    Addr addr_shared;
@@ -269,7 +270,7 @@ void remote_open (char *name)
                 "don't want to do, unless you know exactly what you're doing,\n"
                 "or are doing some strange experiment):\n"
                 "  %s/../../bin/vgdb --pid=%d%s%s ...command...\n",
-                VG_LIBDIR,
+                VG_(libdir),
                 pid, (name_default ? "" : " --vgdb-prefix="),
                 (name_default ? "" : name));
    }
@@ -282,7 +283,7 @@ void remote_open (char *name)
          "and then give GDB the following command\n"
          "  target remote | %s/../../bin/vgdb --pid=%d%s%s\n",
          VG_(args_the_exename),
-         VG_LIBDIR,
+         VG_(libdir),
          pid, (name_default ? "" : " --vgdb-prefix="), 
          (name_default ? "" : name)
       );
@@ -306,7 +307,7 @@ void remote_open (char *name)
 
       pid_from_to_creator = pid;
       
-      o = VG_(open) (shared_mem, VKI_O_CREAT|VKI_O_RDWR, 0666);
+      o = VG_(open) (shared_mem, VKI_O_CREAT|VKI_O_RDWR, 0600);
       if (sr_isError (o)) {
          sr_perror(o, "cannot create shared_mem file %s\n", shared_mem);
          fatal("");
@@ -541,6 +542,29 @@ int hexify (char *hex, const char *bin, int count)
   return i;
 }
 
+/* builds an image of bin according to byte order of the architecture 
+   Useful for register and int image */
+char* heximage (char *buf, char *bin, int count)
+{
+#if defined(VGA_x86) || defined(VGA_amd64)
+   char rev[count]; 
+   /* note: no need for trailing \0, length is known with count */
+  int i;
+  for (i = 0; i < count; i++)
+    rev[i] = bin[count - i - 1];
+  hexify (buf, rev, count);
+#else
+  hexify (buf, bin, count);
+#endif
+  return buf;
+}
+
+void* C2v(CORE_ADDR addr)
+{
+   return (void*) addr;
+}
+
+
 /* Convert BUFFER, binary data at least LEN bytes long, into escaped
    binary data in OUT_BUF.  Set *OUT_LEN to the length of the data
    encoded in OUT_BUF, and return the number of bytes in OUT_BUF
@@ -728,7 +752,7 @@ int putpkt_binary (char *buf, int cnt)
 
       /* Check for an input interrupt while we're here.  */
       if (cc == '\003')
-         (*the_target->send_signal) (VKI_SIGINT);
+         dlog(1, "Received 0x03 character (SIGINT)\n");
    }
    while (cc != '+');
 
@@ -961,15 +985,14 @@ void prepare_resume_reply (char *buf, char status, unsigned char sig)
    if (status == 'T') {
       const char **regp = gdbserver_expedite_regs;
       
-      if (the_target->stopped_by_watchpoint != NULL
-	  && (*the_target->stopped_by_watchpoint) ()) {
+      if (valgrind_stopped_by_watchpoint()) {
          CORE_ADDR addr;
          int i;
 
          strncpy (buf, "watch:", 6);
          buf += 6;
 
-         addr = (*the_target->stopped_data_address) ();
+         addr = valgrind_stopped_data_address ();
 
          /* Convert each byte of the address into two hexadecimal chars.
             Note that we take sizeof (void *) instead of sizeof (addr);
@@ -1079,13 +1102,13 @@ int decode_X_packet (char *from, int packet_len, CORE_ADDR *mem_addr_ptr,
 HChar *
 VG_(vgdb_prefix_default)(void)
 {
-   const HChar *tmpdir;
-   HChar *prefix;
+   static HChar *prefix;
    
-   tmpdir = VG_(tmpdir)();
-   prefix = malloc(strlen(tmpdir) + strlen("/vgdb-pipe") + 1);
-   strcpy(prefix, tmpdir);
-   strcat(prefix, "/vgdb-pipe");
-
+   if (prefix == NULL) {
+     const HChar *tmpdir = VG_(tmpdir)();
+     prefix = malloc(strlen(tmpdir) + strlen("/vgdb-pipe") + 1);
+     strcpy(prefix, tmpdir);
+     strcat(prefix, "/vgdb-pipe");
+   }
    return prefix;
 }
