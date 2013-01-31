@@ -9,19 +9,25 @@ EXTRA_DIST = \
 	v6intARM.stdout.exp v6intARM.stderr.exp v6intARM.vgtest \
 	v6intThumb.stdout.exp v6intThumb.stderr.exp v6intThumb.vgtest \
 	v6media.stdout.exp v6media.stderr.exp v6media.vgtest \
+	vcvt_fixed_float_VFP.stdout.exp vcvt_fixed_float_VFP.stderr.exp \
+		vcvt_fixed_float_VFP.vgtest \
 	vfp.stdout.exp vfp.stderr.exp vfp.vgtest
 
 check_PROGRAMS = \
+	allexec \
 	neon128 \
 	neon64 \
 	v6intARM \
 	v6intThumb \
 	v6media \
+	vcvt_fixed_float_VFP \
 	vfp
 
 AM_CFLAGS    += @FLAG_M32@
 AM_CXXFLAGS  += @FLAG_M32@
 AM_CCASFLAGS += @FLAG_M32@
+
+allexec_CFLAGS		= $(AM_CFLAGS) @FLAG_W_NO_NONNULL@
 
 # These two are specific to their ARM/Thumb respectively and so we
 # hardwire -marm/-mthumb.  neon64 and neon128 are compilable on both,
@@ -36,14 +42,14 @@ v6intThumb_CFLAGS = $(AM_CFLAGS) -g -O0 -mcpu=cortex-a8 -mthumb
 v6media_CFLAGS    = $(AM_CFLAGS) -g -O0 -mcpu=cortex-a8 -mthumb
 
 vfp_CFLAGS        = $(AM_CFLAGS) -g -O0 -mcpu=cortex-a8 \
-			-mfpu=neon -mfloat-abi=softfp \
+			-mfpu=neon \
 			-mthumb
 
 
 neon128_CFLAGS    = $(AM_CFLAGS) -g -O0 -mcpu=cortex-a8 \
-			-mfpu=neon -mfloat-abi=softfp \
+			-mfpu=neon \
 			-mthumb
 
 neon64_CFLAGS     = $(AM_CFLAGS) -g -O0 -mcpu=cortex-a8 \
-			-mfpu=neon -mfloat-abi=softfp \
+			-mfpu=neon \
 			-mthumb

@@ -8,7 +8,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2000-2011 Julian Seward 
+   Copyright (C) 2000-2012 Julian Seward 
       jseward@acm.org
 
    This program is free software; you can redistribute it and/or
@@ -35,7 +35,6 @@
 #include "pub_core_libcbase.h"
 #include "pub_core_aspacemgr.h"
 #include "pub_core_libcassert.h"
-#include "pub_core_libcfile.h"
 #include "pub_core_libcprint.h"
 #include "pub_core_mallocfree.h"
 #include "pub_core_options.h"
@@ -43,9 +42,11 @@
 #include "pub_core_threadstate.h"   // For VG_INVALID_THREADID
 #include "pub_core_transtab.h"
 #include "pub_core_tooliface.h"
-#include "valgrind.h"
 
-//zz#include "memcheck/memcheck.h"
+#include "pub_tool_inner.h"
+#if defined(ENABLE_INNER_CLIENT_REQUEST)
+#include "memcheck/memcheck.h"
+#endif
 
 // #define DEBUG_MALLOC      // turn on heavyweight debugging machinery
 // #define VERBOSE_MALLOC    // make verbose, esp. in debugging machinery
@@ -267,6 +268,10 @@ SizeT mk_plain_bszB ( SizeT bszB )
    vg_assert2(bszB != 0, probably_your_fault);
    return bszB & (~SIZE_T_0x1);
 }
+
+// Forward definition.
+static
+void ensure_mm_init ( ArenaId aid );
 
 // return either 0 or sizeof(ULong) depending on whether or not
 // heap profiling is engaged
@@ -490,24 +495,44 @@ static Arena* arenaId_to_ArenaP ( ArenaId arena )
    return & vg_arena[arena];
 }
 
-// Initialise an arena.  rz_szB is the minimum redzone size;  it might be
-// made bigger to ensure that VG_MIN_MALLOC_SZB is observed.
+SizeT VG_(malloc_effective_client_redzone_size)(void)
+{
+   vg_assert(VG_(needs).malloc_replacement);
+   ensure_mm_init (VG_AR_CLIENT);
+   /*  ensure_mm_init will call arena_init if not yet done.
+       This then ensures that the arena redzone size is properly
+       initialised. */
+   return arenaId_to_ArenaP(VG_AR_CLIENT)->rz_szB;
+}
+
+// Initialise an arena.  rz_szB is the (default) minimum redzone size;
+// It might be overriden by VG_(clo_redzone_size) or VG_(clo_core_redzone_size).
+// it might be made bigger to ensure that VG_MIN_MALLOC_SZB is observed.
 static
 void arena_init ( ArenaId aid, Char* name, SizeT rz_szB,
                   SizeT min_sblock_szB, SizeT min_unsplittable_sblock_szB )
 {
    SizeT  i;
    Arena* a = arenaId_to_ArenaP(aid);
+
+   // Ensure default redzones are a reasonable size.  
+   vg_assert(rz_szB <= MAX_REDZONE_SZB);
    
-   // Ensure redzones are a reasonable size.  They must always be at least
-   // the size of a pointer, for holding the prev/next pointer (see the layout
-   // details at the top of this file).
-   vg_assert(rz_szB < 128);
+   /* Override the default redzone size if a clo value was given.
+      Note that the clo value can be significantly bigger than MAX_REDZONE_SZB
+      to allow the user to chase horrible bugs using up to 1 page
+      of protection. */
+   if (VG_AR_CLIENT == aid) {
+      if (VG_(clo_redzone_size) != -1)
+         rz_szB = VG_(clo_redzone_size);
+   } else {
+      if (VG_(clo_core_redzone_size) != rz_szB)
+         rz_szB = VG_(clo_core_redzone_size);
+   }
+
+   // Redzones must always be at least the size of a pointer, for holding the
+   // prev/next pointer (see the layout details at the top of this file).
    if (rz_szB < sizeof(void*)) rz_szB = sizeof(void*);
-   
-   vg_assert((min_sblock_szB % VKI_PAGE_SIZE) == 0);
-   a->name      = name;
-   a->clientmem = ( VG_AR_CLIENT == aid ? True : False );
 
    // The size of the low and high admin sections in a block must be a
    // multiple of VG_MIN_MALLOC_SZB.  So we round up the asked-for
@@ -515,6 +540,13 @@ void arena_init ( ArenaId aid, Char* name, SizeT rz_szB,
    a->rz_szB = rz_szB;
    while (0 != overhead_szB_lo(a) % VG_MIN_MALLOC_SZB) a->rz_szB++;
    vg_assert(overhead_szB_lo(a) - hp_overhead_szB() == overhead_szB_hi(a));
+
+   // Here we have established the effective redzone size.
+
+
+   vg_assert((min_sblock_szB % VKI_PAGE_SIZE) == 0);
+   a->name      = name;
+   a->clientmem = ( VG_AR_CLIENT == aid ? True : False );
 
    a->min_sblock_szB = min_sblock_szB;
    a->min_unsplittable_sblock_szB = min_unsplittable_sblock_szB;
@@ -548,14 +580,15 @@ void VG_(print_all_arena_stats) ( void )
                    "%llu/%llu unsplit/split sb unmmap'd,  "
                    "%8ld/%8ld max/curr,  "
                    "%10llu/%10llu totalloc-blocks/bytes,"
-                   "  %10llu searches\n",
+                   "  %10llu searches %lu rzB\n",
                    a->name,
                    a->stats__bytes_mmaped_max, a->stats__bytes_mmaped,
                    a->stats__nreclaim_unsplit, a->stats__nreclaim_split,
                    a->stats__bytes_on_loan_max,
                    a->stats__bytes_on_loan,
                    a->stats__tot_blocks, a->stats__tot_bytes,
-                   a->stats__nsearches
+                   a->stats__nsearches,
+                   a->rz_szB
       );
    }
 }
@@ -614,8 +647,7 @@ void ensure_mm_init ( ArenaId aid )
       // Check and set the client arena redzone size
       if (VG_(needs).malloc_replacement) {
          client_rz_szB = VG_(tdict).tool_client_redzone_szB;
-         // 128 is no special figure, just something not too big
-         if (client_rz_szB > 128) {
+         if (client_rz_szB > MAX_REDZONE_SZB) {
             VG_(printf)( "\nTool error:\n"
                          "  specified redzone size is too big (%llu)\n", 
                          (ULong)client_rz_szB);
@@ -640,13 +672,20 @@ void ensure_mm_init ( ArenaId aid )
          VG_(clo_profile_heap)  ? VG_MIN_MALLOC_SZB  : 0;
       // Initialise the non-client arenas
       // Similarly to client arena, big allocations will be unsplittable.
-      arena_init ( VG_AR_CORE,      "core",     4,   1048576, 1048576+1 );
-      arena_init ( VG_AR_TOOL,      "tool",     4,   4194304, 4194304+1 );
-      arena_init ( VG_AR_DINFO,     "dinfo",    4,   1048576, 1048576+1 );
-      arena_init ( VG_AR_DEMANGLE,  "demangle", 4,     65536,   65536+1 );
-      arena_init ( VG_AR_EXECTXT,   "exectxt",  4,   1048576, 1048576+1 );
-      arena_init ( VG_AR_ERRORS,    "errors",   4,     65536,   65536+1 );
-      arena_init ( VG_AR_TTAUX,     "ttaux",    4,     65536,   65536+1 );
+      arena_init ( VG_AR_CORE,      "core",     CORE_REDZONE_DEFAULT_SZB,
+                   1048576, 1048576+1 );
+      arena_init ( VG_AR_TOOL,      "tool",     CORE_REDZONE_DEFAULT_SZB,
+                   4194304, 4194304+1 );
+      arena_init ( VG_AR_DINFO,     "dinfo",    CORE_REDZONE_DEFAULT_SZB,
+                   1048576, 1048576+1 );
+      arena_init ( VG_AR_DEMANGLE,  "demangle", CORE_REDZONE_DEFAULT_SZB,
+                   65536,   65536+1 );
+      arena_init ( VG_AR_EXECTXT,   "exectxt",  CORE_REDZONE_DEFAULT_SZB,
+                   1048576, 1048576+1 );
+      arena_init ( VG_AR_ERRORS,    "errors",   CORE_REDZONE_DEFAULT_SZB,
+                   65536,   65536+1 );
+      arena_init ( VG_AR_TTAUX,     "ttaux",    CORE_REDZONE_DEFAULT_SZB,
+                   65536,   65536+1 );
       nonclient_inited = True;
    }
 
@@ -710,68 +749,6 @@ void* align_upwards ( void* p, SizeT align )
    return (void*)(a - (a % align) + align);
 }
 
-// Support for memfs (tmpfs or hugetlbfs) allocation.
-// The code is tcmalloc memfs allocator does a similar thing:
-// http://code.google.com/p/google-perftools/source/browse/trunk/src/memfs_malloc.cc
-
-static int memfs_fd = -1;
-static SizeT memfs_base = 0;
-static SizeT memfs_page_size = 0;
-
-static void MemfsOpen(void) {
-   if (VG_(clo_memfs_malloc_path) && memfs_fd == -1) {
-      VG_(printf)("MemfsOpen: attempting to open memfs mount: %s; "
-                  "memfs page size=%d ", VG_(clo_memfs_malloc_path),
-                  VG_(clo_memfs_page_size));
-      SysRes sres = VG_(open)(VG_(clo_memfs_malloc_path),
-                              VKI_O_RDWR | VKI_O_CREAT | VKI_O_TRUNC, 0666);
-      if (!sr_isError(sres)) {
-         memfs_fd = sr_Res(sres);
-         tl_assert(memfs_fd >= 0);
-         VG_(printf)("... ok\n");
-         memfs_page_size = VG_(clo_memfs_page_size) * 1024;
-      } else {
-         VG_(clo_memfs_malloc_path) = NULL;
-         VG_(printf)("... failed\n");
-      }
-   }
-}
-
-static SizeT MemfsRoundUp(SizeT size) {
-  SizeT new_size = size;
-  if (memfs_page_size != 0) {
-     new_size = ((size + memfs_page_size - 1) / memfs_page_size) 
-         * memfs_page_size;
-  }
-  return new_size;
-}
-
-static SysRes MemfsAlloc(SizeT size) {
-  VG_(printf)("MemfsAlloc: size=%ld base=%ld ", size, memfs_base);
-
-  /* Make sure the file is large enough.
-     Not needed for hugetlbfs, but needed for tmpfs and regular files. */
-  VG_(ftruncate)(memfs_fd, memfs_base + size);
-
-  SysRes sres = VG_(am_mmap_file_float_valgrind_flags)
-     (size, VKI_PROT_WRITE|VKI_PROT_READ, VKI_MAP_SHARED, memfs_fd, memfs_base);
-
-  memfs_base += size;
-
-  // try to access mem to fail early if something is wrong.
-  char *mem = (char*)sr_Res(sres);
-  mem[0] = 0;
-  mem[size / 2] = 0;
-  mem[size - 1] = 0;
-
-  if (sr_isError(sres)) {
-    VG_(printf)("... failed\n");
-  } else {
-    VG_(printf)("... ok; res=%p\n", (void*)sr_Res(sres));
-  }
-  return sres;
-}
-
 // Forward definition.
 static
 void deferred_reclaimSuperblock ( Arena* a, Superblock* sb);
@@ -800,28 +777,21 @@ Superblock* newSuperblock ( Arena* a, SizeT cszB )
 
    if (cszB < a->min_sblock_szB) cszB = a->min_sblock_szB;
    cszB = VG_PGROUNDUP(cszB);
- 
+
    if (cszB >= a->min_unsplittable_sblock_szB)
       unsplittable = True;
    else
       unsplittable = False;   
 
 
-   MemfsOpen();
-   cszB = MemfsRoundUp(cszB);
-
    if (a->clientmem) {
       // client allocation -- return 0 to client if it fails
-      if (memfs_fd >= 0) {
-         sres = MemfsAlloc(cszB);
-      } else {
-         if (unsplittable)
-            sres = VG_(am_mmap_anon_float_client)
-                      ( cszB, VKI_PROT_READ|VKI_PROT_WRITE|VKI_PROT_EXEC );
-         else
-            sres = VG_(am_sbrk_anon_float_client)
-                      ( cszB, VKI_PROT_READ|VKI_PROT_WRITE|VKI_PROT_EXEC );
-      }
+      if (unsplittable)
+         sres = VG_(am_mmap_anon_float_client)
+                   ( cszB, VKI_PROT_READ|VKI_PROT_WRITE|VKI_PROT_EXEC );
+      else
+         sres = VG_(am_sbrk_anon_float_client)
+                   ( cszB, VKI_PROT_READ|VKI_PROT_WRITE|VKI_PROT_EXEC );
       if (sr_isError(sres))
          return 0;
       sb = (Superblock*)(AddrH)sr_Res(sres);
@@ -833,14 +803,10 @@ Superblock* newSuperblock ( Arena* a, SizeT cszB )
       );
    } else {
       // non-client allocation -- abort if it fails
-      if (memfs_fd >= 0) {
-        sres = MemfsAlloc(cszB);
-      } else {
-         if (unsplittable)
-            sres = VG_(am_mmap_anon_float_valgrind)( cszB );
-         else
-            sres = VG_(am_sbrk_anon_float_valgrind)( cszB );
-      }
+      if (unsplittable)
+         sres = VG_(am_mmap_anon_float_valgrind)( cszB );
+      else
+         sres = VG_(am_sbrk_anon_float_valgrind)( cszB );
       if (sr_isError(sres)) {
          VG_(out_of_memory_NORETURN)("newSuperblock", cszB);
          /* NOTREACHED */
@@ -850,7 +816,7 @@ Superblock* newSuperblock ( Arena* a, SizeT cszB )
       }
    }
    vg_assert(NULL != sb);
-   //zzVALGRIND_MAKE_MEM_UNDEFINED(sb, cszB);
+   INNER_REQUEST(VALGRIND_MAKE_MEM_UNDEFINED(sb, cszB));
    vg_assert(0 == (Addr)sb % VG_MIN_MALLOC_SZB);
    sb->n_payload_bytes = cszB - sizeof(Superblock);
    sb->unsplittable = (unsplittable ? sb : NULL);
@@ -1116,6 +1082,12 @@ Bool blockSane ( Arena* a, Block* b )
    // The lo and hi size fields will be checked (indirectly) by the call
    // to get_rz_hi_byte().
    if (!a->clientmem && is_inuse_block(b)) {
+      // In the inner, for memcheck sake, temporarily mark redzone accessible.
+      INNER_REQUEST(VALGRIND_MAKE_MEM_DEFINED
+                    (b + hp_overhead_szB() + sizeof(SizeT), a->rz_szB));
+      INNER_REQUEST(VALGRIND_MAKE_MEM_DEFINED
+                    (b + get_bszB(b)
+                     - sizeof(SizeT) - a->rz_szB, a->rz_szB));
       for (i = 0; i < a->rz_szB; i++) {
          if (get_rz_lo_byte(b, i) != 
             (UByte)(((Addr)b&0xff) ^ REDZONE_LO_MASK))
@@ -1124,6 +1096,11 @@ Bool blockSane ( Arena* a, Block* b )
             (UByte)(((Addr)b&0xff) ^ REDZONE_HI_MASK))
                {BLEAT("redzone-hi");return False;}
       }      
+      INNER_REQUEST(VALGRIND_MAKE_MEM_NOACCESS
+                    (b + hp_overhead_szB() + sizeof(SizeT), a->rz_szB));
+      INNER_REQUEST(VALGRIND_MAKE_MEM_NOACCESS
+                    (b + get_bszB(b)
+                     - sizeof(SizeT) - a->rz_szB, a->rz_szB));
    }
    return True;
 #  undef BLEAT
@@ -1318,10 +1295,11 @@ static void cc_analyse_alloc_arena ( ArenaId aid )
    VG_(printf)(
       "-------- Arena \"%s\": %lu/%lu max/curr mmap'd, "
       "%llu/%llu unsplit/split sb unmmap'd, "
-      "%lu/%lu max/curr on_loan --------\n",
+      "%lu/%lu max/curr on_loan %lu rzB --------\n",
       a->name, a->stats__bytes_mmaped_max, a->stats__bytes_mmaped,
       a->stats__nreclaim_unsplit, a->stats__nreclaim_split,
-      a->stats__bytes_on_loan_max, a->stats__bytes_on_loan 
+      a->stats__bytes_on_loan_max, a->stats__bytes_on_loan,
+      a->rz_szB
    );
 
    for (j = 0; j < a->sblocks_used; ++j) {
@@ -1412,7 +1390,7 @@ void mkFreeBlock ( Arena* a, Block* b, SizeT bszB, UInt b_lno )
 {
    SizeT pszB = bszB_to_pszB(a, bszB);
    vg_assert(b_lno == pszB_to_listNo(pszB));
-   //zzVALGRIND_MAKE_MEM_UNDEFINED(b, bszB);
+   INNER_REQUEST(VALGRIND_MAKE_MEM_UNDEFINED(b, bszB));
    // Set the size fields and indicate not-in-use.
    set_bszB(b, mk_free_bszB(bszB));
 
@@ -1441,7 +1419,7 @@ void mkInuseBlock ( Arena* a, Block* b, SizeT bszB )
 {
    UInt i;
    vg_assert(bszB >= min_useful_bszB(a));
-   //zzVALGRIND_MAKE_MEM_UNDEFINED(b, bszB);
+   INNER_REQUEST(VALGRIND_MAKE_MEM_UNDEFINED(b, bszB));
    set_bszB(b, mk_inuse_bszB(bszB));
    set_prev_b(b, NULL);    // Take off freelist
    set_next_b(b, NULL);    // ditto
@@ -1668,7 +1646,26 @@ void* VG_(arena_malloc) ( ArenaId aid, HChar* cc, SizeT req_pszB )
    v = get_block_payload(a, b);
    vg_assert( (((Addr)v) & (VG_MIN_MALLOC_SZB-1)) == 0 );
 
-   /* VALGRIND_MALLOCLIKE_BLOCK(v, req_pszB, 0, False); */
+   // Which size should we pass to VALGRIND_MALLOCLIKE_BLOCK ?
+   // We have 2 possible options:
+   // 1. The final resulting usable size.
+   // 2. The initial (non-aligned) req_pszB.
+   // Memcheck implements option 2 easily, as the initial requested size
+   // is maintained in the mc_chunk data structure.
+   // This is not as easy in the core, as there is no such structure.
+   // (note: using the aligned req_pszB is not simpler than 2, as
+   //  requesting an aligned req_pszB might still be satisfied by returning
+   // a (slightly) bigger block than requested if the remaining part of 
+   // of a free block is not big enough to make a free block by itself).
+   // Implement Sol 2 can be done the following way:
+   // After having called VALGRIND_MALLOCLIKE_BLOCK, the non accessible
+   // redzone just after the block can be used to determine the
+   // initial requested size.
+   // Currently, not implemented => we use Option 1.
+   INNER_REQUEST
+      (VALGRIND_MALLOCLIKE_BLOCK(v, 
+                                 VG_(arena_malloc_usable_size)(aid, v), 
+                                 a->rz_szB, False));
 
    /* For debugging/testing purposes, fill the newly allocated area
       with a definite value in an attempt to shake out any
@@ -1862,6 +1859,31 @@ void VG_(arena_free) ( ArenaId aid, void* ptr )
          deferred_reclaimSuperblock (a, sb);
       }
 
+      // Inform that ptr has been released. We give redzone size 
+      // 0 instead of a->rz_szB as proper accessibility is done just after.
+      INNER_REQUEST(VALGRIND_FREELIKE_BLOCK(ptr, 0));
+      
+      // We need to (re-)establish the minimum accessibility needed
+      // for free list management. E.g. if block ptr has been put in a free
+      // list and a neighbour block is released afterwards, the
+      // "lo" and "hi" portions of the block ptr will be accessed to
+      // glue the 2 blocks together.
+      // We could mark the whole block as not accessible, and each time
+      // transiently mark accessible the needed lo/hi parts. Not done as this
+      // is quite complex, for very little expected additional bug detection.
+      // fully unaccessible. Note that the below marks the (possibly) merged
+      // block, not the block corresponding to the ptr argument.
+
+      // First mark the whole block unaccessible.
+      INNER_REQUEST(VALGRIND_MAKE_MEM_NOACCESS(b, b_bszB));
+      // Then mark the relevant administrative headers as defined.
+      // No need to mark the heap profile portion as defined, this is not
+      // used for free blocks.
+      INNER_REQUEST(VALGRIND_MAKE_MEM_DEFINED(b + hp_overhead_szB(),
+                                              sizeof(SizeT) + sizeof(void*)));
+      INNER_REQUEST(VALGRIND_MAKE_MEM_DEFINED(b + b_bszB
+                                              - sizeof(SizeT) - sizeof(void*),
+                                              sizeof(SizeT) + sizeof(void*)));
    } else {
       // b must be first block (i.e. no unused bytes at the beginning)
       vg_assert((Block*)sb_start == b);
@@ -1869,6 +1891,12 @@ void VG_(arena_free) ( ArenaId aid, void* ptr )
       // b must be last block (i.e. no unused bytes at the end)
       other_b = b + b_bszB;
       vg_assert(other_b-1 == (Block*)sb_end);
+
+      // Inform that ptr has been released. Redzone size value
+      // is not relevant (so we give  0 instead of a->rz_szB)
+      // as it is expected that the aspacemgr munmap will be used by
+      //  outer to mark the whole superblock as unaccessible.
+      INNER_REQUEST(VALGRIND_FREELIKE_BLOCK(ptr, 0));
 
       // Reclaim immediately the unsplittable superblock sb.
       reclaimSuperblock (a, sb);
@@ -1878,7 +1906,6 @@ void VG_(arena_free) ( ArenaId aid, void* ptr )
    sanity_check_malloc_arena(aid);
 #  endif
 
-   //zzVALGRIND_FREELIKE_BLOCK(ptr, 0);
 }
 
 
@@ -1932,10 +1959,11 @@ void* VG_(arena_memalign) ( ArenaId aid, HChar* cc,
    // this allocation; it isn't optional.
    vg_assert(cc);
 
+   // Check that the requested alignment has a plausible size.
    // Check that the requested alignment seems reasonable; that is, is
    // a power of 2.
    if (req_alignB < VG_MIN_MALLOC_SZB
-       || req_alignB > 1048576
+       || req_alignB > 16 * 1024 * 1024
        || VG_(log2)( req_alignB ) == -1 /* not a power of 2 */) {
       VG_(printf)("VG_(arena_memalign)(%p, %lu, %lu)\n"
                   "bad alignment value %lu\n"
@@ -1971,6 +1999,11 @@ void* VG_(arena_memalign) ( ArenaId aid, HChar* cc,
    /* Give up if we couldn't allocate enough space */
    if (base_p == 0)
       return 0;
+   /* base_p was marked as allocated by VALGRIND_MALLOCLIKE_BLOCK
+      inside VG_(arena_malloc). We need to indicate it is free, then
+      we need to mark it undefined to allow the below code to access is. */
+   INNER_REQUEST(VALGRIND_FREELIKE_BLOCK(base_p, a->rz_szB));
+   INNER_REQUEST(VALGRIND_MAKE_MEM_UNDEFINED(base_p, base_pszB_req));
 
    /* Block ptr for the block we are going to split. */
    base_b = get_payload_block ( a, base_p );
@@ -2023,7 +2056,8 @@ void* VG_(arena_memalign) ( ArenaId aid, HChar* cc,
 
    vg_assert( (((Addr)align_p) % req_alignB) == 0 );
 
-   //zzVALGRIND_MALLOCLIKE_BLOCK(align_p, req_pszB, 0, False);
+   INNER_REQUEST(VALGRIND_MALLOCLIKE_BLOCK(align_p,
+                                           req_pszB, a->rz_szB, False));
 
    return align_p;
 }
@@ -2114,8 +2148,6 @@ void* VG_(arena_calloc) ( ArenaId aid, HChar* cc,
    p = VG_(arena_malloc) ( aid, cc, size );
 
    VG_(memset)(p, 0, size);
-
-   //zzVALGRIND_MALLOCLIKE_BLOCK(p, size, 0, True);
 
    return p;
 }

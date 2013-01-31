@@ -7,7 +7,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2000-2011 Julian Seward
+   Copyright (C) 2000-2012 Julian Seward
       jseward@acm.org
 
    This program is free software; you can redistribute it and/or
@@ -78,7 +78,6 @@ extern Int    VG_(read)   ( Int fd, void* buf, Int count);
 extern Int    VG_(write)  ( Int fd, const void* buf, Int count);
 extern Int    VG_(pipe)   ( Int fd[2] );
 extern Off64T VG_(lseek)  ( Int fd, Off64T offset, Int whence );
-extern Int    VG_(ftruncate) ( Int fd, OffT length );
 
 extern SysRes VG_(stat)   ( const Char* file_name, struct vg_stat* buf );
 extern Int    VG_(fstat)  ( Int   fd,        struct vg_stat* buf );

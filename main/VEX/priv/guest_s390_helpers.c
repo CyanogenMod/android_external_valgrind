@@ -8,7 +8,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright IBM Corp. 2010-2011
+   Copyright IBM Corp. 2010-2012
 
    This program is free software; you can redistribute it and/or
    modify it under the terms of the GNU General Public License as
@@ -130,6 +130,8 @@ LibVEX_GuestS390X_initialise(VexGuestS390XState *state)
    state->guest_TILEN = 0;
    state->guest_IP_AT_SYSCALL = 0;
    state->guest_EMWARN = EmWarn_NONE;
+   state->host_EvC_COUNTER = 0;
+   state->host_EvC_FAILADDR = 0;
 
 /*------------------------------------------------------------*/
 /*--- Initialise thunk                                     ---*/
@@ -139,6 +141,8 @@ LibVEX_GuestS390X_initialise(VexGuestS390XState *state)
    state->guest_CC_DEP1 = 0;
    state->guest_CC_DEP2 = 0;
    state->guest_CC_NDEP = 0;
+
+   __builtin_memset(state->padding, 0x0, sizeof(state->padding));
 }
 
 
@@ -227,23 +231,6 @@ VexGuestLayout s390xGuest_layout = {
 };
 
 /*------------------------------------------------------------*/
-/*--- Dirty helper for invalid opcode 00                   ---*/
-/*------------------------------------------------------------*/
-#if defined(VGA_s390x)
-void
-s390x_dirtyhelper_00(VexGuestS390XState *guest_state)
-{
-   /* Avoid infinite loop in case SIGILL is caught. See also
-      none/tests/s390x/op_exception.c */
-   guest_state->guest_IA += 2;
-
-   asm volatile(".hword 0\n");
-}
-#else
-void s390x_dirtyhelper_00(VexGuestS390XState *guest_state) { }
-#endif
-
-/*------------------------------------------------------------*/
 /*--- Dirty helper for EXecute                             ---*/
 /*------------------------------------------------------------*/
 void
@@ -257,7 +244,8 @@ s390x_dirtyhelper_EX(ULong torun)
 /*--- Dirty helper for Clock instructions                  ---*/
 /*------------------------------------------------------------*/
 #if defined(VGA_s390x)
-ULong s390x_dirtyhelper_STCK(ULong *addr)
+ULong
+s390x_dirtyhelper_STCK(ULong *addr)
 {
    int cc;
 
@@ -268,7 +256,8 @@ ULong s390x_dirtyhelper_STCK(ULong *addr)
    return cc;
 }
 
-ULong s390x_dirtyhelper_STCKE(ULong *addr)
+ULong
+s390x_dirtyhelper_STCKE(ULong *addr)
 {
    int cc;
 
@@ -300,7 +289,7 @@ ULong s390x_dirtyhelper_STCKE(ULong *addr) {return 3;}
 /*------------------------------------------------------------*/
 #if defined(VGA_s390x)
 ULong
-s390x_dirtyhelper_STFLE(VexGuestS390XState *guest_state, HWord addr)
+s390x_dirtyhelper_STFLE(VexGuestS390XState *guest_state, ULong *addr)
 {
    ULong hoststfle[S390_NUM_FACILITY_DW], cc, num_dw, i;
    register ULong reg0 asm("0") = guest_state->guest_r0 & 0xF;  /* r0[56:63] */
@@ -321,7 +310,7 @@ s390x_dirtyhelper_STFLE(VexGuestS390XState *guest_state, HWord addr)
    guest_state->guest_r0 = reg0;
 
    for (i = 0; i < num_dw; ++i)
-      ((ULong *)addr)[i] = hoststfle[i];
+      addr[i] = hoststfle[i];
 
    return cc;
 }
@@ -329,11 +318,533 @@ s390x_dirtyhelper_STFLE(VexGuestS390XState *guest_state, HWord addr)
 #else
 
 ULong
-s390x_dirtyhelper_STFLE(VexGuestS390XState *guest_state, HWord addr)
+s390x_dirtyhelper_STFLE(VexGuestS390XState *guest_state, ULong *addr)
 {
    return 3;
 }
 #endif /* VGA_s390x */
+
+/*------------------------------------------------------------*/
+/*--- Dirty helper for the "convert unicode" insn family.  ---*/
+/*------------------------------------------------------------*/
+void
+s390x_dirtyhelper_CUxy(UChar *address, ULong data, ULong num_bytes)
+{
+   UInt i;
+
+   vassert(num_bytes >= 1 && num_bytes <= 4);
+
+   /* Store the least significant NUM_BYTES bytes in DATA left to right
+      at ADDRESS. */
+   for (i = 1; i <= num_bytes; ++i) {
+      address[num_bytes - i] = data & 0xff;
+      data >>= 8;
+   }
+}
+
+
+/*------------------------------------------------------------*/
+/*--- Clean helper for CU21.                               ---*/
+/*------------------------------------------------------------*/
+
+/* The function performs a CU21 operation. It returns three things
+   encoded in an ULong value:
+   - the converted bytes (at most 4)
+   - the number of converted bytes
+   - an indication whether LOW_SURROGATE, if any, is invalid
+
+   64      48                16           8                       0
+    +-------+-----------------+-----------+-----------------------+
+    |  0x0  | converted bytes | num_bytes | invalid_low_surrogate |
+    +-------+-----------------+-----------+-----------------------+
+*/
+ULong
+s390_do_cu21(UInt srcval, UInt low_surrogate)
+{
+   ULong retval = 0;   // shut up gcc
+   UInt b1, b2, b3, b4, num_bytes, invalid_low_surrogate = 0;
+
+   srcval &= 0xffff;
+
+   /* Determine the number of bytes in the converted value */
+   if (srcval <= 0x007f)
+      num_bytes = 1;
+   else if (srcval >= 0x0080 && srcval <= 0x07ff)
+      num_bytes = 2;
+   else if ((srcval >= 0x0800 && srcval <= 0xd7ff) ||
+            (srcval >= 0xdc00 && srcval <= 0xffff))
+      num_bytes = 3;
+   else
+      num_bytes = 4;
+
+   /* Determine UTF-8 bytes according to calculated num_bytes */
+   switch (num_bytes){
+   case 1:
+      retval = srcval;
+      break;
+
+   case 2:
+      /* order of bytes left to right: b1, b2 */
+      b1  = 0xc0;
+      b1 |= srcval >> 6;
+
+      b2  = 0x80;
+      b2 |= srcval & 0x3f;
+
+      retval = (b1 << 8) | b2;
+      break;
+
+   case 3:
+      /* order of bytes left to right: b1, b2, b3 */
+      b1  = 0xe0;
+      b1 |= srcval >> 12;
+
+      b2  = 0x80;
+      b2 |= (srcval >> 6) & 0x3f;
+
+      b3  = 0x80;
+      b3 |= srcval & 0x3f;
+
+      retval = (b1 << 16) | (b2 << 8) | b3;
+      break;
+
+   case 4: {
+      /* order of bytes left to right: b1, b2, b3, b4 */
+      UInt high_surrogate = srcval;
+      UInt uvwxy = ((high_surrogate >> 6) & 0xf) + 1;   // abcd + 1
+
+      b1  = 0xf0;
+      b1 |= uvwxy >> 2;     // uvw
+
+      b2  = 0x80;
+      b2 |= (uvwxy & 0x3) << 4;           // xy
+      b2 |= (high_surrogate >> 2) & 0xf;  // efgh
+
+      b3  = 0x80;
+      b3 |= (high_surrogate & 0x3) << 4;   // ij
+      b3 |= (low_surrogate >> 6) & 0xf;    // klmn
+
+      b4  = 0x80;
+      b4 |= low_surrogate & 0x3f;
+
+      retval = (b1 << 24) | (b2 << 16) | (b3 << 8) | b4;
+
+      invalid_low_surrogate = (low_surrogate & 0xfc00) != 0xdc00;
+      break;
+   }
+   }
+
+   /* At this point RETVAL contains the converted bytes.
+      Build up the final return value. */
+   return (retval << 16) | (num_bytes << 8) | invalid_low_surrogate;
+}
+
+
+/*------------------------------------------------------------*/
+/*--- Clean helper for CU24.                               ---*/
+/*------------------------------------------------------------*/
+
+/* The function performs a CU24 operation. It returns two things
+   encoded in an ULong value:
+   - the 4 converted bytes
+   - an indication whether LOW_SURROGATE, if any, is invalid
+
+   64     40                 8                       0
+    +------------------------+-----------------------+
+    |  0x0 | converted bytes | invalid_low_surrogate |
+    +------------------------+-----------------------+
+*/
+ULong
+s390_do_cu24(UInt srcval, UInt low_surrogate)
+{
+   ULong retval;
+   UInt invalid_low_surrogate = 0;
+
+   srcval &= 0xffff;
+
+   if ((srcval >= 0x0000 && srcval <= 0xd7ff) ||
+       (srcval >= 0xdc00 && srcval <= 0xffff)) {
+      retval = srcval;
+   } else {
+      /* D800 - DBFF */
+      UInt high_surrogate = srcval;
+      UInt uvwxy  = ((high_surrogate >> 6) & 0xf) + 1;   // abcd + 1
+      UInt efghij = high_surrogate & 0x3f;
+      UInt klmnoprst = low_surrogate & 0x3ff;
+
+      retval = (uvwxy << 16) | (efghij << 10) | klmnoprst;
+
+      invalid_low_surrogate = (low_surrogate & 0xfc00) != 0xdc00;
+   }
+
+   /* At this point RETVAL contains the converted bytes.
+      Build up the final return value. */
+   return (retval << 8) | invalid_low_surrogate;
+}
+
+
+/*------------------------------------------------------------*/
+/*--- Clean helper for CU42.                               ---*/
+/*------------------------------------------------------------*/
+
+/* The function performs a CU42 operation. It returns three things
+   encoded in an ULong value:
+   - the converted bytes (at most 4)
+   - the number of converted bytes (2 or 4; 0 if invalid character)
+   - an indication whether the UTF-32 character is invalid
+
+   64      48                16           8                   0
+    +-------+-----------------+-----------+-------------------+
+    |  0x0  | converted bytes | num_bytes | invalid_character |
+    +-------+-----------------+-----------+-------------------+
+*/
+ULong
+s390_do_cu42(UInt srcval)
+{
+   ULong retval;
+   UInt num_bytes, invalid_character = 0;
+
+   if ((srcval >= 0x0000 && srcval <= 0xd7ff) ||
+       (srcval >= 0xdc00 && srcval <= 0xffff)) {
+      retval = srcval;
+      num_bytes = 2;
+   } else if (srcval >= 0x00010000 && srcval <= 0x0010FFFF) {
+      UInt uvwxy  = srcval >> 16;
+      UInt abcd   = (uvwxy - 1) & 0xf;
+      UInt efghij = (srcval >> 10) & 0x3f;
+
+      UInt high_surrogate = (0xd8 << 8) | (abcd << 6) | efghij;
+      UInt low_surrogate  = (0xdc << 8) | (srcval & 0x3ff);
+
+      retval = (high_surrogate << 16) | low_surrogate;
+      num_bytes = 4;
+   } else {
+      /* D800 - DBFF or 00110000 - FFFFFFFF */
+      invalid_character = 1;
+      retval = num_bytes = 0;   /* does not matter; not used */
+   }
+
+   /* At this point RETVAL contains the converted bytes.
+      Build up the final return value. */
+   return (retval << 16) | (num_bytes << 8) | invalid_character;
+}
+
+
+/*------------------------------------------------------------*/
+/*--- Clean helper for CU41.                               ---*/
+/*------------------------------------------------------------*/
+
+/* The function performs a CU41 operation. It returns three things
+   encoded in an ULong value:
+   - the converted bytes (at most 4)
+   - the number of converted bytes (1, 2, 3, or 4; 0 if invalid character)
+   - an indication whether the UTF-32 character is invalid
+
+   64      48                16           8                   0
+    +-------+-----------------+-----------+-------------------+
+    |  0x0  | converted bytes | num_bytes | invalid_character |
+    +-------+-----------------+-----------+-------------------+
+*/
+ULong
+s390_do_cu41(UInt srcval)
+{
+   ULong retval;
+   UInt num_bytes, invalid_character = 0;
+
+   if (srcval <= 0x7f) {
+      retval = srcval;
+      num_bytes = 1;
+   } else if (srcval >= 0x80 && srcval <= 0x7ff) {
+      UInt fghij  = srcval >> 6;
+      UInt klmnop = srcval & 0x3f;
+      UInt byte1  = (0xc0 | fghij);
+      UInt byte2  = (0x80 | klmnop);
+
+      retval = (byte1 << 8) | byte2;
+      num_bytes = 2;
+   } else if ((srcval >= 0x800  && srcval <= 0xd7ff) ||
+              (srcval >= 0xdc00 && srcval <= 0xffff)) {
+      UInt abcd   = srcval >> 12;
+      UInt efghij = (srcval >> 6) & 0x3f;
+      UInt klmnop = srcval & 0x3f;
+      UInt byte1  = 0xe0 | abcd;
+      UInt byte2  = 0x80 | efghij;
+      UInt byte3  = 0x80 | klmnop;
+
+      retval = (byte1 << 16) | (byte2 << 8) | byte3;
+      num_bytes = 3;
+   } else if (srcval >= 0x10000 && srcval <= 0x10ffff) {
+      UInt uvw    = (srcval >> 18) & 0x7;
+      UInt xy     = (srcval >> 16) & 0x3;
+      UInt efgh   = (srcval >> 12) & 0xf;
+      UInt ijklmn = (srcval >>  6) & 0x3f;
+      UInt opqrst = srcval & 0x3f;
+      UInt byte1  = 0xf0 | uvw;
+      UInt byte2  = 0x80 | (xy << 4) | efgh;
+      UInt byte3  = 0x80 | ijklmn;
+      UInt byte4  = 0x80 | opqrst;
+
+      retval = (byte1 << 24) | (byte2 << 16) | (byte3 << 8) | byte4;
+      num_bytes = 4;
+   } else {
+      /* d800 ... dbff or 00110000 ... ffffffff */
+      invalid_character = 1;
+
+      retval = 0;
+      num_bytes = 0;
+   }
+
+   /* At this point RETVAL contains the converted bytes.
+      Build up the final return value. */
+   return (retval << 16) | (num_bytes << 8) | invalid_character;
+}
+
+
+/*------------------------------------------------------------*/
+/*--- Clean helpers for CU12.                              ---*/
+/*------------------------------------------------------------*/
+
+/* The function looks at the first byte of an UTF-8 character and returns
+   two things encoded in an ULong value:
+
+   - the number of bytes that need to be read
+   - an indication whether the UTF-8 character is invalid
+
+   64      16           8                   0
+    +-------------------+-------------------+
+    |  0x0  | num_bytes | invalid_character |
+    +-------+-----------+-------------------+
+*/
+ULong
+s390_do_cu12_cu14_helper1(UInt byte, UInt etf3_and_m3_is_1)
+{
+   vassert(byte <= 0xff);
+
+   /* Check whether the character is invalid */
+   if (byte >= 0x80 && byte <= 0xbf) return 1;
+   if (byte >= 0xf8) return 1;
+
+   if (etf3_and_m3_is_1) {
+      if (byte == 0xc0 || byte == 0xc1) return 1;
+      if (byte >= 0xf5 && byte <= 0xf7) return 1;
+   }
+
+   /* Character is valid */
+   if (byte <= 0x7f) return 1 << 8;   // 1 byte
+   if (byte <= 0xdf) return 2 << 8;   // 2 bytes
+   if (byte <= 0xef) return 3 << 8;   // 3 bytes
+
+   return 4 << 8;  // 4 bytes
+}
+
+/* The function performs a CU12 or CU14 operation. BYTE1, BYTE2, etc are the
+   bytes as read from the input stream, left to right. BYTE1 is a valid
+   byte. The function returns three things encoded in an ULong value:
+
+   - the converted bytes
+   - the number of converted bytes (2 or 4; 0 if invalid character)
+   - an indication whether the UTF-16 character is invalid
+
+   64      48                16           8                   0
+    +-------+-----------------+-----------+-------------------+
+    |  0x0  | converted bytes | num_bytes | invalid_character |
+    +-------+-----------------+-----------+-------------------+
+*/
+static ULong
+s390_do_cu12_cu14_helper2(UInt byte1, UInt byte2, UInt byte3, UInt byte4,
+                          ULong stuff, Bool is_cu12)
+{
+   UInt num_src_bytes = stuff >> 1, etf3_and_m3_is_1 = stuff & 0x1;
+   UInt num_bytes = 0, invalid_character = 0;
+   ULong retval = 0;
+
+   vassert(num_src_bytes <= 4);
+
+   switch (num_src_bytes) {
+   case 1:
+      num_bytes = 2;
+      retval = byte1;
+      break;
+
+   case 2: {
+      /* Test validity */
+      if (etf3_and_m3_is_1) {
+         if (byte2 < 0x80 || byte2 > 0xbf) {
+            invalid_character = 1;
+            break;
+         }
+      }
+
+      /* OK */
+      UInt fghij  = byte1 & 0x1f;
+      UInt klmnop = byte2 & 0x3f;
+
+      num_bytes = 2;
+      retval = (fghij << 6) | klmnop;
+      break;
+   }
+
+   case 3: {
+      /* Test validity */
+      if (etf3_and_m3_is_1) {
+         if (byte1 == 0xe0) {
+            if ((byte2 < 0xa0 || byte2 > 0xbf) ||
+                (byte3 < 0x80 || byte3 > 0xbf)) {
+               invalid_character = 1;
+               break;
+            }
+         }
+         if ((byte1 >= 0xe1 && byte1 <= 0xec) ||
+             byte1 == 0xee || byte1 == 0xef) {
+            if ((byte2 < 0x80 || byte2 > 0xbf) ||
+                (byte3 < 0x80 || byte3 > 0xbf)) {
+               invalid_character = 1;
+               break;
+            }
+         }
+         if (byte1 == 0xed) {
+            if ((byte2 < 0x80 || byte2 > 0x9f) ||
+                (byte3 < 0x80 || byte3 > 0xbf)) {
+               invalid_character = 1;
+               break;
+            }
+         }
+      }
+
+      /* OK */
+      UInt abcd   = byte1 & 0xf;
+      UInt efghij = byte2 & 0x3f;
+      UInt klmnop = byte3 & 0x3f;
+
+      num_bytes = 2;
+      retval = (abcd << 12) | (efghij << 6) | klmnop;
+      break;
+   }
+
+   case 4: {
+      /* Test validity */
+      if (etf3_and_m3_is_1) {
+         if (byte1 == 0xf0) {
+            if ((byte2 < 0x90 || byte2 > 0xbf) ||
+                (byte3 < 0x80 || byte3 > 0xbf) ||
+                (byte4 < 0x80 || byte4 > 0xbf)) {
+               invalid_character = 1;
+               break;
+            }
+         }
+         if (byte1 == 0xf1 || byte1 == 0xf2 || byte1 == 0xf3) {
+            if ((byte2 < 0x80 || byte2 > 0xbf) ||
+                (byte3 < 0x80 || byte3 > 0xbf) ||
+                (byte4 < 0x80 || byte4 > 0xbf)) {
+               invalid_character = 1;
+               break;
+            }
+         }
+         if (byte1 == 0xf4) {
+            if ((byte2 < 0x80 || byte2 > 0x8f) ||
+                (byte3 < 0x80 || byte3 > 0xbf) ||
+                (byte4 < 0x80 || byte4 > 0xbf)) {
+               invalid_character = 1;
+               break;
+            }
+         }
+      }
+
+      /* OK */
+      UInt uvw    = byte1 & 0x7;
+      UInt xy     = (byte2 >> 4) & 0x3;
+      UInt uvwxy  = (uvw << 2) | xy;
+      UInt efgh   = byte2 & 0xf;
+      UInt ij     = (byte3 >> 4) & 0x3;
+      UInt klmn   = byte3 & 0xf;
+      UInt opqrst = byte4 & 0x3f;
+      
+      if (is_cu12) {
+         UInt abcd = (uvwxy - 1) & 0xf;
+         UInt high_surrogate = (0xd8 << 8) | (abcd << 6) | (efgh << 2) | ij;
+         UInt low_surrogate  = (0xdc << 8) | (klmn << 6) | opqrst;
+
+         num_bytes = 4;
+         retval = (high_surrogate << 16) | low_surrogate;
+      } else {
+         num_bytes = 4;
+         retval =
+            (uvwxy << 16) | (efgh << 12) | (ij << 10) | (klmn << 6) | opqrst;
+      }
+      break;
+   }
+   }
+
+   if (! is_cu12) num_bytes = 4;   // for CU14, by definition
+
+   /* At this point RETVAL contains the converted bytes.
+      Build up the final return value. */
+   return (retval << 16) | (num_bytes << 8) | invalid_character;
+}
+
+ULong
+s390_do_cu12_helper2(UInt byte1, UInt byte2, UInt byte3, UInt byte4,
+                     ULong stuff)
+{
+   return s390_do_cu12_cu14_helper2(byte1, byte2, byte3, byte4, stuff,
+                                    /* is_cu12 = */ 1);
+}
+
+ULong
+s390_do_cu14_helper2(UInt byte1, UInt byte2, UInt byte3, UInt byte4,
+                     ULong stuff)
+{
+   return s390_do_cu12_cu14_helper2(byte1, byte2, byte3, byte4, stuff,
+                                    /* is_cu12 = */ 0);
+}
+
+
+/*------------------------------------------------------------*/
+/*--- Clean helper for "convert to binary".                ---*/
+/*------------------------------------------------------------*/
+#if defined(VGA_s390x)
+UInt
+s390_do_cvb(ULong decimal)
+{
+   UInt binary;
+
+   __asm__ volatile (
+        "cvb %[result],%[input]\n\t"
+          : [result] "=d"(binary)
+          : [input] "m"(decimal)
+   );
+
+   return binary;
+}
+
+#else
+UInt s390_do_cvb(ULong decimal) { return 0; }
+#endif
+
+
+/*------------------------------------------------------------*/
+/*--- Clean helper for "convert to decimal".                ---*/
+/*------------------------------------------------------------*/
+#if defined(VGA_s390x)
+ULong
+s390_do_cvd(ULong binary_in)
+{
+   UInt binary = binary_in & 0xffffffffULL;
+   ULong decimal;
+
+   __asm__ volatile (
+        "cvd %[input],%[result]\n\t"
+          : [result] "=m"(decimal)
+          : [input] "d"(binary)
+   );
+
+   return decimal;
+}
+
+#else
+ULong s390_do_cvd(ULong binary) { return 0; }
+#endif
+
 
 /*------------------------------------------------------------*/
 /*--- Helper for condition code.                           ---*/
@@ -512,25 +1023,20 @@ s390_calculate_cc(ULong cc_op, ULong cc_dep1, ULong cc_dep2, ULong cc_ndep)
       /* Like signed comparison with 0 */
       return S390_CC_FOR_BINARY("cgr", cc_dep1, (Long)0);
 
-   case S390_CC_OP_TEST_AND_SET:
-      /* Shift the sign bit into the LSB. Note, that the tested value is an
-         8-bit value which has been zero-extended to 32/64 bit. */
-      return cc_dep1 >> 7;
-
    case S390_CC_OP_LOAD_POSITIVE_32:
       __asm__ volatile (
            "lpr  %[result],%[op]\n\t"
-           "ipm  %[psw]\n\t"            : [psw] "=d"(psw), [result] "=d"(cc_dep1)
-                                        : [op] "d"(cc_dep1)
-                                        : "cc");
+           "ipm  %[psw]\n\t"         : [psw] "=d"(psw), [result] "=d"(cc_dep1)
+                                     : [op] "d"(cc_dep1)
+                                     : "cc");
       return psw >> 28;   /* cc */
 
    case S390_CC_OP_LOAD_POSITIVE_64:
       __asm__ volatile (
            "lpgr %[result],%[op]\n\t"
-           "ipm  %[psw]\n\t"            : [psw] "=d"(psw), [result] "=d"(cc_dep1)
-                                        : [op] "d"(cc_dep1)
-                                        : "cc");
+           "ipm  %[psw]\n\t"         : [psw] "=d"(psw), [result] "=d"(cc_dep1)
+                                     : [op] "d"(cc_dep1)
+                                     : "cc");
       return psw >> 28;   /* cc */
 
    case S390_CC_OP_TEST_UNDER_MASK_8: {
@@ -578,7 +1084,8 @@ s390_calculate_cc(ULong cc_op, ULong cc_dep1, ULong cc_dep2, ULong cc_ndep)
            "lr   2,%[high]\n\t"
            "lr   3,%[low]\n\t"
            "slda 2,0(%[amount])\n\t"
-           "ipm %[psw]\n\t"             : [psw] "=d"(psw), [high] "+d"(high), [low] "+d"(low)
+           "ipm %[psw]\n\t"             : [psw] "=d"(psw), [high] "+d"(high),
+                                          [low] "+d"(low)
                                         : [amount] "a"(cc_dep2)
                                         : "cc", "r2", "r3");
       return psw >> 28;   /* cc */
@@ -656,13 +1163,6 @@ s390_calculate_cc(ULong cc_op, ULong cc_dep1, ULong cc_dep2, ULong cc_ndep)
    }
 #endif
    vpanic("s390_calculate_cc");
-}
-
-
-UInt
-s390_calculate_icc(ULong op, ULong dep1, ULong dep2)
-{
-   return s390_calculate_cc(op, dep1, dep2, 0 /* unused */);
 }
 
 
@@ -1229,26 +1729,6 @@ guest_s390x_spechelper(HChar *function_name, IRExpr **args,
                                       unop(Iop_64to8, cc_dep1)),
                                 mkU64(8)),
                           mkU64(0)));
-      }
-
-      /* S390_CC_OP_TEST_AND_SET */
-      if (cc_op == S390_CC_OP_TEST_AND_SET) {
-         /* cc_dep1 is the zero-extended loaded value
-
-            cc == 0  --> leftmost bit is zero  (cond == 8)
-            cc == 1  --> leftmost bit is one   (cond == 4)
-
-            As cc is either 0 or 1, only the two leftmost bits of the mask
-            are relevant. */
-         IRExpr *bit = binop(Iop_Shr64, cc_dep1, mkU8(7));
-
-         switch (cond & (8 + 4)) {
-         case 0:     return mkU32(0);
-         case 4:     return unop(Iop_1Uto32, binop(Iop_CmpNE64, bit, mkU64(0)));
-         case 8:     return unop(Iop_1Uto32, binop(Iop_CmpEQ64, bit, mkU64(0)));
-         case 8 + 4: return mkU32(1);
-         }
-         /* not reached */
       }
 
 missed:

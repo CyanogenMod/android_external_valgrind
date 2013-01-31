@@ -7,7 +7,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2000-2011 Julian Seward
+   Copyright (C) 2000-2012 Julian Seward
       jseward@acm.org
 
    This program is free software; you can redistribute it and/or
@@ -75,6 +75,17 @@
 #  define VG_ELF_MACHINE      EM_S390
 #  define VG_ELF_CLASS        ELFCLASS64
 #  undef  VG_PLAT_USES_PPCTOC
+#elif defined(VGP_mips32_linux)
+#  if defined (VG_LITTLEENDIAN)
+#    define VG_ELF_DATA2XXX   ELFDATA2LSB
+#  elif defined (VG_BIGENDIAN)
+#    define VG_ELF_DATA2XXX   ELFDATA2MSB
+#  else
+#    error "Unknown endianness"
+#  endif
+#  define VG_ELF_MACHINE      EM_MIPS
+#  define VG_ELF_CLASS        ELFCLASS32
+#  undef  VG_PLAT_USES_PPCTOC
 #else
 #  error Unknown platform
 #endif
@@ -103,6 +114,11 @@
 #  define VG_INSTR_PTR        guest_IA
 #  define VG_STACK_PTR        guest_SP
 #  define VG_FRAME_PTR        guest_FP
+#  define VG_FPC_REG          guest_fpc
+#elif defined(VGA_mips32)
+#  define VG_INSTR_PTR        guest_PC
+#  define VG_STACK_PTR        guest_r29
+#  define VG_FRAME_PTR        guest_r30
 #else
 #  error Unknown arch
 #endif
@@ -111,6 +127,7 @@
 // Offsets for the Vex state
 #define VG_O_STACK_PTR        (offsetof(VexGuestArchState, VG_STACK_PTR))
 #define VG_O_INSTR_PTR        (offsetof(VexGuestArchState, VG_INSTR_PTR))
+#define VG_O_FPC_REG          (offsetof(VexGuestArchState, VG_FPC_REG))
 
 
 //-------------------------------------------------------------
@@ -167,6 +184,10 @@ void VG_(get_UnwindStartRegs) ( /*OUT*/UnwindStartRegs* regs,
                       call VG_(machine_arm_set_has_NEON)
 
           then safe to use VG_(machine_get_VexArchInfo) 
+   -------------
+   s390x: initially:  call VG_(machine_get_hwcaps)
+
+          then safe to use VG_(machine_get_VexArchInfo)
 
    VG_(machine_get_hwcaps) may use signals (although it attempts to
    leave signal state unchanged) and therefore should only be

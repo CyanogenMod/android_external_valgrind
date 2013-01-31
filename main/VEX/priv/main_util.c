@@ -7,7 +7,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2004-2011 OpenWorks LLP
+   Copyright (C) 2004-2012 OpenWorks LLP
       info@open-works.net
 
    This program is free software; you can redistribute it and/or
@@ -252,6 +252,15 @@ Bool vex_streq ( const HChar* s1, const HChar* s2 )
       s1++;
       s2++;
    }
+}
+
+void vex_bzero ( void* sV, UInt n )
+{
+   UInt i;
+   UChar* s = (UChar*)sV;
+   /* No laughing, please.  Just don't call this too often.  Thank you
+      for your attention. */
+   for (i = 0; i < n; i++) s[i] = 0;
 }
 
 

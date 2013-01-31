@@ -8,7 +8,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright IBM Corp. 2010-2011
+   Copyright IBM Corp. 2010-2012
 
    This program is free software; you can redistribute it and/or
    modify it under the terms of the GNU General Public License as
@@ -34,9 +34,7 @@
 
 #include "libvex_basictypes.h"
 #include "libvex_ir.h"
-#include "libvex_guest_s390x.h"      /* VexGuestS390XState */
 #include "libvex.h"                  /* needed for bb_to_IR.h */
-#include "libvex_guest_offsets.h"    /* OFFSET_s390x_SYSNO */
 #include "libvex_s390x_common.h"
 #include "main_util.h"               /* vassert */
 #include "main_globals.h"            /* vex_traceflags */
@@ -50,6 +48,8 @@
 /*--- Forward declarations                                 ---*/
 /*------------------------------------------------------------*/
 static UInt s390_decode_and_irgen(UChar *, UInt, DisResult *);
+static void s390_irgen_xonc(IROp, IRTemp, IRTemp, IRTemp);
+static void s390_irgen_CLC_EX(IRTemp, IRTemp, IRTemp);
 
 
 /*------------------------------------------------------------*/
@@ -84,6 +84,7 @@ typedef enum {
    S390_DECODE_UNKNOWN_SPECIAL_INSN,
    S390_DECODE_ERROR
 } s390_decode_t;
+
 
 /*------------------------------------------------------------*/
 /*--- Helpers for constructing IR.                         ---*/
@@ -121,11 +122,25 @@ mkexpr(IRTemp tmp)
    return IRExpr_RdTmp(tmp);
 }
 
+/* Generate an expression node for an address. */
+static __inline__ IRExpr *
+mkaddr_expr(Addr64 addr)
+{
+   return IRExpr_Const(IRConst_U64(addr));
+}
+
 /* Add a statement that assigns to a temporary */
 static __inline__ void
 assign(IRTemp dst, IRExpr *expr)
 {
    stmt(IRStmt_WrTmp(dst, expr));
+}
+
+/* Write an address into the guest_IA */
+static __inline__ void
+put_IA(IRExpr *address)
+{
+   stmt(IRStmt_Put(S390X_GUEST_OFFSET(guest_IA), address));
 }
 
 /* Create a temporary of the given type and assign the expression to it */
@@ -243,10 +258,10 @@ load(IRType type, IRExpr *addr)
 static void
 call_function(IRExpr *callee_address)
 {
-   irsb->next = callee_address;
-   irsb->jumpkind = Ijk_Call;
+   put_IA(callee_address);
 
-   dis_res->whatNext = Dis_StopHere;
+   dis_res->whatNext    = Dis_StopHere;
+   dis_res->jk_StopHere = Ijk_Call;
 }
 
 /* Function call with known target. */
@@ -257,9 +272,10 @@ call_function_and_chase(Addr64 callee_address)
       dis_res->whatNext   = Dis_ResteerU;
       dis_res->continueAt = callee_address;
    } else {
-      irsb->next = mkU64(callee_address);
-      irsb->jumpkind = Ijk_Call;
+      put_IA(mkaddr_expr(callee_address));
+
       dis_res->whatNext = Dis_StopHere;
+      dis_res->jk_StopHere = Ijk_Call;
    }
 }
 
@@ -267,10 +283,10 @@ call_function_and_chase(Addr64 callee_address)
 static void
 return_from_function(IRExpr *return_address)
 {
-   irsb->next = return_address;
-   irsb->jumpkind = Ijk_Ret;
+   put_IA(return_address);
 
-   dis_res->whatNext = Dis_StopHere;
+   dis_res->whatNext    = Dis_StopHere;
+   dis_res->jk_StopHere = Ijk_Ret;
 }
 
 /* A conditional branch whose target is not known at instrumentation time.
@@ -281,21 +297,21 @@ return_from_function(IRExpr *return_address)
 
    if (! condition) goto next_instruction;
    goto computed_target;
-
-   This inversion is being handled at code generation time. So we just
-   take the condition here as is.
 */
 static void
-if_not_condition_goto_computed(IRExpr *condition, IRExpr *target)
+if_condition_goto_computed(IRExpr *condition, IRExpr *target)
 {
    vassert(typeOfIRExpr(irsb->tyenv, condition) == Ity_I1);
 
-   stmt(IRStmt_Exit(condition, Ijk_Boring, IRConst_U64(guest_IA_next_instr)));
+   condition = unop(Iop_Not1, condition);
 
-   irsb->next = target;
-   irsb->jumpkind = Ijk_Boring;
+   stmt(IRStmt_Exit(condition, Ijk_Boring, IRConst_U64(guest_IA_next_instr),
+                    S390X_GUEST_OFFSET(guest_IA)));
 
-   dis_res->whatNext = Dis_StopHere;
+   put_IA(target);
+
+   dis_res->whatNext    = Dis_StopHere;
+   dis_res->jk_StopHere = Ijk_Boring;
 }
 
 /* A conditional branch whose target is known at instrumentation time. */
@@ -304,8 +320,13 @@ if_condition_goto(IRExpr *condition, Addr64 target)
 {
    vassert(typeOfIRExpr(irsb->tyenv, condition) == Ity_I1);
 
-   stmt(IRStmt_Exit(condition, Ijk_Boring, IRConst_U64(target)));
-   dis_res->whatNext = Dis_Continue;
+   stmt(IRStmt_Exit(condition, Ijk_Boring, IRConst_U64(target),
+                    S390X_GUEST_OFFSET(guest_IA)));
+
+   put_IA(mkaddr_expr(guest_IA_next_instr));
+
+   dis_res->whatNext    = Dis_StopHere;
+   dis_res->jk_StopHere = Ijk_Boring;
 }
 
 /* An unconditional branch. Target may or may not be known at instrumentation
@@ -313,23 +334,26 @@ if_condition_goto(IRExpr *condition, Addr64 target)
 static void
 always_goto(IRExpr *target)
 {
-   irsb->next = target;
-   irsb->jumpkind = Ijk_Boring;
+   put_IA(target);
 
-   dis_res->whatNext = Dis_StopHere;
+   dis_res->whatNext    = Dis_StopHere;
+   dis_res->jk_StopHere = Ijk_Boring;
 }
+
 
 /* An unconditional branch to a known target. */
 static void
 always_goto_and_chase(Addr64 target)
 {
    if (resteer_fn(resteer_data, target)) {
+      /* Follow into the target */
       dis_res->whatNext   = Dis_ResteerU;
       dis_res->continueAt = target;
    } else {
-      irsb->next = mkU64(target);
-      irsb->jumpkind = Ijk_Boring;
-      dis_res->whatNext = Dis_StopHere;
+      put_IA(mkaddr_expr(target));
+
+      dis_res->whatNext    = Dis_StopHere;
+      dis_res->jk_StopHere = Ijk_Boring;
    }
 }
 
@@ -338,19 +362,67 @@ static void
 system_call(IRExpr *sysno)
 {
    /* Store the system call number in the pseudo register. */
-   stmt(IRStmt_Put(OFFSET_s390x_SYSNO, sysno));
+   stmt(IRStmt_Put(S390X_GUEST_OFFSET(guest_SYSNO), sysno));
 
    /* Store the current IA into guest_IP_AT_SYSCALL. libvex_ir.h says so. */
-   stmt(IRStmt_Put(OFFSET_s390x_IP_AT_SYSCALL, mkU64(guest_IA_curr_instr)));
+   stmt(IRStmt_Put(S390X_GUEST_OFFSET(guest_IP_AT_SYSCALL),
+                   mkU64(guest_IA_curr_instr)));
+
+   put_IA(mkaddr_expr(guest_IA_next_instr));
 
    /* It's important that all ArchRegs carry their up-to-date value
       at this point.  So we declare an end-of-block here, which
       forces any TempRegs caching ArchRegs to be flushed. */
-   irsb->next = mkU64(guest_IA_next_instr);
+   dis_res->whatNext    = Dis_StopHere;
+   dis_res->jk_StopHere = Ijk_Sys_syscall;
+}
 
-   irsb->jumpkind = Ijk_Sys_syscall;
+/* A side exit that branches back to the current insn if CONDITION is
+   true. Does not set DisResult. */
+static void
+iterate_if(IRExpr *condition)
+{
+   vassert(typeOfIRExpr(irsb->tyenv, condition) == Ity_I1);
 
-   dis_res->whatNext = Dis_StopHere;
+   stmt(IRStmt_Exit(condition, Ijk_Boring, IRConst_U64(guest_IA_curr_instr),
+                    S390X_GUEST_OFFSET(guest_IA)));
+}
+
+/* A side exit that branches back to the current insn.
+   Does not set DisResult. */
+static __inline__ void
+iterate(void)
+{
+   iterate_if(IRExpr_Const(IRConst_U1(True)));
+}
+
+/* A side exit that branches back to the insn immediately following the
+   current insn if CONDITION is true. Does not set DisResult. */
+static void
+next_insn_if(IRExpr *condition)
+{
+   vassert(typeOfIRExpr(irsb->tyenv, condition) == Ity_I1);
+
+   stmt(IRStmt_Exit(condition, Ijk_Boring, IRConst_U64(guest_IA_next_instr),
+                    S390X_GUEST_OFFSET(guest_IA)));
+}
+
+/* Convenience function to restart the current insn */
+static void
+restart_if(IRExpr *condition)
+{
+   vassert(typeOfIRExpr(irsb->tyenv, condition) == Ity_I1);
+
+   stmt(IRStmt_Exit(condition, Ijk_TInval, IRConst_U64(guest_IA_curr_instr),
+                    S390X_GUEST_OFFSET(guest_IA)));
+}
+
+/* Convenience function to yield to thread scheduler */
+static void
+yield_if(IRExpr *condition)
+{
+   stmt(IRStmt_Exit(condition, Ijk_Yield, IRConst_U64(guest_IA_next_instr),
+                    S390X_GUEST_OFFSET(guest_IA)));
 }
 
 /* Encode the s390 rounding mode as it appears in the m3/m4 fields of certain
@@ -393,11 +465,29 @@ put_fpr_pair(UInt archreg, IRExpr *expr)
 }
 
 
-/* Flags thunk offsets */
-#define S390X_GUEST_OFFSET_CC_OP    S390X_GUEST_OFFSET(guest_CC_OP)
-#define S390X_GUEST_OFFSET_CC_DEP1  S390X_GUEST_OFFSET(guest_CC_DEP1)
-#define S390X_GUEST_OFFSET_CC_DEP2  S390X_GUEST_OFFSET(guest_CC_DEP2)
-#define S390X_GUEST_OFFSET_CC_NDEP  S390X_GUEST_OFFSET(guest_CC_NDEP)
+/*------------------------------------------------------------*/
+/*--- IR Debugging aids.                                   ---*/
+/*------------------------------------------------------------*/
+#if 0
+
+static ULong
+s390_do_print(HChar *text, ULong value)
+{
+   vex_printf("%s %llu\n", text, value);
+   return 0;
+}
+
+static void
+s390_print(HChar *text, IRExpr *value)
+{
+   IRDirty *d;
+   
+   d = unsafeIRDirty_0_N(0 /* regparms */, "s390_do_print", &s390_do_print,
+                         mkIRExprVec_2(mkU64((ULong)text), value));
+   stmt(IRStmt_Dirty(d));
+}
+#endif
+
 
 /*------------------------------------------------------------*/
 /*--- Build the flags thunk.                               ---*/
@@ -410,10 +500,10 @@ s390_cc_thunk_fill(IRExpr *op, IRExpr *dep1, IRExpr *dep2, IRExpr *ndep)
 {
    UInt op_off, dep1_off, dep2_off, ndep_off;
 
-   op_off   = S390X_GUEST_OFFSET_CC_OP;
-   dep1_off = S390X_GUEST_OFFSET_CC_DEP1;
-   dep2_off = S390X_GUEST_OFFSET_CC_DEP2;
-   ndep_off = S390X_GUEST_OFFSET_CC_NDEP;
+   op_off   = S390X_GUEST_OFFSET(guest_CC_OP);
+   dep1_off = S390X_GUEST_OFFSET(guest_CC_DEP1);
+   dep2_off = S390X_GUEST_OFFSET(guest_CC_DEP2);
+   ndep_off = S390X_GUEST_OFFSET(guest_CC_NDEP);
 
    stmt(IRStmt_Put(op_off,   op));
    stmt(IRStmt_Put(dep1_off, dep1));
@@ -583,10 +673,10 @@ s390_call_calculate_cc(void)
 {
    IRExpr **args, *call, *op, *dep1, *dep2, *ndep;
 
-   op   = IRExpr_Get(S390X_GUEST_OFFSET_CC_OP,   Ity_I64);
-   dep1 = IRExpr_Get(S390X_GUEST_OFFSET_CC_DEP1, Ity_I64);
-   dep2 = IRExpr_Get(S390X_GUEST_OFFSET_CC_DEP2, Ity_I64);
-   ndep = IRExpr_Get(S390X_GUEST_OFFSET_CC_NDEP, Ity_I64);
+   op   = IRExpr_Get(S390X_GUEST_OFFSET(guest_CC_OP),   Ity_I64);
+   dep1 = IRExpr_Get(S390X_GUEST_OFFSET(guest_CC_DEP1), Ity_I64);
+   dep2 = IRExpr_Get(S390X_GUEST_OFFSET(guest_CC_DEP2), Ity_I64);
+   ndep = IRExpr_Get(S390X_GUEST_OFFSET(guest_CC_NDEP), Ity_I64);
 
    args = mkIRExprVec_4(op, dep1, dep2, ndep);
    call = mkIRExprCCall(Ity_I32, 0 /*regparm*/,
@@ -602,21 +692,35 @@ s390_call_calculate_cc(void)
 /* Build IR to calculate the internal condition code for a "compare and branch"
    insn. Returns an expression of type Ity_I32 */
 static IRExpr *
-s390_call_calculate_icc(UInt opc, IRTemp op1, IRTemp op2, Bool sign_extend)
+s390_call_calculate_icc(UInt m, UInt opc, IRTemp op1, IRTemp op2)
 {
-   IRExpr **args, *call, *op, *dep1, *dep2;
+   IRExpr **args, *call, *op, *dep1, *dep2, *mask;
 
+   switch (opc) {
+   case S390_CC_OP_SIGNED_COMPARE:
+      dep1 = s390_cc_widen(op1, True);
+      dep2 = s390_cc_widen(op2, True);
+      break;
+
+   case S390_CC_OP_UNSIGNED_COMPARE:
+      dep1 = s390_cc_widen(op1, False);
+      dep2 = s390_cc_widen(op2, False);
+      break;
+
+   default:
+      vpanic("s390_call_calculate_icc");
+   }
+
+   mask = mkU64(m);
    op   = mkU64(opc);
-   dep1 = s390_cc_widen(op1, sign_extend);
-   dep2 = s390_cc_widen(op2, sign_extend);
 
-   args = mkIRExprVec_3(op, dep1, dep2);
+   args = mkIRExprVec_5(mask, op, dep1, dep2, mkU64(0) /* unused */);
    call = mkIRExprCCall(Ity_I32, 0 /*regparm*/,
-                        "s390_calculate_icc", &s390_calculate_icc, args);
+                        "s390_calculate_cond", &s390_calculate_cond, args);
 
-   /* Exclude OP from definedness checking.  We're only
-      interested in DEP1 and DEP2. */
-   call->Iex.CCall.cee->mcx_mask = (1<<0);
+   /* Exclude the requested condition, OP and NDEP from definedness
+      checking.  We're only interested in DEP1 and DEP2. */
+   call->Iex.CCall.cee->mcx_mask = (1<<0) | (1<<1) | (1<<4);
 
    return call;
 }
@@ -629,10 +733,10 @@ s390_call_calculate_cond(UInt m)
    IRExpr **args, *call, *op, *dep1, *dep2, *ndep, *mask;
 
    mask = mkU64(m);
-   op   = IRExpr_Get(S390X_GUEST_OFFSET_CC_OP,   Ity_I64);
-   dep1 = IRExpr_Get(S390X_GUEST_OFFSET_CC_DEP1, Ity_I64);
-   dep2 = IRExpr_Get(S390X_GUEST_OFFSET_CC_DEP2, Ity_I64);
-   ndep = IRExpr_Get(S390X_GUEST_OFFSET_CC_NDEP, Ity_I64);
+   op   = IRExpr_Get(S390X_GUEST_OFFSET(guest_CC_OP),   Ity_I64);
+   dep1 = IRExpr_Get(S390X_GUEST_OFFSET(guest_CC_DEP1), Ity_I64);
+   dep2 = IRExpr_Get(S390X_GUEST_OFFSET(guest_CC_DEP2), Ity_I64);
+   ndep = IRExpr_Get(S390X_GUEST_OFFSET(guest_CC_NDEP), Ity_I64);
 
    args = mkIRExprVec_5(mask, op, dep1, dep2, ndep);
    call = mkIRExprCCall(Ity_I32, 0 /*regparm*/,
@@ -655,14 +759,8 @@ s390_call_calculate_cond(UInt m)
         s390_cc_thunk_put3(op,dep1,dep2,ndep,False)
 #define s390_cc_thunk_putSSS(op,dep1,dep2,ndep) \
         s390_cc_thunk_put3(op,dep1,dep2,ndep,True)
-#define s390_call_calculate_iccZZ(op,dep1,dep2) \
-        s390_call_calculate_icc(op,dep1,dep2,False)
-#define s390_call_calculate_iccSS(op,dep1,dep2) \
-        s390_call_calculate_icc(op,dep1,dep2,True)
 
 
-#define OFFB_TISTART   S390X_GUEST_OFFSET(guest_TISTART)
-#define OFFB_TILEN     S390X_GUEST_OFFSET(guest_TILEN)
 
 
 /*------------------------------------------------------------*/
@@ -1585,6 +1683,16 @@ s390_format_RRE_F0(HChar *(*irgen)(UChar r1),
 }
 
 static void
+s390_format_RRF_M0RERE(HChar *(*irgen)(UChar m3, UChar r1, UChar r2),
+                       UChar m3, UChar r1, UChar r2)
+{
+   HChar *mnm = irgen(m3, r1, r2);
+
+   if (UNLIKELY(vex_traceflags & VEX_TRACE_FE))
+      s390_disasm(ENC4(MNM, GPR, GPR, UINT), mnm, r1, r2, m3);
+}
+
+static void
 s390_format_RRF_F0FF(HChar *(*irgen)(UChar, UChar, UChar),
                      UChar r1, UChar r3, UChar r2)
 {
@@ -1787,13 +1895,15 @@ s390_format_RSY_RDRM(HChar *(*irgen)(UChar r1, IRTemp op2addr),
    IRTemp op2addr = newTemp(Ity_I64);
    IRTemp d2 = newTemp(Ity_I64);
 
-   if_condition_goto(binop(Iop_CmpEQ32, s390_call_calculate_cond(m3), mkU32(0)),
-                     guest_IA_next_instr);
+   next_insn_if(binop(Iop_CmpEQ32, s390_call_calculate_cond(m3), mkU32(0)));
+
    assign(d2, mkU64(((ULong)(Long)(Char)dh2 << 12) | ((ULong)dl2)));
    assign(op2addr, binop(Iop_Add64, mkexpr(d2), b2 != 0 ? get_gpr_dw0(b2) :
           mkU64(0)));
 
    irgen(r1, op2addr);
+
+   vassert(dis_res->whatNext == Dis_Continue);
 
    if (UNLIKELY(vex_traceflags & VEX_TRACE_FE))
       s390_disasm(ENC3(XMNM, GPR, SDXB), xmnm_kind, m3, r1, dh2, dl2, 0, b2);
@@ -2062,26 +2172,6 @@ s390_format_SIL_RDU(HChar *(*irgen)(UShort i2, IRTemp op1addr),
 /*------------------------------------------------------------*/
 /*--- Build IR for opcodes                                 ---*/
 /*------------------------------------------------------------*/
-
-static HChar *
-s390_irgen_00(UChar r1 __attribute__((unused)),
-              UChar r2 __attribute__((unused)))
-{
-   IRDirty *d;
-
-   d = unsafeIRDirty_0_N (0, "s390x_dirtyhelper_00", &s390x_dirtyhelper_00,
-                          mkIRExprVec_0());
-   d->needsBBP = 1;  /* Need to pass pointer to guest state to helper */
-
-   d->fxState[0].fx     = Ifx_Modify;  /* read then write */
-   d->fxState[0].offset = S390X_GUEST_OFFSET(guest_IA);
-   d->fxState[0].size   = sizeof(ULong);
-   d->nFxState = 1;
-
-   stmt(IRStmt_Dirty(d));
-
-   return "00";
-}
 
 static HChar *
 s390_irgen_AR(UChar r1, UChar r2)
@@ -3120,8 +3210,8 @@ s390_irgen_BCR(UChar r1, UChar r2)
          return_from_function(get_gpr_dw0(r2));
       } else {
          assign(cond, s390_call_calculate_cond(r1));
-         if_not_condition_goto_computed(binop(Iop_CmpEQ32, mkexpr(cond),
-                                        mkU32(0)), get_gpr_dw0(r2));
+         if_condition_goto_computed(binop(Iop_CmpNE32, mkexpr(cond), mkU32(0)),
+                                    get_gpr_dw0(r2));
       }
    }
    if (UNLIKELY(vex_traceflags & VEX_TRACE_FE))
@@ -3141,8 +3231,8 @@ s390_irgen_BC(UChar r1, UChar x2, UChar b2, UShort d2, IRTemp op2addr)
          always_goto(mkexpr(op2addr));
       } else {
          assign(cond, s390_call_calculate_cond(r1));
-         if_not_condition_goto_computed(binop(Iop_CmpEQ32, mkexpr(cond),
-                                        mkU32(0)), mkexpr(op2addr));
+         if_condition_goto_computed(binop(Iop_CmpNE32, mkexpr(cond), mkU32(0)),
+                                    mkexpr(op2addr));
       }
    }
    if (UNLIKELY(vex_traceflags & VEX_TRACE_FE))
@@ -3156,8 +3246,8 @@ s390_irgen_BCTR(UChar r1, UChar r2)
 {
    put_gpr_w1(r1, binop(Iop_Sub32, get_gpr_w1(r1), mkU32(1)));
    if (r2 != 0) {
-      if_not_condition_goto_computed(binop(Iop_CmpEQ32, get_gpr_w1(r1), mkU32(0)
-                                     ), get_gpr_dw0(r2));
+      if_condition_goto_computed(binop(Iop_CmpNE32, get_gpr_w1(r1), mkU32(0)),
+                                 get_gpr_dw0(r2));
    }
 
    return "bctr";
@@ -3168,8 +3258,8 @@ s390_irgen_BCTGR(UChar r1, UChar r2)
 {
    put_gpr_dw0(r1, binop(Iop_Sub64, get_gpr_dw0(r1), mkU64(1)));
    if (r2 != 0) {
-      if_not_condition_goto_computed(binop(Iop_CmpEQ64, get_gpr_dw0(r1),
-                                     mkU64(0)), get_gpr_dw0(r2));
+      if_condition_goto_computed(binop(Iop_CmpNE64, get_gpr_dw0(r1), mkU64(0)),
+                                 get_gpr_dw0(r2));
    }
 
    return "bctgr";
@@ -3179,8 +3269,8 @@ static HChar *
 s390_irgen_BCT(UChar r1, IRTemp op2addr)
 {
    put_gpr_w1(r1, binop(Iop_Sub32, get_gpr_w1(r1), mkU32(1)));
-   if_not_condition_goto_computed(binop(Iop_CmpEQ32, get_gpr_w1(r1), mkU32(0)),
-                                  mkexpr(op2addr));
+   if_condition_goto_computed(binop(Iop_CmpNE32, get_gpr_w1(r1), mkU32(0)),
+                              mkexpr(op2addr));
 
    return "bct";
 }
@@ -3189,8 +3279,8 @@ static HChar *
 s390_irgen_BCTG(UChar r1, IRTemp op2addr)
 {
    put_gpr_dw0(r1, binop(Iop_Sub64, get_gpr_dw0(r1), mkU64(1)));
-   if_not_condition_goto_computed(binop(Iop_CmpEQ64, get_gpr_dw0(r1), mkU64(0)),
-                                  mkexpr(op2addr));
+   if_condition_goto_computed(binop(Iop_CmpNE64, get_gpr_dw0(r1), mkU64(0)),
+                              mkexpr(op2addr));
 
    return "bctg";
 }
@@ -3202,8 +3292,8 @@ s390_irgen_BXH(UChar r1, UChar r3, IRTemp op2addr)
 
    assign(value, get_gpr_w1(r3 | 1));
    put_gpr_w1(r1, binop(Iop_Add32, get_gpr_w1(r1), get_gpr_w1(r3)));
-   if_not_condition_goto_computed(binop(Iop_CmpLE32S, get_gpr_w1(r1),
-                                  mkexpr(value)), mkexpr(op2addr));
+   if_condition_goto_computed(binop(Iop_CmpLT32S, mkexpr(value),
+                                    get_gpr_w1(r1)), mkexpr(op2addr));
 
    return "bxh";
 }
@@ -3215,8 +3305,8 @@ s390_irgen_BXHG(UChar r1, UChar r3, IRTemp op2addr)
 
    assign(value, get_gpr_dw0(r3 | 1));
    put_gpr_dw0(r1, binop(Iop_Add64, get_gpr_dw0(r1), get_gpr_dw0(r3)));
-   if_not_condition_goto_computed(binop(Iop_CmpLE64S, get_gpr_dw0(r1),
-                                  mkexpr(value)), mkexpr(op2addr));
+   if_condition_goto_computed(binop(Iop_CmpLT64S, mkexpr(value),
+                                    get_gpr_dw0(r1)), mkexpr(op2addr));
 
    return "bxhg";
 }
@@ -3228,8 +3318,8 @@ s390_irgen_BXLE(UChar r1, UChar r3, IRTemp op2addr)
 
    assign(value, get_gpr_w1(r3 | 1));
    put_gpr_w1(r1, binop(Iop_Add32, get_gpr_w1(r1), get_gpr_w1(r3)));
-   if_not_condition_goto_computed(binop(Iop_CmpLT32S, mkexpr(value),
-                                  get_gpr_w1(r1)), mkexpr(op2addr));
+   if_condition_goto_computed(binop(Iop_CmpLE32S, get_gpr_w1(r1),
+                                    mkexpr(value)), mkexpr(op2addr));
 
    return "bxle";
 }
@@ -3241,8 +3331,8 @@ s390_irgen_BXLEG(UChar r1, UChar r3, IRTemp op2addr)
 
    assign(value, get_gpr_dw0(r3 | 1));
    put_gpr_dw0(r1, binop(Iop_Add64, get_gpr_dw0(r1), get_gpr_dw0(r3)));
-   if_not_condition_goto_computed(binop(Iop_CmpLT64S, mkexpr(value),
-                                  get_gpr_dw0(r1)), mkexpr(op2addr));
+   if_condition_goto_computed(binop(Iop_CmpLE64S, get_gpr_dw0(r1),
+                                    mkexpr(value)), mkexpr(op2addr));
 
    return "bxleg";
 }
@@ -3547,7 +3637,6 @@ s390_irgen_CRB(UChar r1, UChar r2, UChar m3, IRTemp op4addr)
 {
    IRTemp op1 = newTemp(Ity_I32);
    IRTemp op2 = newTemp(Ity_I32);
-   IRTemp icc = newTemp(Ity_I32);
    IRTemp cond = newTemp(Ity_I32);
 
    if (m3 == 0) {
@@ -3557,12 +3646,10 @@ s390_irgen_CRB(UChar r1, UChar r2, UChar m3, IRTemp op4addr)
       } else {
          assign(op1, get_gpr_w1(r1));
          assign(op2, get_gpr_w1(r2));
-         assign(icc, s390_call_calculate_iccSS(S390_CC_OP_SIGNED_COMPARE, op1,
-                op2));
-         assign(cond, binop(Iop_And32, binop(Iop_Shl32, mkU32(m3),
-                unop(Iop_32to8, mkexpr(icc))), mkU32(8)));
-         if_not_condition_goto_computed(binop(Iop_CmpEQ32, mkexpr(cond),
-                                        mkU32(0)), mkexpr(op4addr));
+         assign(cond, s390_call_calculate_icc(m3, S390_CC_OP_SIGNED_COMPARE,
+                                              op1, op2));
+         if_condition_goto_computed(binop(Iop_CmpNE32, mkexpr(cond),
+                                          mkU32(0)), mkexpr(op4addr));
       }
    }
 
@@ -3574,7 +3661,6 @@ s390_irgen_CGRB(UChar r1, UChar r2, UChar m3, IRTemp op4addr)
 {
    IRTemp op1 = newTemp(Ity_I64);
    IRTemp op2 = newTemp(Ity_I64);
-   IRTemp icc = newTemp(Ity_I32);
    IRTemp cond = newTemp(Ity_I32);
 
    if (m3 == 0) {
@@ -3584,12 +3670,10 @@ s390_irgen_CGRB(UChar r1, UChar r2, UChar m3, IRTemp op4addr)
       } else {
          assign(op1, get_gpr_dw0(r1));
          assign(op2, get_gpr_dw0(r2));
-         assign(icc, s390_call_calculate_iccSS(S390_CC_OP_SIGNED_COMPARE, op1,
-                op2));
-         assign(cond, binop(Iop_And32, binop(Iop_Shl32, mkU32(m3),
-                unop(Iop_32to8, mkexpr(icc))), mkU32(8)));
-         if_not_condition_goto_computed(binop(Iop_CmpEQ32, mkexpr(cond),
-                                        mkU32(0)), mkexpr(op4addr));
+         assign(cond, s390_call_calculate_icc(m3, S390_CC_OP_SIGNED_COMPARE,
+                                              op1, op2));
+         if_condition_goto_computed(binop(Iop_CmpNE32, mkexpr(cond),
+                                          mkU32(0)), mkexpr(op4addr));
       }
    }
 
@@ -3601,7 +3685,6 @@ s390_irgen_CRJ(UChar r1, UChar r2, UShort i4, UChar m3)
 {
    IRTemp op1 = newTemp(Ity_I32);
    IRTemp op2 = newTemp(Ity_I32);
-   IRTemp icc = newTemp(Ity_I32);
    IRTemp cond = newTemp(Ity_I32);
 
    if (m3 == 0) {
@@ -3612,10 +3695,8 @@ s390_irgen_CRJ(UChar r1, UChar r2, UShort i4, UChar m3)
       } else {
          assign(op1, get_gpr_w1(r1));
          assign(op2, get_gpr_w1(r2));
-         assign(icc, s390_call_calculate_iccSS(S390_CC_OP_SIGNED_COMPARE, op1,
-                op2));
-         assign(cond, binop(Iop_And32, binop(Iop_Shl32, mkU32(m3),
-                unop(Iop_32to8, mkexpr(icc))), mkU32(8)));
+         assign(cond, s390_call_calculate_icc(m3, S390_CC_OP_SIGNED_COMPARE,
+                                              op1, op2));
          if_condition_goto(binop(Iop_CmpNE32, mkexpr(cond), mkU32(0)),
                            guest_IA_curr_instr + ((ULong)(Long)(Short)i4 << 1));
 
@@ -3630,7 +3711,6 @@ s390_irgen_CGRJ(UChar r1, UChar r2, UShort i4, UChar m3)
 {
    IRTemp op1 = newTemp(Ity_I64);
    IRTemp op2 = newTemp(Ity_I64);
-   IRTemp icc = newTemp(Ity_I32);
    IRTemp cond = newTemp(Ity_I32);
 
    if (m3 == 0) {
@@ -3641,10 +3721,8 @@ s390_irgen_CGRJ(UChar r1, UChar r2, UShort i4, UChar m3)
       } else {
          assign(op1, get_gpr_dw0(r1));
          assign(op2, get_gpr_dw0(r2));
-         assign(icc, s390_call_calculate_iccSS(S390_CC_OP_SIGNED_COMPARE, op1,
-                op2));
-         assign(cond, binop(Iop_And32, binop(Iop_Shl32, mkU32(m3),
-                unop(Iop_32to8, mkexpr(icc))), mkU32(8)));
+         assign(cond, s390_call_calculate_icc(m3, S390_CC_OP_SIGNED_COMPARE,
+                                              op1, op2));
          if_condition_goto(binop(Iop_CmpNE32, mkexpr(cond), mkU32(0)),
                            guest_IA_curr_instr + ((ULong)(Long)(Short)i4 << 1));
 
@@ -3659,7 +3737,6 @@ s390_irgen_CIB(UChar r1, UChar m3, UChar i2, IRTemp op4addr)
 {
    IRTemp op1 = newTemp(Ity_I32);
    Int op2;
-   IRTemp icc = newTemp(Ity_I32);
    IRTemp cond = newTemp(Ity_I32);
 
    if (m3 == 0) {
@@ -3669,12 +3746,10 @@ s390_irgen_CIB(UChar r1, UChar m3, UChar i2, IRTemp op4addr)
       } else {
          assign(op1, get_gpr_w1(r1));
          op2 = (Int)(Char)i2;
-         assign(icc, s390_call_calculate_iccSS(S390_CC_OP_SIGNED_COMPARE, op1,
-                mktemp(Ity_I32, mkU32((UInt)op2))));
-         assign(cond, binop(Iop_And32, binop(Iop_Shl32, mkU32(m3),
-                unop(Iop_32to8, mkexpr(icc))), mkU32(8)));
-         if_not_condition_goto_computed(binop(Iop_CmpEQ32, mkexpr(cond),
-                                        mkU32(0)), mkexpr(op4addr));
+         assign(cond, s390_call_calculate_icc(m3, S390_CC_OP_SIGNED_COMPARE, op1,
+                                              mktemp(Ity_I32, mkU32((UInt)op2))));
+         if_condition_goto_computed(binop(Iop_CmpNE32, mkexpr(cond), mkU32(0)),
+                                    mkexpr(op4addr));
       }
    }
 
@@ -3686,7 +3761,6 @@ s390_irgen_CGIB(UChar r1, UChar m3, UChar i2, IRTemp op4addr)
 {
    IRTemp op1 = newTemp(Ity_I64);
    Long op2;
-   IRTemp icc = newTemp(Ity_I32);
    IRTemp cond = newTemp(Ity_I32);
 
    if (m3 == 0) {
@@ -3696,12 +3770,10 @@ s390_irgen_CGIB(UChar r1, UChar m3, UChar i2, IRTemp op4addr)
       } else {
          assign(op1, get_gpr_dw0(r1));
          op2 = (Long)(Char)i2;
-         assign(icc, s390_call_calculate_iccSS(S390_CC_OP_SIGNED_COMPARE, op1,
-                mktemp(Ity_I64, mkU64((ULong)op2))));
-         assign(cond, binop(Iop_And32, binop(Iop_Shl32, mkU32(m3),
-                unop(Iop_32to8, mkexpr(icc))), mkU32(8)));
-         if_not_condition_goto_computed(binop(Iop_CmpEQ32, mkexpr(cond),
-                                        mkU32(0)), mkexpr(op4addr));
+         assign(cond, s390_call_calculate_icc(m3, S390_CC_OP_SIGNED_COMPARE, op1,
+                                              mktemp(Ity_I64, mkU64((ULong)op2))));
+         if_condition_goto_computed(binop(Iop_CmpNE32, mkexpr(cond), mkU32(0)),
+                                    mkexpr(op4addr));
       }
    }
 
@@ -3713,7 +3785,6 @@ s390_irgen_CIJ(UChar r1, UChar m3, UShort i4, UChar i2)
 {
    IRTemp op1 = newTemp(Ity_I32);
    Int op2;
-   IRTemp icc = newTemp(Ity_I32);
    IRTemp cond = newTemp(Ity_I32);
 
    if (m3 == 0) {
@@ -3723,10 +3794,8 @@ s390_irgen_CIJ(UChar r1, UChar m3, UShort i4, UChar i2)
       } else {
          assign(op1, get_gpr_w1(r1));
          op2 = (Int)(Char)i2;
-         assign(icc, s390_call_calculate_iccSS(S390_CC_OP_SIGNED_COMPARE, op1,
-                mktemp(Ity_I32, mkU32((UInt)op2))));
-         assign(cond, binop(Iop_And32, binop(Iop_Shl32, mkU32(m3),
-                unop(Iop_32to8, mkexpr(icc))), mkU32(8)));
+         assign(cond, s390_call_calculate_icc(m3, S390_CC_OP_SIGNED_COMPARE, op1,
+                                              mktemp(Ity_I32, mkU32((UInt)op2))));
          if_condition_goto(binop(Iop_CmpNE32, mkexpr(cond), mkU32(0)),
                            guest_IA_curr_instr + ((ULong)(Long)(Short)i4 << 1));
 
@@ -3741,7 +3810,6 @@ s390_irgen_CGIJ(UChar r1, UChar m3, UShort i4, UChar i2)
 {
    IRTemp op1 = newTemp(Ity_I64);
    Long op2;
-   IRTemp icc = newTemp(Ity_I32);
    IRTemp cond = newTemp(Ity_I32);
 
    if (m3 == 0) {
@@ -3751,10 +3819,8 @@ s390_irgen_CGIJ(UChar r1, UChar m3, UShort i4, UChar i2)
       } else {
          assign(op1, get_gpr_dw0(r1));
          op2 = (Long)(Char)i2;
-         assign(icc, s390_call_calculate_iccSS(S390_CC_OP_SIGNED_COMPARE, op1,
-                mktemp(Ity_I64, mkU64((ULong)op2))));
-         assign(cond, binop(Iop_And32, binop(Iop_Shl32, mkU32(m3),
-                unop(Iop_32to8, mkexpr(icc))), mkU32(8)));
+         assign(cond, s390_call_calculate_icc(m3, S390_CC_OP_SIGNED_COMPARE, op1,
+                                              mktemp(Ity_I64, mkU64((ULong)op2))));
          if_condition_goto(binop(Iop_CmpNE32, mkexpr(cond), mkU32(0)),
                            guest_IA_curr_instr + ((ULong)(Long)(Short)i4 << 1));
 
@@ -4218,7 +4284,6 @@ s390_irgen_CLRB(UChar r1, UChar r2, UChar m3, IRTemp op4addr)
 {
    IRTemp op1 = newTemp(Ity_I32);
    IRTemp op2 = newTemp(Ity_I32);
-   IRTemp icc = newTemp(Ity_I32);
    IRTemp cond = newTemp(Ity_I32);
 
    if (m3 == 0) {
@@ -4228,12 +4293,10 @@ s390_irgen_CLRB(UChar r1, UChar r2, UChar m3, IRTemp op4addr)
       } else {
          assign(op1, get_gpr_w1(r1));
          assign(op2, get_gpr_w1(r2));
-         assign(icc, s390_call_calculate_iccZZ(S390_CC_OP_UNSIGNED_COMPARE, op1,
-                op2));
-         assign(cond, binop(Iop_And32, binop(Iop_Shl32, mkU32(m3),
-                unop(Iop_32to8, mkexpr(icc))), mkU32(8)));
-         if_not_condition_goto_computed(binop(Iop_CmpEQ32, mkexpr(cond),
-                                        mkU32(0)), mkexpr(op4addr));
+         assign(cond, s390_call_calculate_icc(m3, S390_CC_OP_UNSIGNED_COMPARE,
+                                              op1, op2));
+         if_condition_goto_computed(binop(Iop_CmpNE32, mkexpr(cond), mkU32(0)),
+                                    mkexpr(op4addr));
       }
    }
 
@@ -4245,7 +4308,6 @@ s390_irgen_CLGRB(UChar r1, UChar r2, UChar m3, IRTemp op4addr)
 {
    IRTemp op1 = newTemp(Ity_I64);
    IRTemp op2 = newTemp(Ity_I64);
-   IRTemp icc = newTemp(Ity_I32);
    IRTemp cond = newTemp(Ity_I32);
 
    if (m3 == 0) {
@@ -4255,12 +4317,10 @@ s390_irgen_CLGRB(UChar r1, UChar r2, UChar m3, IRTemp op4addr)
       } else {
          assign(op1, get_gpr_dw0(r1));
          assign(op2, get_gpr_dw0(r2));
-         assign(icc, s390_call_calculate_iccZZ(S390_CC_OP_UNSIGNED_COMPARE, op1,
-                op2));
-         assign(cond, binop(Iop_And32, binop(Iop_Shl32, mkU32(m3),
-                unop(Iop_32to8, mkexpr(icc))), mkU32(8)));
-         if_not_condition_goto_computed(binop(Iop_CmpEQ32, mkexpr(cond),
-                                        mkU32(0)), mkexpr(op4addr));
+         assign(cond, s390_call_calculate_icc(m3, S390_CC_OP_UNSIGNED_COMPARE,
+                                              op1, op2));
+         if_condition_goto_computed(binop(Iop_CmpNE32, mkexpr(cond), mkU32(0)),
+                                    mkexpr(op4addr));
       }
    }
 
@@ -4272,7 +4332,6 @@ s390_irgen_CLRJ(UChar r1, UChar r2, UShort i4, UChar m3)
 {
    IRTemp op1 = newTemp(Ity_I32);
    IRTemp op2 = newTemp(Ity_I32);
-   IRTemp icc = newTemp(Ity_I32);
    IRTemp cond = newTemp(Ity_I32);
 
    if (m3 == 0) {
@@ -4282,10 +4341,8 @@ s390_irgen_CLRJ(UChar r1, UChar r2, UShort i4, UChar m3)
       } else {
          assign(op1, get_gpr_w1(r1));
          assign(op2, get_gpr_w1(r2));
-         assign(icc, s390_call_calculate_iccZZ(S390_CC_OP_UNSIGNED_COMPARE, op1,
-                op2));
-         assign(cond, binop(Iop_And32, binop(Iop_Shl32, mkU32(m3),
-                unop(Iop_32to8, mkexpr(icc))), mkU32(8)));
+         assign(cond, s390_call_calculate_icc(m3, S390_CC_OP_UNSIGNED_COMPARE,
+                                              op1, op2));
          if_condition_goto(binop(Iop_CmpNE32, mkexpr(cond), mkU32(0)),
                            guest_IA_curr_instr + ((ULong)(Long)(Short)i4 << 1));
 
@@ -4300,7 +4357,6 @@ s390_irgen_CLGRJ(UChar r1, UChar r2, UShort i4, UChar m3)
 {
    IRTemp op1 = newTemp(Ity_I64);
    IRTemp op2 = newTemp(Ity_I64);
-   IRTemp icc = newTemp(Ity_I32);
    IRTemp cond = newTemp(Ity_I32);
 
    if (m3 == 0) {
@@ -4310,10 +4366,8 @@ s390_irgen_CLGRJ(UChar r1, UChar r2, UShort i4, UChar m3)
       } else {
          assign(op1, get_gpr_dw0(r1));
          assign(op2, get_gpr_dw0(r2));
-         assign(icc, s390_call_calculate_iccZZ(S390_CC_OP_UNSIGNED_COMPARE, op1,
-                op2));
-         assign(cond, binop(Iop_And32, binop(Iop_Shl32, mkU32(m3),
-                unop(Iop_32to8, mkexpr(icc))), mkU32(8)));
+         assign(cond, s390_call_calculate_icc(m3, S390_CC_OP_UNSIGNED_COMPARE,
+                                              op1, op2));
          if_condition_goto(binop(Iop_CmpNE32, mkexpr(cond), mkU32(0)),
                            guest_IA_curr_instr + ((ULong)(Long)(Short)i4 << 1));
 
@@ -4328,7 +4382,6 @@ s390_irgen_CLIB(UChar r1, UChar m3, UChar i2, IRTemp op4addr)
 {
    IRTemp op1 = newTemp(Ity_I32);
    UInt op2;
-   IRTemp icc = newTemp(Ity_I32);
    IRTemp cond = newTemp(Ity_I32);
 
    if (m3 == 0) {
@@ -4338,12 +4391,10 @@ s390_irgen_CLIB(UChar r1, UChar m3, UChar i2, IRTemp op4addr)
       } else {
          assign(op1, get_gpr_w1(r1));
          op2 = (UInt)i2;
-         assign(icc, s390_call_calculate_iccZZ(S390_CC_OP_UNSIGNED_COMPARE, op1,
-                mktemp(Ity_I32, mkU32(op2))));
-         assign(cond, binop(Iop_And32, binop(Iop_Shl32, mkU32(m3),
-                unop(Iop_32to8, mkexpr(icc))), mkU32(8)));
-         if_not_condition_goto_computed(binop(Iop_CmpEQ32, mkexpr(cond),
-                                        mkU32(0)), mkexpr(op4addr));
+         assign(cond, s390_call_calculate_icc(m3, S390_CC_OP_UNSIGNED_COMPARE, op1,
+                                              mktemp(Ity_I32, mkU32(op2))));
+         if_condition_goto_computed(binop(Iop_CmpNE32, mkexpr(cond), mkU32(0)),
+                                    mkexpr(op4addr));
       }
    }
 
@@ -4355,7 +4406,6 @@ s390_irgen_CLGIB(UChar r1, UChar m3, UChar i2, IRTemp op4addr)
 {
    IRTemp op1 = newTemp(Ity_I64);
    ULong op2;
-   IRTemp icc = newTemp(Ity_I32);
    IRTemp cond = newTemp(Ity_I32);
 
    if (m3 == 0) {
@@ -4365,12 +4415,10 @@ s390_irgen_CLGIB(UChar r1, UChar m3, UChar i2, IRTemp op4addr)
       } else {
          assign(op1, get_gpr_dw0(r1));
          op2 = (ULong)i2;
-         assign(icc, s390_call_calculate_iccZZ(S390_CC_OP_UNSIGNED_COMPARE, op1,
-                mktemp(Ity_I64, mkU64(op2))));
-         assign(cond, binop(Iop_And32, binop(Iop_Shl32, mkU32(m3),
-                unop(Iop_32to8, mkexpr(icc))), mkU32(8)));
-         if_not_condition_goto_computed(binop(Iop_CmpEQ32, mkexpr(cond),
-                                        mkU32(0)), mkexpr(op4addr));
+         assign(cond, s390_call_calculate_icc(m3, S390_CC_OP_UNSIGNED_COMPARE, op1,
+                                              mktemp(Ity_I64, mkU64(op2))));
+         if_condition_goto_computed(binop(Iop_CmpNE32, mkexpr(cond), mkU32(0)),
+                                    mkexpr(op4addr));
       }
    }
 
@@ -4382,7 +4430,6 @@ s390_irgen_CLIJ(UChar r1, UChar m3, UShort i4, UChar i2)
 {
    IRTemp op1 = newTemp(Ity_I32);
    UInt op2;
-   IRTemp icc = newTemp(Ity_I32);
    IRTemp cond = newTemp(Ity_I32);
 
    if (m3 == 0) {
@@ -4392,10 +4439,8 @@ s390_irgen_CLIJ(UChar r1, UChar m3, UShort i4, UChar i2)
       } else {
          assign(op1, get_gpr_w1(r1));
          op2 = (UInt)i2;
-         assign(icc, s390_call_calculate_iccZZ(S390_CC_OP_UNSIGNED_COMPARE, op1,
-                mktemp(Ity_I32, mkU32(op2))));
-         assign(cond, binop(Iop_And32, binop(Iop_Shl32, mkU32(m3),
-                unop(Iop_32to8, mkexpr(icc))), mkU32(8)));
+         assign(cond, s390_call_calculate_icc(m3, S390_CC_OP_UNSIGNED_COMPARE, op1,
+                                              mktemp(Ity_I32, mkU32(op2))));
          if_condition_goto(binop(Iop_CmpNE32, mkexpr(cond), mkU32(0)),
                            guest_IA_curr_instr + ((ULong)(Long)(Short)i4 << 1));
 
@@ -4410,7 +4455,6 @@ s390_irgen_CLGIJ(UChar r1, UChar m3, UShort i4, UChar i2)
 {
    IRTemp op1 = newTemp(Ity_I64);
    ULong op2;
-   IRTemp icc = newTemp(Ity_I32);
    IRTemp cond = newTemp(Ity_I32);
 
    if (m3 == 0) {
@@ -4420,10 +4464,8 @@ s390_irgen_CLGIJ(UChar r1, UChar m3, UShort i4, UChar i2)
       } else {
          assign(op1, get_gpr_dw0(r1));
          op2 = (ULong)i2;
-         assign(icc, s390_call_calculate_iccZZ(S390_CC_OP_UNSIGNED_COMPARE, op1,
-                mktemp(Ity_I64, mkU64(op2))));
-         assign(cond, binop(Iop_And32, binop(Iop_Shl32, mkU32(m3),
-                unop(Iop_32to8, mkexpr(icc))), mkU32(8)));
+         assign(cond, s390_call_calculate_icc(m3, S390_CC_OP_UNSIGNED_COMPARE, op1,
+                                              mktemp(Ity_I64, mkU64(op2))));
          if_condition_goto(binop(Iop_CmpNE32, mkexpr(cond), mkU32(0)),
                            guest_IA_curr_instr + ((ULong)(Long)(Short)i4 << 1));
 
@@ -5836,8 +5878,7 @@ s390_irgen_LNGFR(UChar r1, UChar r2 __attribute__((unused)))
 static HChar *
 s390_irgen_LOCR(UChar m3, UChar r1, UChar r2)
 {
-   if_condition_goto(binop(Iop_CmpEQ32, s390_call_calculate_cond(m3), mkU32(0)),
-                     guest_IA_next_instr);
+   next_insn_if(binop(Iop_CmpEQ32, s390_call_calculate_cond(m3), mkU32(0)));
    put_gpr_w1(r1, get_gpr_w1(r2));
 
    return "locr";
@@ -5846,8 +5887,7 @@ s390_irgen_LOCR(UChar m3, UChar r1, UChar r2)
 static HChar *
 s390_irgen_LOCGR(UChar m3, UChar r1, UChar r2)
 {
-   if_condition_goto(binop(Iop_CmpEQ32, s390_call_calculate_cond(m3), mkU32(0)),
-                     guest_IA_next_instr);
+   next_insn_if(binop(Iop_CmpEQ32, s390_call_calculate_cond(m3), mkU32(0)));
    put_gpr_dw0(r1, get_gpr_dw0(r2));
 
    return "locgr";
@@ -6844,7 +6884,7 @@ s390_irgen_SLDA(UChar r1, IRTemp op2addr)
    IRTemp p2 = newTemp(Ity_I64);
    IRTemp op = newTemp(Ity_I64);
    IRTemp result = newTemp(Ity_I64);
-   Long sign_mask;
+   ULong sign_mask;
    IRTemp shift_amount = newTemp(Ity_I64);
 
    assign(p1, unop(Iop_32Uto64, get_gpr_w1(r1)));
@@ -6854,8 +6894,8 @@ s390_irgen_SLDA(UChar r1, IRTemp op2addr)
    sign_mask = 1ULL << 63;
    assign(shift_amount, binop(Iop_And64, mkexpr(op2addr), mkU64(63)));
    assign(result, binop(Iop_Or64, binop(Iop_And64, binop(Iop_Shl64, mkexpr(op),
-          unop(Iop_64to8, mkexpr(shift_amount))), mkU64((ULong)(~sign_mask))),
-          binop(Iop_And64, mkexpr(op), mkU64((ULong)sign_mask))));
+          unop(Iop_64to8, mkexpr(shift_amount))), mkU64(~sign_mask)),
+          binop(Iop_And64, mkexpr(op), mkU64(sign_mask))));
    put_gpr_w1(r1, unop(Iop_64HIto32, mkexpr(result)));
    put_gpr_w1(r1 + 1, unop(Iop_64to32, mkexpr(result)));
    s390_cc_thunk_putZZ(S390_CC_OP_SHIFT_LEFT_64, op, shift_amount);
@@ -7856,18 +7896,6 @@ s390_irgen_SVC(UChar i)
 }
 
 static HChar *
-s390_irgen_TS(IRTemp op2addr)
-{
-   IRTemp value = newTemp(Ity_I8);
-
-   assign(value, load(Ity_I8, mkexpr(op2addr)));
-   s390_cc_thunk_putZ(S390_CC_OP_TEST_AND_SET, value);
-   store(mkexpr(op2addr), mkU8(255));
-
-   return "ts";
-}
-
-static HChar *
 s390_irgen_TM(UChar i2, IRTemp op1addr)
 {
    UChar mask;
@@ -8563,29 +8591,10 @@ s390_irgen_SDB(UChar r1, IRTemp op2addr)
 static HChar *
 s390_irgen_CLC(UChar length, IRTemp start1, IRTemp start2)
 {
-   IRTemp current1 = newTemp(Ity_I8);
-   IRTemp current2 = newTemp(Ity_I8);
-   IRTemp counter = newTemp(Ity_I64);
+   IRTemp len = newTemp(Ity_I64);
 
-   assign(counter, get_counter_dw0());
-   put_counter_dw0(mkU64(0));
-
-   assign(current1, load(Ity_I8, binop(Iop_Add64, mkexpr(start1),
-                                       mkexpr(counter))));
-   assign(current2, load(Ity_I8, binop(Iop_Add64, mkexpr(start2),
-                                       mkexpr(counter))));
-   s390_cc_thunk_put2(S390_CC_OP_UNSIGNED_COMPARE, current1, current2,
-                      False);
-
-   /* Both fields differ ? */
-   if_condition_goto(binop(Iop_CmpNE8, mkexpr(current1), mkexpr(current2)),
-                     guest_IA_next_instr);
-
-   /* Check for end of field */
-   put_counter_dw0(binop(Iop_Add64, mkexpr(counter), mkU64(1)));
-   if_condition_goto(binop(Iop_CmpNE64, mkexpr(counter), mkU64(length)),
-                     guest_IA_curr_instr);
-   put_counter_dw0(mkU64(0));
+   assign(len, mkU64(length));
+   s390_irgen_CLC_EX(len, start1, start2);
 
    return "clc";
 }
@@ -8615,9 +8624,8 @@ s390_irgen_CLCL(UChar r1, UChar r2)
 
    /* len1 == 0 and len2 == 0? Exit */
    s390_cc_set(0);
-   if_condition_goto(binop(Iop_CmpEQ32, binop(Iop_Or32, mkexpr(len1),
-                                              mkexpr(len2)), mkU32(0)),
-                     guest_IA_next_instr);
+   next_insn_if(binop(Iop_CmpEQ32, binop(Iop_Or32, mkexpr(len1),
+                                         mkexpr(len2)), mkU32(0)));
 
    /* Because mkite evaluates both the then-clause and the else-clause
       we cannot load directly from addr1 here. If len1 is 0, then adddr1
@@ -8640,8 +8648,7 @@ s390_irgen_CLCL(UChar r1, UChar r2)
 
    s390_cc_thunk_put2(S390_CC_OP_UNSIGNED_COMPARE, single1, single2, False);
    /* Fields differ ? */
-   if_condition_goto(binop(Iop_CmpNE8, mkexpr(single1), mkexpr(single2)),
-                     guest_IA_next_instr);
+   next_insn_if(binop(Iop_CmpNE8, mkexpr(single1), mkexpr(single2)));
 
    /* Update len1 and addr1, unless len1 == 0. */
    put_gpr_dw0(r1,
@@ -8667,7 +8674,7 @@ s390_irgen_CLCL(UChar r1, UChar r2)
                     binop(Iop_And32, mkexpr(r2p1), mkU32(0xFF000000u)),
                     binop(Iop_Sub32, mkexpr(r2p1), mkU32(1))));
 
-   always_goto_and_chase(guest_IA_curr_instr);
+   iterate();
 
    return "clcl";
 }
@@ -8693,9 +8700,8 @@ s390_irgen_CLCLE(UChar r1, UChar r3, IRTemp pad2)
 
    /* len1 == 0 and len3 == 0? Exit */
    s390_cc_set(0);
-   if_condition_goto(binop(Iop_CmpEQ64,binop(Iop_Or64, mkexpr(len1),
-                                             mkexpr(len3)), mkU64(0)),
-                     guest_IA_next_instr);
+   next_insn_if(binop(Iop_CmpEQ64,binop(Iop_Or64, mkexpr(len1),
+                                        mkexpr(len3)), mkU64(0)));
 
    /* A mux requires both ways to be possible. This is a way to prevent clcle
       from reading from addr1 if it should read from the pad. Since the pad
@@ -8721,8 +8727,7 @@ s390_irgen_CLCLE(UChar r1, UChar r3, IRTemp pad2)
 
    s390_cc_thunk_put2(S390_CC_OP_UNSIGNED_COMPARE, single1, single3, False);
    /* Both fields differ ? */
-   if_condition_goto(binop(Iop_CmpNE8, mkexpr(single1), mkexpr(single3)),
-                     guest_IA_next_instr);
+   next_insn_if(binop(Iop_CmpNE8, mkexpr(single1), mkexpr(single3)));
 
    /* If a length in 0 we must not change this length and the address */
    put_gpr_dw0(r1,
@@ -8743,53 +8748,30 @@ s390_irgen_CLCLE(UChar r1, UChar r3, IRTemp pad2)
                mkite(binop(Iop_CmpEQ64, mkexpr(len3), mkU64(0)),
                      mkU64(0), binop(Iop_Sub64, mkexpr(len3), mkU64(1))));
 
-   /* The architecture requires that we exit with CC3 after a machine specific
-      amount of bytes. We do that if len1+len3 % 4096 == 0 */
-   s390_cc_set(3);
-   if_condition_goto(binop(Iop_CmpEQ64,
-                           binop(Iop_And64,
-                                 binop(Iop_Add64, mkexpr(len1), mkexpr(len3)),
-                                 mkU64(0xfff)),
-                           mkU64(0)),
-                     guest_IA_next_instr);
-
-   always_goto_and_chase(guest_IA_curr_instr);
+   iterate();
 
    return "clcle";
 }
 
+
 static void
 s390_irgen_XC_EX(IRTemp length, IRTemp start1, IRTemp start2)
 {
-   IRTemp old1 = newTemp(Ity_I8);
-   IRTemp old2 = newTemp(Ity_I8);
-   IRTemp new1 = newTemp(Ity_I8);
-   IRTemp counter = newTemp(Ity_I32);
-   IRTemp addr1 = newTemp(Ity_I64);
+   s390_irgen_xonc(Iop_Xor8, length, start1, start2);
+}
 
-   assign(counter, get_counter_w0());
 
-   assign(addr1, binop(Iop_Add64, mkexpr(start1),
-                       unop(Iop_32Uto64, mkexpr(counter))));
+static void
+s390_irgen_NC_EX(IRTemp length, IRTemp start1, IRTemp start2)
+{
+   s390_irgen_xonc(Iop_And8, length, start1, start2);
+}
 
-   assign(old1, load(Ity_I8, mkexpr(addr1)));
-   assign(old2, load(Ity_I8, binop(Iop_Add64, mkexpr(start2),
-                                   unop(Iop_32Uto64,mkexpr(counter)))));
-   assign(new1, binop(Iop_Xor8, mkexpr(old1), mkexpr(old2)));
 
-   store(mkexpr(addr1),
-         mkite(binop(Iop_CmpEQ64, mkexpr(start1), mkexpr(start2)),
-               mkU8(0), mkexpr(new1)));
-   put_counter_w1(binop(Iop_Or32, unop(Iop_8Uto32, mkexpr(new1)),
-                        get_counter_w1()));
-
-   /* Check for end of field */
-   put_counter_w0(binop(Iop_Add32, mkexpr(counter), mkU32(1)));
-   if_condition_goto(binop(Iop_CmpNE32, mkexpr(counter), mkexpr(length)),
-                     guest_IA_curr_instr);
-   s390_cc_thunk_put1(S390_CC_OP_BITWISE, mktemp(Ity_I32, get_counter_w1()),
-                      False);
-   put_counter_dw0(mkU64(0));
+static void
+s390_irgen_OC_EX(IRTemp length, IRTemp start1, IRTemp start2)
+{
+   s390_irgen_xonc(Iop_Or8, length, start1, start2);
 }
 
 
@@ -8811,13 +8793,11 @@ s390_irgen_CLC_EX(IRTemp length, IRTemp start1, IRTemp start2)
                       False);
 
    /* Both fields differ ? */
-   if_condition_goto(binop(Iop_CmpNE8, mkexpr(current1), mkexpr(current2)),
-                     guest_IA_next_instr);
+   next_insn_if(binop(Iop_CmpNE8, mkexpr(current1), mkexpr(current2)));
 
    /* Check for end of field */
    put_counter_dw0(binop(Iop_Add64, mkexpr(counter), mkU64(1)));
-   if_condition_goto(binop(Iop_CmpNE64, mkexpr(counter), mkexpr(length)),
-                     guest_IA_curr_instr);
+   iterate_if(binop(Iop_CmpNE64, mkexpr(counter), mkexpr(length)));
    put_counter_dw0(mkU64(0));
 }
 
@@ -8833,16 +8813,37 @@ s390_irgen_MVC_EX(IRTemp length, IRTemp start1, IRTemp start2)
 
    /* Check for end of field */
    put_counter_dw0(binop(Iop_Add64, mkexpr(counter), mkU64(1)));
-   if_condition_goto(binop(Iop_CmpNE64, mkexpr(counter), mkexpr(length)),
-                     guest_IA_curr_instr);
+   iterate_if(binop(Iop_CmpNE64, mkexpr(counter), mkexpr(length)));
+   put_counter_dw0(mkU64(0));
+}
+
+static void
+s390_irgen_TR_EX(IRTemp length, IRTemp start1, IRTemp start2)
+{
+   IRTemp op = newTemp(Ity_I8);
+   IRTemp op1 = newTemp(Ity_I8);
+   IRTemp result = newTemp(Ity_I64);
+   IRTemp counter = newTemp(Ity_I64);
+
+   assign(counter, get_counter_dw0());
+
+   assign(op, load(Ity_I8, binop(Iop_Add64, mkexpr(start1), mkexpr(counter))));
+
+   assign(result, binop(Iop_Add64, unop(Iop_8Uto64, mkexpr(op)), mkexpr(start2)));
+
+   assign(op1, load(Ity_I8, mkexpr(result)));
+   store(binop(Iop_Add64, mkexpr(start1), mkexpr(counter)), mkexpr(op1));
+
+   put_counter_dw0(binop(Iop_Add64, mkexpr(counter), mkU64(1)));
+   iterate_if(binop(Iop_CmpNE64, mkexpr(counter), mkexpr(length)));
    put_counter_dw0(mkU64(0));
 }
 
 
-
 static void
 s390_irgen_EX_SS(UChar r, IRTemp addr2,
-void (*irgen)(IRTemp length, IRTemp start1, IRTemp start2), int lensize)
+                 void (*irgen)(IRTemp length, IRTemp start1, IRTemp start2),
+                 int lensize)
 {
    struct SS {
       unsigned int op :  8;
@@ -8876,10 +8877,10 @@ void (*irgen)(IRTemp length, IRTemp start1, IRTemp start2), int lensize)
    stmt(IRStmt_Dirty(d));
 
    /* and restart */
-   stmt(IRStmt_Put(OFFB_TISTART, mkU64(guest_IA_curr_instr)));
-   stmt(IRStmt_Put(OFFB_TILEN, mkU64(4)));
-   stmt(IRStmt_Exit(mkexpr(cond), Ijk_TInval,
-        IRConst_U64(guest_IA_curr_instr)));
+   stmt(IRStmt_Put(S390X_GUEST_OFFSET(guest_TISTART),
+                   mkU64(guest_IA_curr_instr)));
+   stmt(IRStmt_Put(S390X_GUEST_OFFSET(guest_TILEN), mkU64(4)));
+   restart_if(mkexpr(cond));
 
    ss.bytes = last_execute_target;
    assign(start1, binop(Iop_Add64, mkU64(ss.dec.d1),
@@ -8889,6 +8890,7 @@ void (*irgen)(IRTemp length, IRTemp start1, IRTemp start2), int lensize)
    assign(len, unop(lensize == 64 ? Iop_8Uto64 : Iop_8Uto32, binop(Iop_Or8,
           r != 0 ? get_gpr_b7(r): mkU8(0), mkU8(ss.dec.l))));
    irgen(len, start1, start2);
+
    last_execute_target = 0;
 }
 
@@ -8906,13 +8908,15 @@ s390_irgen_EX(UChar r1, IRTemp addr2)
                              mkIRExprVec_1(load(Ity_I64, mkexpr(addr2))));
       stmt(IRStmt_Dirty(d));
       /* and restart */
-      stmt(IRStmt_Put(OFFB_TISTART, mkU64(guest_IA_curr_instr)));
-      stmt(IRStmt_Put(OFFB_TILEN, mkU64(4)));
-      stmt(IRStmt_Exit(IRExpr_Const(IRConst_U1(True)), Ijk_TInval,
-           IRConst_U64(guest_IA_curr_instr)));
+      stmt(IRStmt_Put(S390X_GUEST_OFFSET(guest_TISTART),
+                      mkU64(guest_IA_curr_instr)));
+      stmt(IRStmt_Put(S390X_GUEST_OFFSET(guest_TILEN), mkU64(4)));
+      restart_if(IRExpr_Const(IRConst_U1(True)));
+
       /* we know that this will be invalidated */
-      irsb->next = mkU64(guest_IA_next_instr);
+      put_IA(mkaddr_expr(guest_IA_next_instr));
       dis_res->whatNext = Dis_StopHere;
+      dis_res->jk_StopHere = Ijk_TInval;
       break;
    }
 
@@ -8931,6 +8935,20 @@ s390_irgen_EX(UChar r1, IRTemp addr2)
       s390_irgen_EX_SS(r1, addr2, s390_irgen_XC_EX, 32);
       return "xc via ex";
 
+   case 0xd600000000000000ULL:
+      /* special case OC */
+      s390_irgen_EX_SS(r1, addr2, s390_irgen_OC_EX, 32);
+      return "oc via ex";
+
+   case 0xd400000000000000ULL:
+      /* special case NC */
+      s390_irgen_EX_SS(r1, addr2, s390_irgen_NC_EX, 32);
+      return "nc via ex";
+
+   case 0xdc00000000000000ULL:
+      /* special case TR */
+      s390_irgen_EX_SS(r1, addr2, s390_irgen_TR_EX, 64);
+      return "tr via ex";
 
    default:
    {
@@ -8964,10 +8982,9 @@ s390_irgen_EX(UChar r1, IRTemp addr2)
       stmt(IRStmt_Dirty(d));
 
       /* and restart */
-      stmt(IRStmt_Put(OFFB_TISTART, mkU64(guest_IA_curr_instr)));
-      stmt(IRStmt_Put(OFFB_TILEN, mkU64(4)));
-      stmt(IRStmt_Exit(mkexpr(cond), Ijk_TInval,
-           IRConst_U64(guest_IA_curr_instr)));
+      stmt(IRStmt_Put(S390X_GUEST_OFFSET(guest_TISTART), mkU64(guest_IA_curr_instr)));
+      stmt(IRStmt_Put(S390X_GUEST_OFFSET(guest_TILEN), mkU64(4)));
+      restart_if(mkexpr(cond));
 
       /* Now comes the actual translation */
       bytes = (UChar *) &last_execute_target;
@@ -9024,8 +9041,7 @@ s390_irgen_SRST(UChar r1, UChar r2)
    // start = next?  CC=2 and out r1 and r2 unchanged
    s390_cc_set(2);
    put_gpr_dw0(r2, binop(Iop_Sub64, mkexpr(address), mkexpr(counter)));
-   if_condition_goto(binop(Iop_CmpEQ64, mkexpr(address), mkexpr(next)),
-                     guest_IA_next_instr);
+   next_insn_if(binop(Iop_CmpEQ64, mkexpr(address), mkexpr(next)));
 
    assign(byte, load(Ity_I8, mkexpr(address)));
    assign(delim, get_gpr_b7(0));
@@ -9033,18 +9049,14 @@ s390_irgen_SRST(UChar r1, UChar r2)
    // byte = delim? CC=1, R1=address
    s390_cc_set(1);
    put_gpr_dw0(r1,  mkexpr(address));
-   if_condition_goto(binop(Iop_CmpEQ8, mkexpr(delim), mkexpr(byte)),
-                     guest_IA_next_instr);
+   next_insn_if(binop(Iop_CmpEQ8, mkexpr(delim), mkexpr(byte)));
 
    // else: all equal, no end yet, loop
    put_counter_dw0(binop(Iop_Add64, mkexpr(counter), mkU64(1)));
    put_gpr_dw0(r1, mkexpr(next));
    put_gpr_dw0(r2, binop(Iop_Add64, mkexpr(address), mkU64(1)));
-   stmt(IRStmt_Exit(binop(Iop_CmpNE64, mkexpr(counter), mkU64(255)),
-                    Ijk_Boring, IRConst_U64(guest_IA_curr_instr)));
-   // >= 256 bytes done CC=3
-   s390_cc_set(3);
-   put_counter_dw0(mkU64(0));
+
+   iterate();
 
    return "srst";
 }
@@ -9071,46 +9083,38 @@ s390_irgen_CLST(UChar r1, UChar r2)
    s390_cc_set(0);
    put_gpr_dw0(r1, binop(Iop_Sub64, mkexpr(address1), mkexpr(counter)));
    put_gpr_dw0(r2, binop(Iop_Sub64, mkexpr(address2), mkexpr(counter)));
-   if_condition_goto(binop(Iop_CmpEQ8, mkU8(0),
-                           binop(Iop_Or8,
-                                 binop(Iop_Xor8, mkexpr(byte1), mkexpr(end)),
-                                 binop(Iop_Xor8, mkexpr(byte2), mkexpr(end)))),
-                     guest_IA_next_instr);
+   next_insn_if(binop(Iop_CmpEQ8, mkU8(0),
+                      binop(Iop_Or8,
+                            binop(Iop_Xor8, mkexpr(byte1), mkexpr(end)),
+                            binop(Iop_Xor8, mkexpr(byte2), mkexpr(end)))));
 
    put_gpr_dw0(r1, mkexpr(address1));
    put_gpr_dw0(r2, mkexpr(address2));
 
    // End found in string1
    s390_cc_set(1);
-   if_condition_goto(binop(Iop_CmpEQ8, mkexpr(end), mkexpr(byte1)),
-                     guest_IA_next_instr);
+   next_insn_if(binop(Iop_CmpEQ8, mkexpr(end), mkexpr(byte1)));
 
    // End found in string2
    s390_cc_set(2);
-   if_condition_goto(binop(Iop_CmpEQ8, mkexpr(end), mkexpr(byte2)),
-                     guest_IA_next_instr);
+   next_insn_if(binop(Iop_CmpEQ8, mkexpr(end), mkexpr(byte2)));
 
    // string1 < string2
    s390_cc_set(1);
-   if_condition_goto(binop(Iop_CmpLT32U, unop(Iop_8Uto32, mkexpr(byte1)),
-                           unop(Iop_8Uto32, mkexpr(byte2))),
-                     guest_IA_next_instr);
+   next_insn_if(binop(Iop_CmpLT32U, unop(Iop_8Uto32, mkexpr(byte1)),
+                      unop(Iop_8Uto32, mkexpr(byte2))));
 
    // string2 < string1
    s390_cc_set(2);
-   if_condition_goto(binop(Iop_CmpLT32U, unop(Iop_8Uto32, mkexpr(byte2)),
-                           unop(Iop_8Uto32, mkexpr(byte1))),
-                     guest_IA_next_instr);
+   next_insn_if(binop(Iop_CmpLT32U, unop(Iop_8Uto32, mkexpr(byte2)),
+                      unop(Iop_8Uto32, mkexpr(byte1))));
 
    // else: all equal, no end yet, loop
    put_counter_dw0(binop(Iop_Add64, mkexpr(counter), mkU64(1)));
    put_gpr_dw0(r1, binop(Iop_Add64, get_gpr_dw0(r1), mkU64(1)));
    put_gpr_dw0(r2, binop(Iop_Add64, get_gpr_dw0(r2), mkU64(1)));
-   stmt(IRStmt_Exit(binop(Iop_CmpNE64, mkexpr(counter), mkU64(255)),
-                    Ijk_Boring, IRConst_U64(guest_IA_curr_instr)));
-   // >= 256 bytes done CC=3
-   s390_cc_set(3);
-   put_counter_dw0(mkU64(0));
+
+   iterate();
 
    return "clst";
 }
@@ -9270,7 +9274,7 @@ s390_irgen_STMG(UChar r1, UChar r3, IRTemp op2addr)
 }
 
 static void
-s390_irgen_XONC(IROp op, UChar length, IRTemp start1, IRTemp start2)
+s390_irgen_xonc(IROp op, IRTemp length, IRTemp start1, IRTemp start2)
 {
    IRTemp old1 = newTemp(Ity_I8);
    IRTemp old2 = newTemp(Ity_I8);
@@ -9300,8 +9304,7 @@ s390_irgen_XONC(IROp op, UChar length, IRTemp start1, IRTemp start2)
 
    /* Check for end of field */
    put_counter_w0(binop(Iop_Add32, mkexpr(counter), mkU32(1)));
-   if_condition_goto(binop(Iop_CmpNE32, mkexpr(counter), mkU32(length)),
-                     guest_IA_curr_instr);
+   iterate_if(binop(Iop_CmpNE32, mkexpr(counter), mkexpr(length)));
    s390_cc_thunk_put1(S390_CC_OP_BITWISE, mktemp(Ity_I32, get_counter_w1()),
                       False);
    put_counter_dw0(mkU64(0));
@@ -9310,7 +9313,10 @@ s390_irgen_XONC(IROp op, UChar length, IRTemp start1, IRTemp start2)
 static HChar *
 s390_irgen_XC(UChar length, IRTemp start1, IRTemp start2)
 {
-   s390_irgen_XONC(Iop_Xor8, length, start1, start2);
+   IRTemp len = newTemp(Ity_I32);
+
+   assign(len, mkU32(length));
+   s390_irgen_xonc(Iop_Xor8, len, start1, start2);
 
    return "xc";
 }
@@ -9341,8 +9347,7 @@ s390_irgen_XC_sameloc(UChar length, UChar b, UShort d)
 
      /* Check for end of field */
      put_counter_w0(binop(Iop_Add32, mkexpr(counter), mkU32(1)));
-     if_condition_goto(binop(Iop_CmpNE32, mkexpr(counter), mkU32(length)),
-                       guest_IA_curr_instr);
+     iterate_if(binop(Iop_CmpNE32, mkexpr(counter), mkU32(length)));
 
      /* Reset counter */
      put_counter_dw0(mkU64(0));
@@ -9357,7 +9362,10 @@ s390_irgen_XC_sameloc(UChar length, UChar b, UShort d)
 static HChar *
 s390_irgen_NC(UChar length, IRTemp start1, IRTemp start2)
 {
-   s390_irgen_XONC(Iop_And8, length, start1, start2);
+   IRTemp len = newTemp(Ity_I32);
+
+   assign(len, mkU32(length));
+   s390_irgen_xonc(Iop_And8, len, start1, start2);
 
    return "nc";
 }
@@ -9365,7 +9373,10 @@ s390_irgen_NC(UChar length, IRTemp start1, IRTemp start2)
 static HChar *
 s390_irgen_OC(UChar length, IRTemp start1, IRTemp start2)
 {
-   s390_irgen_XONC(Iop_Or8, length, start1, start2);
+   IRTemp len = newTemp(Ity_I32);
+
+   assign(len, mkU32(length));
+   s390_irgen_xonc(Iop_Or8, len, start1, start2);
 
    return "oc";
 }
@@ -9374,18 +9385,10 @@ s390_irgen_OC(UChar length, IRTemp start1, IRTemp start2)
 static HChar *
 s390_irgen_MVC(UChar length, IRTemp start1, IRTemp start2)
 {
-   IRTemp counter = newTemp(Ity_I64);
+   IRTemp len = newTemp(Ity_I64);
 
-   assign(counter, get_counter_dw0());
-
-   store(binop(Iop_Add64, mkexpr(start1), mkexpr(counter)),
-         load(Ity_I8, binop(Iop_Add64, mkexpr(start2), mkexpr(counter))));
-
-   /* Check for end of field */
-   put_counter_dw0(binop(Iop_Add64, mkexpr(counter), mkU64(1)));
-   if_condition_goto(binop(Iop_CmpNE64, mkexpr(counter), mkU64(length)),
-                     guest_IA_curr_instr);
-   put_counter_dw0(mkU64(0));
+   assign(len, mkU64(length));
+   s390_irgen_MVC_EX(len, start1, start2);
 
    return "mvc";
 }
@@ -9413,8 +9416,7 @@ s390_irgen_MVCL(UChar r1, UChar r2)
 
    /* len1 == 0 ? */
    s390_cc_thunk_put2(S390_CC_OP_UNSIGNED_COMPARE, len1, len2, False);
-   if_condition_goto(binop(Iop_CmpEQ32, mkexpr(len1), mkU32(0)),
-                     guest_IA_next_instr);
+   next_insn_if(binop(Iop_CmpEQ32, mkexpr(len1), mkU32(0)));
 
    /* Check for destructive overlap:
       addr1 > addr2 && addr2 + len1 > addr1 && (addr2 + len2) > addr1 */
@@ -9434,12 +9436,11 @@ s390_irgen_MVCL(UChar r1, UChar r2)
                             binop(Iop_Add64, mkexpr(addr2),
                                   unop(Iop_32Uto64, mkexpr(len2))))));
 
-   if_condition_goto(binop(Iop_CmpEQ32,
-                           binop(Iop_And32,
-                                 binop(Iop_And32, mkexpr(cond1), mkexpr(cond2)),
-                                 mkexpr(cond3)),
-                           mkU32(1)),
-                     guest_IA_next_instr);
+   next_insn_if(binop(Iop_CmpEQ32,
+                      binop(Iop_And32,
+                            binop(Iop_And32, mkexpr(cond1), mkexpr(cond2)),
+                            mkexpr(cond3)),
+                      mkU32(1)));
 
    /* See s390_irgen_CLCL for explanation why we cannot load directly
       and need two steps. */
@@ -9469,8 +9470,7 @@ s390_irgen_MVCL(UChar r1, UChar r2)
                     binop(Iop_Sub32, mkexpr(r2p1), mkU32(1))));
 
    s390_cc_thunk_put2(S390_CC_OP_UNSIGNED_COMPARE, len1, len2, False);
-   if_condition_goto(binop(Iop_CmpNE32, mkexpr(len1), mkU32(1)),
-                     guest_IA_curr_instr);
+   iterate_if(binop(Iop_CmpNE32, mkexpr(len1), mkU32(1)));
 
    return "mvcl";
 }
@@ -9495,8 +9495,7 @@ s390_irgen_MVCLE(UChar r1, UChar r3, IRTemp pad2)
 
    // len1 == 0 ?
    s390_cc_thunk_put2(S390_CC_OP_UNSIGNED_COMPARE, len1, len3, False);
-   if_condition_goto(binop(Iop_CmpEQ64,mkexpr(len1), mkU64(0)),
-                     guest_IA_next_instr);
+   next_insn_if(binop(Iop_CmpEQ64,mkexpr(len1), mkU64(0)));
 
    /* This is a hack to prevent mvcle from reading from addr3 if it
       should read from the pad. Since the pad has no address, just
@@ -9524,19 +9523,8 @@ s390_irgen_MVCLE(UChar r1, UChar r3, IRTemp pad2)
                mkite(binop(Iop_CmpEQ64, mkexpr(len3), mkU64(0)),
                      mkU64(0), binop(Iop_Sub64, mkexpr(len3), mkU64(1))));
 
-   /* We should set CC=3 (faked by overflow add) and leave after
-      a maximum of ~4096 bytes have been processed. This is simpler:
-      we leave whenever (len1 % 4096) == 0 */
-   s390_cc_thunk_put2(S390_CC_OP_UNSIGNED_ADD_64, mktemp(Ity_I64, mkU64(-1ULL)),
-                      mktemp(Ity_I64, mkU64(-1ULL)), False);
-   if_condition_goto(binop(Iop_CmpEQ64,
-                           binop(Iop_And64, mkexpr(len1), mkU64(0xfff)),
-                           mkU64(0)),
-                     guest_IA_next_instr);
-
    s390_cc_thunk_put2(S390_CC_OP_UNSIGNED_COMPARE, len1, len3, False);
-   if_condition_goto(binop(Iop_CmpNE64, mkexpr(len1), mkU64(1)),
-                     guest_IA_curr_instr);
+   iterate_if(binop(Iop_CmpNE64, mkexpr(len1), mkU64(1)));
 
    return "mvcle";
 }
@@ -9559,8 +9547,7 @@ s390_irgen_MVST(UChar r1, UChar r2)
 
    // We use unlimited as cpu-determined number
    put_counter_dw0(binop(Iop_Add64, mkexpr(counter), mkU64(1)));
-   if_condition_goto(binop(Iop_CmpNE8, mkexpr(end), mkexpr(byte)),
-                     guest_IA_curr_instr);
+   iterate_if(binop(Iop_CmpNE8, mkexpr(end), mkexpr(byte)));
 
    // and always set cc=1 at the end + update r1
    s390_cc_set(1);
@@ -9831,8 +9818,7 @@ s390_irgen_cas_32(UChar r1, UChar r3, IRTemp op2addr)
       Otherwise, store the old_value from memory in r1 and yield. */
    assign(nequal, binop(Iop_CmpNE32, s390_call_calculate_cc(), mkU32(0)));
    put_gpr_w1(r1, mkite(mkexpr(nequal), mkexpr(old_mem), mkexpr(op1)));
-   stmt(IRStmt_Exit(mkexpr(nequal), Ijk_Yield,
-        IRConst_U64(guest_IA_next_instr)));
+   yield_if(mkexpr(nequal));
 }
 
 static HChar *
@@ -9880,10 +9866,116 @@ s390_irgen_CSG(UChar r1, UChar r3, IRTemp op2addr)
       Otherwise, store the old_value from memory in r1 and yield. */
    assign(nequal, binop(Iop_CmpNE32, s390_call_calculate_cc(), mkU32(0)));
    put_gpr_dw0(r1, mkite(mkexpr(nequal), mkexpr(old_mem), mkexpr(op1)));
-   stmt(IRStmt_Exit(mkexpr(nequal), Ijk_Yield,
-        IRConst_U64(guest_IA_next_instr)));
+   yield_if(mkexpr(nequal));
 
    return "csg";
+}
+
+/* Implementation for 32-bit compare-double-and-swap */
+static void
+s390_irgen_cdas_32(UChar r1, UChar r3, IRTemp op2addr)
+{
+   IRCAS *cas;
+   IRTemp op1_high = newTemp(Ity_I32);
+   IRTemp op1_low  = newTemp(Ity_I32);
+   IRTemp old_mem_high = newTemp(Ity_I32);
+   IRTemp old_mem_low  = newTemp(Ity_I32);
+   IRTemp op3_high = newTemp(Ity_I32);
+   IRTemp op3_low  = newTemp(Ity_I32);
+   IRTemp result = newTemp(Ity_I32);
+   IRTemp nequal = newTemp(Ity_I1);
+
+   assign(op1_high, get_gpr_w1(r1));
+   assign(op1_low,  get_gpr_w1(r1+1));
+   assign(op3_high, get_gpr_w1(r3));
+   assign(op3_low,  get_gpr_w1(r3+1));
+
+   /* The first and second operands are compared. If they are equal,
+      the third operand is stored at the second-operand location. */
+   cas = mkIRCAS(old_mem_high, old_mem_low,
+                 Iend_BE, mkexpr(op2addr),
+                 mkexpr(op1_high), mkexpr(op1_low), /* expected value */
+                 mkexpr(op3_high), mkexpr(op3_low)  /* new value */);
+   stmt(IRStmt_CAS(cas));
+
+   /* Set CC. Operands compared equal -> 0, else 1. */
+   assign(result, unop(Iop_1Uto32,
+          binop(Iop_CmpNE32,
+                binop(Iop_Or32,
+                      binop(Iop_Xor32, mkexpr(op1_high), mkexpr(old_mem_high)),
+                      binop(Iop_Xor32, mkexpr(op1_low), mkexpr(old_mem_low))),
+                mkU32(0))));
+
+   s390_cc_thunk_put1(S390_CC_OP_BITWISE, result, False);
+
+   /* If operands were equal (cc == 0) just store the old value op1 in r1.
+      Otherwise, store the old_value from memory in r1 and yield. */
+   assign(nequal, binop(Iop_CmpNE32, s390_call_calculate_cc(), mkU32(0)));
+   put_gpr_w1(r1,   mkite(mkexpr(nequal), mkexpr(old_mem_high), mkexpr(op1_high)));
+   put_gpr_w1(r1+1, mkite(mkexpr(nequal), mkexpr(old_mem_low),  mkexpr(op1_low)));
+   yield_if(mkexpr(nequal));
+}
+
+static HChar *
+s390_irgen_CDS(UChar r1, UChar r3, IRTemp op2addr)
+{
+   s390_irgen_cdas_32(r1, r3, op2addr);
+
+   return "cds";
+}
+
+static HChar *
+s390_irgen_CDSY(UChar r1, UChar r3, IRTemp op2addr)
+{
+   s390_irgen_cdas_32(r1, r3, op2addr);
+
+   return "cdsy";
+}
+
+static HChar *
+s390_irgen_CDSG(UChar r1, UChar r3, IRTemp op2addr)
+{
+   IRCAS *cas;
+   IRTemp op1_high = newTemp(Ity_I64);
+   IRTemp op1_low  = newTemp(Ity_I64);
+   IRTemp old_mem_high = newTemp(Ity_I64);
+   IRTemp old_mem_low  = newTemp(Ity_I64);
+   IRTemp op3_high = newTemp(Ity_I64);
+   IRTemp op3_low  = newTemp(Ity_I64);
+   IRTemp result = newTemp(Ity_I64);
+   IRTemp nequal = newTemp(Ity_I1);
+
+   assign(op1_high, get_gpr_dw0(r1));
+   assign(op1_low,  get_gpr_dw0(r1+1));
+   assign(op3_high, get_gpr_dw0(r3));
+   assign(op3_low,  get_gpr_dw0(r3+1));
+
+   /* The first and second operands are compared. If they are equal,
+      the third operand is stored at the second-operand location. */
+   cas = mkIRCAS(old_mem_high, old_mem_low,
+                 Iend_BE, mkexpr(op2addr),
+                 mkexpr(op1_high), mkexpr(op1_low), /* expected value */
+                 mkexpr(op3_high), mkexpr(op3_low)  /* new value */);
+   stmt(IRStmt_CAS(cas));
+
+   /* Set CC. Operands compared equal -> 0, else 1. */
+   assign(result, unop(Iop_1Uto64,
+          binop(Iop_CmpNE64,
+                binop(Iop_Or64,
+                      binop(Iop_Xor64, mkexpr(op1_high), mkexpr(old_mem_high)),
+                      binop(Iop_Xor64, mkexpr(op1_low), mkexpr(old_mem_low))),
+                mkU64(0))));
+
+   s390_cc_thunk_put1(S390_CC_OP_BITWISE, result, False);
+
+   /* If operands were equal (cc == 0) just store the old value op1 in r1.
+      Otherwise, store the old_value from memory in r1 and yield. */
+   assign(nequal, binop(Iop_CmpNE32, s390_call_calculate_cc(), mkU32(0)));
+   put_gpr_dw0(r1,   mkite(mkexpr(nequal), mkexpr(old_mem_high), mkexpr(op1_high)));
+   put_gpr_dw0(r1+1, mkite(mkexpr(nequal), mkexpr(old_mem_low),  mkexpr(op1_low)));
+   yield_if(mkexpr(nequal));
+
+   return "cdsg";
 }
 
 
@@ -10543,24 +10635,6 @@ s390_irgen_CPSDR(UChar r3, UChar r1, UChar r2)
 }
 
 
-static UInt
-s390_do_cvb(ULong decimal)
-{
-#if defined(VGA_s390x)
-   UInt binary;
-
-   __asm__ volatile (
-        "cvb %[result],%[input]\n\t"
-          : [result] "=d"(binary)
-          : [input] "m"(decimal)
-   );
-
-   return binary;
-#else
-   return 0;
-#endif
-}
-
 static IRExpr *
 s390_call_cvb(IRExpr *in)
 {
@@ -10593,25 +10667,6 @@ s390_irgen_CVBY(UChar r1, IRTemp op2addr)
 }
 
 
-static ULong
-s390_do_cvd(ULong binary_in)
-{
-#if defined(VGA_s390x)
-   UInt binary = binary_in & 0xffffffffULL;
-   ULong decimal;
-
-   __asm__ volatile (
-        "cvd %[input],%[result]\n\t"
-          : [result] "=m"(decimal)
-          : [input] "d"(binary)
-   );
-
-   return decimal;
-#else
-   return 0;
-#endif
-}
-
 static IRExpr *
 s390_call_cvd(IRExpr *in)
 {
@@ -10630,7 +10685,7 @@ s390_call_cvd(IRExpr *in)
 static HChar *
 s390_irgen_CVD(UChar r1, IRTemp op2addr)
 {
-   store(mkexpr(op2addr), s390_call_cvd(get_gpr_w1(r1)));
+   store(mkexpr(op2addr), s390_call_cvd(unop(Iop_32Uto64, get_gpr_w1(r1))));
 
    return "cvd";
 }
@@ -10764,10 +10819,12 @@ s390_irgen_STFLE(IRTemp op2addr)
 
    d->needsBBP = 1;  /* Need to pass pointer to guest state to helper */
 
+   d->nFxState = 1;
+   vex_bzero(&d->fxState, sizeof(d->fxState));
+
    d->fxState[0].fx     = Ifx_Modify;  /* read then write */
    d->fxState[0].offset = S390X_GUEST_OFFSET(guest_r0);
    d->fxState[0].size   = sizeof(ULong);
-   d->nFxState = 1;
 
    d->mAddr = mkexpr(op2addr);
    /* Pretend all double words are written */
@@ -10802,8 +10859,7 @@ s390_irgen_CKSM(UChar r1,UChar r2)
    s390_cc_set(0);
 
    /* If length is zero, there is no need to calculate the checksum */
-   if_condition_goto(binop(Iop_CmpEQ64, mkexpr(len), mkU64(0)),
-                     guest_IA_next_instr);
+   next_insn_if(binop(Iop_CmpEQ64, mkexpr(len), mkU64(0)));
 
    /* Assiging the increment variable to adjust address and length
       later on. */
@@ -10841,12 +10897,858 @@ s390_irgen_CKSM(UChar r1,UChar r2)
    put_gpr_dw0(r2, binop(Iop_Add64, mkexpr(addr), mkexpr(inc)));
    put_gpr_dw0(r2+1, binop(Iop_Sub64, mkexpr(len), mkexpr(inc)));
 
-   if_condition_goto(binop(Iop_CmpNE64, mkexpr(len), mkU64(0)),
-                     guest_IA_curr_instr);
+   iterate_if(binop(Iop_CmpNE64, mkexpr(len), mkU64(0)));
 
    return "cksm";
 }
 
+static HChar *
+s390_irgen_TROO(UChar m3, UChar r1, UChar r2)
+{
+   IRTemp src_addr, des_addr, tab_addr, src_len, test_byte;
+   src_addr = newTemp(Ity_I64);
+   des_addr = newTemp(Ity_I64);
+   tab_addr = newTemp(Ity_I64);
+   test_byte = newTemp(Ity_I8);
+   src_len = newTemp(Ity_I64);
+
+   assign(src_addr, get_gpr_dw0(r2));
+   assign(des_addr, get_gpr_dw0(r1));
+   assign(tab_addr, get_gpr_dw0(1));
+   assign(src_len, get_gpr_dw0(r1+1));
+   assign(test_byte, get_gpr_b7(0));
+
+   IRTemp op = newTemp(Ity_I8);
+   IRTemp op1 = newTemp(Ity_I8);
+   IRTemp result = newTemp(Ity_I64);
+
+   /* End of source string? We're done; proceed to next insn */
+   s390_cc_set(0);
+   next_insn_if(binop(Iop_CmpEQ64, mkexpr(src_len), mkU64(0)));
+
+   /* Load character from source string, index translation table and
+      store translated character in op1. */
+   assign(op, load(Ity_I8, mkexpr(src_addr)));
+
+   assign(result, binop(Iop_Add64, unop(Iop_8Uto64, mkexpr(op)),
+                        mkexpr(tab_addr)));
+   assign(op1, load(Ity_I8, mkexpr(result)));
+
+   if (! s390_host_has_etf2 || (m3 & 0x1) == 0) {
+      s390_cc_set(1);
+      next_insn_if(binop(Iop_CmpEQ8, mkexpr(op1), mkexpr(test_byte)));
+   }
+   store(get_gpr_dw0(r1), mkexpr(op1));
+
+   put_gpr_dw0(r1, binop(Iop_Add64, mkexpr(des_addr), mkU64(1)));
+   put_gpr_dw0(r2, binop(Iop_Add64, mkexpr(src_addr), mkU64(1)));
+   put_gpr_dw0(r1+1, binop(Iop_Sub64, mkexpr(src_len), mkU64(1)));
+
+   iterate();
+
+   return "troo";
+}
+
+static HChar *
+s390_irgen_TRTO(UChar m3, UChar r1, UChar r2)
+{
+   IRTemp src_addr, des_addr, tab_addr, src_len, test_byte;
+   src_addr = newTemp(Ity_I64);
+   des_addr = newTemp(Ity_I64);
+   tab_addr = newTemp(Ity_I64);
+   test_byte = newTemp(Ity_I8);
+   src_len = newTemp(Ity_I64);
+
+   assign(src_addr, get_gpr_dw0(r2));
+   assign(des_addr, get_gpr_dw0(r1));
+   assign(tab_addr, get_gpr_dw0(1));
+   assign(src_len, get_gpr_dw0(r1+1));
+   assign(test_byte, get_gpr_b7(0));
+
+   IRTemp op = newTemp(Ity_I16);
+   IRTemp op1 = newTemp(Ity_I8);
+   IRTemp result = newTemp(Ity_I64);
+
+   /* End of source string? We're done; proceed to next insn */
+   s390_cc_set(0);
+   next_insn_if(binop(Iop_CmpEQ64, mkexpr(src_len), mkU64(0)));
+
+   /* Load character from source string, index translation table and
+      store translated character in op1. */
+   assign(op, load(Ity_I16, mkexpr(src_addr)));
+
+   assign(result, binop(Iop_Add64, unop(Iop_16Uto64, mkexpr(op)),
+                        mkexpr(tab_addr)));
+
+   assign(op1, load(Ity_I8, mkexpr(result)));
+
+   if (! s390_host_has_etf2 || (m3 & 0x1) == 0) {
+      s390_cc_set(1);
+      next_insn_if(binop(Iop_CmpEQ8, mkexpr(op1), mkexpr(test_byte)));
+   }
+   store(get_gpr_dw0(r1), mkexpr(op1));
+
+   put_gpr_dw0(r2, binop(Iop_Add64, mkexpr(src_addr), mkU64(2)));
+   put_gpr_dw0(r1, binop(Iop_Add64, mkexpr(des_addr), mkU64(1)));
+   put_gpr_dw0(r1+1, binop(Iop_Sub64, mkexpr(src_len), mkU64(2)));
+
+   iterate();
+
+   return "trto";
+}
+
+static HChar *
+s390_irgen_TROT(UChar m3, UChar r1, UChar r2)
+{
+   IRTemp src_addr, des_addr, tab_addr, src_len, test_byte;
+   src_addr = newTemp(Ity_I64);
+   des_addr = newTemp(Ity_I64);
+   tab_addr = newTemp(Ity_I64);
+   test_byte = newTemp(Ity_I16);
+   src_len = newTemp(Ity_I64);
+
+   assign(src_addr, get_gpr_dw0(r2));
+   assign(des_addr, get_gpr_dw0(r1));
+   assign(tab_addr, get_gpr_dw0(1));
+   assign(src_len, get_gpr_dw0(r1+1));
+   assign(test_byte, get_gpr_hw3(0));
+
+   IRTemp op = newTemp(Ity_I8);
+   IRTemp op1 = newTemp(Ity_I16);
+   IRTemp result = newTemp(Ity_I64);
+
+   /* End of source string? We're done; proceed to next insn */
+   s390_cc_set(0);
+   next_insn_if(binop(Iop_CmpEQ64, mkexpr(src_len), mkU64(0)));
+
+   /* Load character from source string, index translation table and
+      store translated character in op1. */
+   assign(op, binop(Iop_Shl8, load(Ity_I8, mkexpr(src_addr)), mkU8(1)));
+
+   assign(result, binop(Iop_Add64, unop(Iop_8Uto64, mkexpr(op)), 
+                        mkexpr(tab_addr)));
+   assign(op1, load(Ity_I16, mkexpr(result)));
+
+   if (! s390_host_has_etf2 || (m3 & 0x1) == 0) {
+      s390_cc_set(1);
+      next_insn_if(binop(Iop_CmpEQ16, mkexpr(op1), mkexpr(test_byte)));
+   }
+   store(get_gpr_dw0(r1), mkexpr(op1));
+
+   put_gpr_dw0(r2, binop(Iop_Add64, mkexpr(src_addr), mkU64(1)));
+   put_gpr_dw0(r1, binop(Iop_Add64, mkexpr(des_addr), mkU64(2)));
+   put_gpr_dw0(r1+1, binop(Iop_Sub64, mkexpr(src_len), mkU64(1)));
+
+   iterate();
+
+   return "trot";
+}
+
+static HChar *
+s390_irgen_TRTT(UChar m3, UChar r1, UChar r2)
+{
+   IRTemp src_addr, des_addr, tab_addr, src_len, test_byte;
+   src_addr = newTemp(Ity_I64);
+   des_addr = newTemp(Ity_I64);
+   tab_addr = newTemp(Ity_I64);
+   test_byte = newTemp(Ity_I16);
+   src_len = newTemp(Ity_I64);
+
+   assign(src_addr, get_gpr_dw0(r2));
+   assign(des_addr, get_gpr_dw0(r1));
+   assign(tab_addr, get_gpr_dw0(1));
+   assign(src_len, get_gpr_dw0(r1+1));
+   assign(test_byte, get_gpr_hw3(0));
+
+   IRTemp op = newTemp(Ity_I16);
+   IRTemp op1 = newTemp(Ity_I16);
+   IRTemp result = newTemp(Ity_I64);
+
+   /* End of source string? We're done; proceed to next insn */
+   s390_cc_set(0);
+   next_insn_if(binop(Iop_CmpEQ64, mkexpr(src_len), mkU64(0)));
+
+   /* Load character from source string, index translation table and
+      store translated character in op1. */
+   assign(op, binop(Iop_Shl16, load(Ity_I16, mkexpr(src_addr)), mkU8(1)));
+
+   assign(result, binop(Iop_Add64, unop(Iop_16Uto64, mkexpr(op)),
+                        mkexpr(tab_addr)));
+   assign(op1, load(Ity_I16, mkexpr(result)));
+
+   if (! s390_host_has_etf2 || (m3 & 0x1) == 0) {
+      s390_cc_set(1);
+      next_insn_if(binop(Iop_CmpEQ16, mkexpr(op1), mkexpr(test_byte)));
+   }
+
+   store(get_gpr_dw0(r1), mkexpr(op1));
+
+   put_gpr_dw0(r2, binop(Iop_Add64, mkexpr(src_addr), mkU64(2)));
+   put_gpr_dw0(r1, binop(Iop_Add64, mkexpr(des_addr), mkU64(2)));
+   put_gpr_dw0(r1+1, binop(Iop_Sub64, mkexpr(src_len), mkU64(2)));
+
+   iterate();
+
+   return "trtt";
+}
+
+static HChar *
+s390_irgen_TR(UChar length, IRTemp start1, IRTemp start2)
+{
+   IRTemp len = newTemp(Ity_I64);
+
+   assign(len, mkU64(length));
+   s390_irgen_TR_EX(len, start1, start2);
+
+   return "tr";
+}
+
+static HChar *
+s390_irgen_TRE(UChar r1,UChar r2)
+{
+   IRTemp src_addr, tab_addr, src_len, test_byte;
+   src_addr = newTemp(Ity_I64);
+   tab_addr = newTemp(Ity_I64);
+   src_len = newTemp(Ity_I64);
+   test_byte = newTemp(Ity_I8);
+
+   assign(src_addr, get_gpr_dw0(r1));
+   assign(src_len, get_gpr_dw0(r1+1));
+   assign(tab_addr, get_gpr_dw0(r2));
+   assign(test_byte, get_gpr_b7(0));
+
+   IRTemp op = newTemp(Ity_I8);
+   IRTemp op1 = newTemp(Ity_I8);
+   IRTemp result = newTemp(Ity_I64);
+
+   /* End of source string? We're done; proceed to next insn */   
+   s390_cc_set(0);
+   next_insn_if(binop(Iop_CmpEQ64, mkexpr(src_len), mkU64(0)));
+
+   /* Load character from source string and compare with test byte */
+   assign(op, load(Ity_I8, mkexpr(src_addr)));
+   
+   s390_cc_set(1);
+   next_insn_if(binop(Iop_CmpEQ8, mkexpr(op), mkexpr(test_byte)));
+
+   assign(result, binop(Iop_Add64, unop(Iop_8Uto64, mkexpr(op)), 
+			mkexpr(tab_addr)));
+
+   assign(op1, load(Ity_I8, mkexpr(result)));
+
+   store(get_gpr_dw0(r1), mkexpr(op1));
+   put_gpr_dw0(r1, binop(Iop_Add64, mkexpr(src_addr), mkU64(1)));
+   put_gpr_dw0(r1+1, binop(Iop_Sub64, mkexpr(src_len), mkU64(1)));
+
+   iterate();
+
+   return "tre";
+}
+
+static IRExpr *
+s390_call_cu21(IRExpr *srcval, IRExpr *low_surrogate)
+{
+   IRExpr **args, *call;
+   args = mkIRExprVec_2(srcval, low_surrogate);
+   call = mkIRExprCCall(Ity_I64, 0 /*regparm*/,
+                       "s390_do_cu21", &s390_do_cu21, args);
+
+   /* Nothing is excluded from definedness checking. */
+   call->Iex.CCall.cee->mcx_mask = 0;
+
+   return call;
+}
+
+static HChar *
+s390_irgen_CU21(UChar m3, UChar r1, UChar r2)
+{
+   IRTemp addr1 = newTemp(Ity_I64);
+   IRTemp addr2 = newTemp(Ity_I64);
+   IRTemp len1 = newTemp(Ity_I64);
+   IRTemp len2 = newTemp(Ity_I64);
+
+   assign(addr1, get_gpr_dw0(r1));
+   assign(addr2, get_gpr_dw0(r2));
+   assign(len1, get_gpr_dw0(r1 + 1));
+   assign(len2, get_gpr_dw0(r2 + 1));
+
+   /* We're processing the 2nd operand 2 bytes at a time. Therefore, if
+      there are less than 2 bytes left, then the 2nd operand is exhausted
+      and we're done here. cc = 0 */
+   s390_cc_set(0);
+   next_insn_if(binop(Iop_CmpLT64U, mkexpr(len2), mkU64(2)));
+
+   /* There are at least two bytes there. Read them. */
+   IRTemp srcval = newTemp(Ity_I32);
+   assign(srcval, unop(Iop_16Uto32, load(Ity_I16, mkexpr(addr2))));
+
+   /* Find out whether this is a high surrogate. I.e. SRCVAL lies
+      inside the interval [0xd800 - 0xdbff] */
+   IRTemp  is_high_surrogate = newTemp(Ity_I32);
+   IRExpr *flag1 = mkite(binop(Iop_CmpLE32U, mkU32(0xd800), mkexpr(srcval)),
+                         mkU32(1), mkU32(0));
+   IRExpr *flag2 = mkite(binop(Iop_CmpLE32U, mkexpr(srcval), mkU32(0xdbff)),
+                         mkU32(1), mkU32(0));
+   assign(is_high_surrogate, binop(Iop_And32, flag1, flag2));
+
+   /* If SRCVAL is a high surrogate and there are less than 4 bytes left,
+      then the 2nd operand is exhausted and we're done here. cc = 0 */
+   IRExpr *not_enough_bytes =
+      mkite(binop(Iop_CmpLT64U, mkexpr(len2), mkU64(4)), mkU32(1), mkU32(0));
+
+   next_insn_if(binop(Iop_CmpEQ32,
+                      binop(Iop_And32, mkexpr(is_high_surrogate),
+                            not_enough_bytes), mkU32(1)));
+
+   /* The 2nd operand is not exhausted. If the first 2 bytes are a high
+      surrogate, read the next two bytes (low surrogate). */
+   IRTemp  low_surrogate = newTemp(Ity_I32);
+   IRExpr *low_surrogate_addr = binop(Iop_Add64, mkexpr(addr2), mkU64(2));
+
+   assign(low_surrogate,
+          mkite(binop(Iop_CmpEQ32, mkexpr(is_high_surrogate), mkU32(1)),
+                unop(Iop_16Uto32, load(Ity_I16, low_surrogate_addr)),
+                mkU32(0)));  // any value is fine; it will not be used
+
+   /* Call the helper */
+   IRTemp retval = newTemp(Ity_I64);
+   assign(retval, s390_call_cu21(unop(Iop_32Uto64, mkexpr(srcval)),
+                                 unop(Iop_32Uto64, mkexpr(low_surrogate))));
+
+   /* Before we can test whether the 1st operand is exhausted we need to
+      test for an invalid low surrogate. Because cc=2 outranks cc=1. */
+   if (s390_host_has_etf3 && (m3 & 0x1) == 1) {
+      IRExpr *invalid_low_surrogate =
+         binop(Iop_And64, mkexpr(retval), mkU64(0xff));
+
+      s390_cc_set(2);
+      next_insn_if(binop(Iop_CmpEQ64, invalid_low_surrogate, mkU64(1)));
+   }
+
+   /* Now test whether the 1st operand is exhausted */
+   IRTemp num_bytes = newTemp(Ity_I64);
+   assign(num_bytes, binop(Iop_And64,
+                           binop(Iop_Shr64, mkexpr(retval), mkU8(8)),
+                           mkU64(0xff)));
+   s390_cc_set(1);
+   next_insn_if(binop(Iop_CmpLT64U, mkexpr(len1), mkexpr(num_bytes)));
+
+   /* Extract the bytes to be stored at addr1 */
+   IRTemp data = newTemp(Ity_I64);
+   assign(data, binop(Iop_Shr64, mkexpr(retval), mkU8(16)));
+
+   /* To store the bytes construct 4 dirty helper calls. The helper calls
+      are guarded (num_bytes == 1, num_bytes == 2, etc) such that only
+      one of them will be called at runtime. */
+   int i;
+   for (i = 1; i <= 4; ++i) {
+      IRDirty *d;
+
+      d = unsafeIRDirty_0_N(0 /* regparms */, "s390x_dirtyhelper_CUxy",
+                            &s390x_dirtyhelper_CUxy,
+                            mkIRExprVec_3(mkexpr(addr1), mkexpr(data),
+                                          mkexpr(num_bytes)));
+      d->guard = binop(Iop_CmpEQ64, mkexpr(num_bytes), mkU64(i));
+      d->mFx   = Ifx_Write;
+      d->mAddr = mkexpr(addr1);
+      d->mSize = i;
+      stmt(IRStmt_Dirty(d));
+   }
+
+   /* Update source address and length */
+   IRTemp num_src_bytes = newTemp(Ity_I64);
+   assign(num_src_bytes,
+          mkite(binop(Iop_CmpEQ32, mkexpr(is_high_surrogate), mkU32(1)),
+                mkU64(4), mkU64(2)));
+   put_gpr_dw0(r2,     binop(Iop_Add64, mkexpr(addr2), mkexpr(num_src_bytes)));
+   put_gpr_dw0(r2 + 1, binop(Iop_Sub64, mkexpr(len2),  mkexpr(num_src_bytes)));
+
+   /* Update destination address and length */
+   put_gpr_dw0(r1,     binop(Iop_Add64, mkexpr(addr1), mkexpr(num_bytes)));
+   put_gpr_dw0(r1 + 1, binop(Iop_Sub64, mkexpr(len1),  mkexpr(num_bytes)));
+
+   iterate();
+
+   return "cu21";
+}
+
+static IRExpr *
+s390_call_cu24(IRExpr *srcval, IRExpr *low_surrogate)
+{
+   IRExpr **args, *call;
+   args = mkIRExprVec_2(srcval, low_surrogate);
+   call = mkIRExprCCall(Ity_I64, 0 /*regparm*/,
+                       "s390_do_cu24", &s390_do_cu24, args);
+
+   /* Nothing is excluded from definedness checking. */
+   call->Iex.CCall.cee->mcx_mask = 0;
+
+   return call;
+}
+
+static HChar *
+s390_irgen_CU24(UChar m3, UChar r1, UChar r2)
+{
+   IRTemp addr1 = newTemp(Ity_I64);
+   IRTemp addr2 = newTemp(Ity_I64);
+   IRTemp len1 = newTemp(Ity_I64);
+   IRTemp len2 = newTemp(Ity_I64);
+
+   assign(addr1, get_gpr_dw0(r1));
+   assign(addr2, get_gpr_dw0(r2));
+   assign(len1, get_gpr_dw0(r1 + 1));
+   assign(len2, get_gpr_dw0(r2 + 1));
+
+   /* We're processing the 2nd operand 2 bytes at a time. Therefore, if
+      there are less than 2 bytes left, then the 2nd operand is exhausted
+      and we're done here. cc = 0 */
+   s390_cc_set(0);
+   next_insn_if(binop(Iop_CmpLT64U, mkexpr(len2), mkU64(2)));
+
+   /* There are at least two bytes there. Read them. */
+   IRTemp srcval = newTemp(Ity_I32);
+   assign(srcval, unop(Iop_16Uto32, load(Ity_I16, mkexpr(addr2))));
+
+   /* Find out whether this is a high surrogate. I.e. SRCVAL lies
+      inside the interval [0xd800 - 0xdbff] */
+   IRTemp  is_high_surrogate = newTemp(Ity_I32);
+   IRExpr *flag1 = mkite(binop(Iop_CmpLE32U, mkU32(0xd800), mkexpr(srcval)),
+                         mkU32(1), mkU32(0));
+   IRExpr *flag2 = mkite(binop(Iop_CmpLE32U, mkexpr(srcval), mkU32(0xdbff)),
+                         mkU32(1), mkU32(0));
+   assign(is_high_surrogate, binop(Iop_And32, flag1, flag2));
+
+   /* If SRCVAL is a high surrogate and there are less than 4 bytes left,
+      then the 2nd operand is exhausted and we're done here. cc = 0 */
+   IRExpr *not_enough_bytes =
+      mkite(binop(Iop_CmpLT64U, mkexpr(len2), mkU64(4)), mkU32(1), mkU32(0));
+
+   next_insn_if(binop(Iop_CmpEQ32,
+                      binop(Iop_And32, mkexpr(is_high_surrogate),
+                            not_enough_bytes),
+                      mkU32(1)));
+
+   /* The 2nd operand is not exhausted. If the first 2 bytes are a high
+      surrogate, read the next two bytes (low surrogate). */
+   IRTemp  low_surrogate = newTemp(Ity_I32);
+   IRExpr *low_surrogate_addr = binop(Iop_Add64, mkexpr(addr2), mkU64(2));
+
+   assign(low_surrogate,
+          mkite(binop(Iop_CmpEQ32, mkexpr(is_high_surrogate), mkU32(1)),
+                unop(Iop_16Uto32, load(Ity_I16, low_surrogate_addr)),
+                mkU32(0)));  // any value is fine; it will not be used
+
+   /* Call the helper */
+   IRTemp retval = newTemp(Ity_I64);
+   assign(retval, s390_call_cu24(unop(Iop_32Uto64, mkexpr(srcval)),
+                                 unop(Iop_32Uto64, mkexpr(low_surrogate))));
+
+   /* Before we can test whether the 1st operand is exhausted we need to
+      test for an invalid low surrogate. Because cc=2 outranks cc=1. */
+   if (s390_host_has_etf3 && (m3 & 0x1) == 1) {
+      IRExpr *invalid_low_surrogate =
+         binop(Iop_And64, mkexpr(retval), mkU64(0xff));
+
+      s390_cc_set(2);
+      next_insn_if(binop(Iop_CmpEQ64, invalid_low_surrogate, mkU64(1)));
+   }
+
+   /* Now test whether the 1st operand is exhausted */
+   s390_cc_set(1);
+   next_insn_if(binop(Iop_CmpLT64U, mkexpr(len1), mkU64(4)));
+
+   /* Extract the bytes to be stored at addr1 */
+   IRExpr *data = unop(Iop_64to32, binop(Iop_Shr64, mkexpr(retval), mkU8(8)));
+
+   store(mkexpr(addr1), data);
+
+   /* Update source address and length */
+   IRTemp num_src_bytes = newTemp(Ity_I64);
+   assign(num_src_bytes,
+          mkite(binop(Iop_CmpEQ32, mkexpr(is_high_surrogate), mkU32(1)),
+                mkU64(4), mkU64(2)));
+   put_gpr_dw0(r2,     binop(Iop_Add64, mkexpr(addr2), mkexpr(num_src_bytes)));
+   put_gpr_dw0(r2 + 1, binop(Iop_Sub64, mkexpr(len2),  mkexpr(num_src_bytes)));
+
+   /* Update destination address and length */
+   put_gpr_dw0(r1,     binop(Iop_Add64, mkexpr(addr1), mkU64(4)));
+   put_gpr_dw0(r1 + 1, binop(Iop_Sub64, mkexpr(len1),  mkU64(4)));
+
+   iterate();
+
+   return "cu24";
+}
+
+static IRExpr *
+s390_call_cu42(IRExpr *srcval)
+{
+   IRExpr **args, *call;
+   args = mkIRExprVec_1(srcval);
+   call = mkIRExprCCall(Ity_I64, 0 /*regparm*/,
+                       "s390_do_cu42", &s390_do_cu42, args);
+
+   /* Nothing is excluded from definedness checking. */
+   call->Iex.CCall.cee->mcx_mask = 0;
+
+   return call;
+}
+
+static HChar *
+s390_irgen_CU42(UChar r1, UChar r2)
+{
+   IRTemp addr1 = newTemp(Ity_I64);
+   IRTemp addr2 = newTemp(Ity_I64);
+   IRTemp len1 = newTemp(Ity_I64);
+   IRTemp len2 = newTemp(Ity_I64);
+
+   assign(addr1, get_gpr_dw0(r1));
+   assign(addr2, get_gpr_dw0(r2));
+   assign(len1, get_gpr_dw0(r1 + 1));
+   assign(len2, get_gpr_dw0(r2 + 1));
+
+   /* We're processing the 2nd operand 4 bytes at a time. Therefore, if
+      there are less than 4 bytes left, then the 2nd operand is exhausted
+      and we're done here. cc = 0 */
+   s390_cc_set(0);
+   next_insn_if(binop(Iop_CmpLT64U, mkexpr(len2), mkU64(4)));
+
+   /* Read the 2nd operand. */
+   IRTemp srcval = newTemp(Ity_I32);
+   assign(srcval, load(Ity_I32, mkexpr(addr2)));
+
+   /* Call the helper */
+   IRTemp retval = newTemp(Ity_I64);
+   assign(retval, s390_call_cu42(unop(Iop_32Uto64, mkexpr(srcval))));
+
+   /* If the UTF-32 character was invalid, set cc=2 and we're done.
+      cc=2 outranks cc=1 (1st operand exhausted) */
+   IRExpr *invalid_character = binop(Iop_And64, mkexpr(retval), mkU64(0xff));
+
+   s390_cc_set(2);
+   next_insn_if(binop(Iop_CmpEQ64, invalid_character, mkU64(1)));
+
+   /* Now test whether the 1st operand is exhausted */
+   IRTemp num_bytes = newTemp(Ity_I64);
+   assign(num_bytes, binop(Iop_And64,
+                           binop(Iop_Shr64, mkexpr(retval), mkU8(8)),
+                           mkU64(0xff)));
+   s390_cc_set(1);
+   next_insn_if(binop(Iop_CmpLT64U, mkexpr(len1), mkexpr(num_bytes)));
+
+   /* Extract the bytes to be stored at addr1 */
+   IRTemp data = newTemp(Ity_I64);
+   assign(data, binop(Iop_Shr64, mkexpr(retval), mkU8(16)));
+
+   /* To store the bytes construct 2 dirty helper calls. The helper calls
+      are guarded (num_bytes == 2 and num_bytes == 4, respectively) such
+      that only one of them will be called at runtime. */
+
+   Int i;
+   for (i = 2; i <= 4; ++i) {
+      IRDirty *d;
+
+      if (i == 3) continue;  // skip this one
+
+      d = unsafeIRDirty_0_N(0 /* regparms */, "s390x_dirtyhelper_CUxy",
+                            &s390x_dirtyhelper_CUxy,
+                            mkIRExprVec_3(mkexpr(addr1), mkexpr(data),
+                                          mkexpr(num_bytes)));
+      d->guard = binop(Iop_CmpEQ64, mkexpr(num_bytes), mkU64(i));
+      d->mFx   = Ifx_Write;
+      d->mAddr = mkexpr(addr1);
+      d->mSize = i;
+      stmt(IRStmt_Dirty(d));
+   }
+
+   /* Update source address and length */
+   put_gpr_dw0(r2,     binop(Iop_Add64, mkexpr(addr2), mkU64(4)));
+   put_gpr_dw0(r2 + 1, binop(Iop_Sub64, mkexpr(len2),  mkU64(4)));
+
+   /* Update destination address and length */
+   put_gpr_dw0(r1,     binop(Iop_Add64, mkexpr(addr1), mkexpr(num_bytes)));
+   put_gpr_dw0(r1 + 1, binop(Iop_Sub64, mkexpr(len1),  mkexpr(num_bytes)));
+
+   iterate();
+
+   return "cu42";
+}
+
+static IRExpr *
+s390_call_cu41(IRExpr *srcval)
+{
+   IRExpr **args, *call;
+   args = mkIRExprVec_1(srcval);
+   call = mkIRExprCCall(Ity_I64, 0 /*regparm*/,
+                       "s390_do_cu41", &s390_do_cu41, args);
+
+   /* Nothing is excluded from definedness checking. */
+   call->Iex.CCall.cee->mcx_mask = 0;
+
+   return call;
+}
+
+static HChar *
+s390_irgen_CU41(UChar r1, UChar r2)
+{
+   IRTemp addr1 = newTemp(Ity_I64);
+   IRTemp addr2 = newTemp(Ity_I64);
+   IRTemp len1 = newTemp(Ity_I64);
+   IRTemp len2 = newTemp(Ity_I64);
+
+   assign(addr1, get_gpr_dw0(r1));
+   assign(addr2, get_gpr_dw0(r2));
+   assign(len1, get_gpr_dw0(r1 + 1));
+   assign(len2, get_gpr_dw0(r2 + 1));
+
+   /* We're processing the 2nd operand 4 bytes at a time. Therefore, if
+      there are less than 4 bytes left, then the 2nd operand is exhausted
+      and we're done here. cc = 0 */
+   s390_cc_set(0);
+   next_insn_if(binop(Iop_CmpLT64U, mkexpr(len2), mkU64(4)));
+
+   /* Read the 2nd operand. */
+   IRTemp srcval = newTemp(Ity_I32);
+   assign(srcval, load(Ity_I32, mkexpr(addr2)));
+
+   /* Call the helper */
+   IRTemp retval = newTemp(Ity_I64);
+   assign(retval, s390_call_cu41(unop(Iop_32Uto64, mkexpr(srcval))));
+
+   /* If the UTF-32 character was invalid, set cc=2 and we're done.
+      cc=2 outranks cc=1 (1st operand exhausted) */
+   IRExpr *invalid_character = binop(Iop_And64, mkexpr(retval), mkU64(0xff));
+
+   s390_cc_set(2);
+   next_insn_if(binop(Iop_CmpEQ64, invalid_character, mkU64(1)));
+
+   /* Now test whether the 1st operand is exhausted */
+   IRTemp num_bytes = newTemp(Ity_I64);
+   assign(num_bytes, binop(Iop_And64,
+                           binop(Iop_Shr64, mkexpr(retval), mkU8(8)),
+                           mkU64(0xff)));
+   s390_cc_set(1);
+   next_insn_if(binop(Iop_CmpLT64U, mkexpr(len1), mkexpr(num_bytes)));
+
+   /* Extract the bytes to be stored at addr1 */
+   IRTemp data = newTemp(Ity_I64);
+   assign(data, binop(Iop_Shr64, mkexpr(retval), mkU8(16)));
+
+   /* To store the bytes construct 4 dirty helper calls. The helper calls
+      are guarded (num_bytes == 1, num_bytes == 2, etc) such that only
+      one of them will be called at runtime. */
+   int i;
+   for (i = 1; i <= 4; ++i) {
+      IRDirty *d;
+
+      d = unsafeIRDirty_0_N(0 /* regparms */, "s390x_dirtyhelper_CUxy",
+                            &s390x_dirtyhelper_CUxy,
+                            mkIRExprVec_3(mkexpr(addr1), mkexpr(data),
+                                          mkexpr(num_bytes)));
+      d->guard = binop(Iop_CmpEQ64, mkexpr(num_bytes), mkU64(i));
+      d->mFx   = Ifx_Write;
+      d->mAddr = mkexpr(addr1);
+      d->mSize = i;
+      stmt(IRStmt_Dirty(d));
+   }
+
+   /* Update source address and length */
+   put_gpr_dw0(r2,     binop(Iop_Add64, mkexpr(addr2), mkU64(4)));
+   put_gpr_dw0(r2 + 1, binop(Iop_Sub64, mkexpr(len2),  mkU64(4)));
+
+   /* Update destination address and length */
+   put_gpr_dw0(r1,     binop(Iop_Add64, mkexpr(addr1), mkexpr(num_bytes)));
+   put_gpr_dw0(r1 + 1, binop(Iop_Sub64, mkexpr(len1),  mkexpr(num_bytes)));
+
+   iterate();
+
+   return "cu41";
+}
+
+static IRExpr *
+s390_call_cu12_cu14_helper1(IRExpr *byte1, IRExpr *etf3_and_m3_is_1)
+{
+   IRExpr **args, *call;
+   args = mkIRExprVec_2(byte1, etf3_and_m3_is_1);
+   call = mkIRExprCCall(Ity_I64, 0 /*regparm*/, "s390_do_cu12_cu14_helper1",
+                        &s390_do_cu12_cu14_helper1, args);
+
+   /* Nothing is excluded from definedness checking. */
+   call->Iex.CCall.cee->mcx_mask = 0;
+
+   return call;
+}
+
+static IRExpr *
+s390_call_cu12_helper2(IRExpr *byte1, IRExpr *byte2, IRExpr *byte3,
+                       IRExpr *byte4, IRExpr *stuff)
+{
+   IRExpr **args, *call;
+   args = mkIRExprVec_5(byte1, byte2, byte3, byte4, stuff);
+   call = mkIRExprCCall(Ity_I64, 0 /*regparm*/,
+                        "s390_do_cu12_helper2", &s390_do_cu12_helper2, args);
+
+   /* Nothing is excluded from definedness checking. */
+   call->Iex.CCall.cee->mcx_mask = 0;
+
+   return call;
+}
+
+static IRExpr *
+s390_call_cu14_helper2(IRExpr *byte1, IRExpr *byte2, IRExpr *byte3,
+                       IRExpr *byte4, IRExpr *stuff)
+{
+   IRExpr **args, *call;
+   args = mkIRExprVec_5(byte1, byte2, byte3, byte4, stuff);
+   call = mkIRExprCCall(Ity_I64, 0 /*regparm*/,
+                        "s390_do_cu14_helper2", &s390_do_cu14_helper2, args);
+
+   /* Nothing is excluded from definedness checking. */
+   call->Iex.CCall.cee->mcx_mask = 0;
+
+   return call;
+}
+
+static void
+s390_irgen_cu12_cu14(UChar m3, UChar r1, UChar r2, Bool is_cu12)
+{
+   IRTemp addr1 = newTemp(Ity_I64);
+   IRTemp addr2 = newTemp(Ity_I64);
+   IRTemp len1 = newTemp(Ity_I64);
+   IRTemp len2 = newTemp(Ity_I64);
+
+   assign(addr1, get_gpr_dw0(r1));
+   assign(addr2, get_gpr_dw0(r2));
+   assign(len1, get_gpr_dw0(r1 + 1));
+   assign(len2, get_gpr_dw0(r2 + 1));
+
+   UInt extended_checking = s390_host_has_etf3 && (m3 & 0x1) == 1;
+
+   /* We're processing the 2nd operand 1 byte at a time. Therefore, if
+      there is less than 1 byte left, then the 2nd operand is exhausted
+      and we're done here. cc = 0 */
+   s390_cc_set(0);
+   next_insn_if(binop(Iop_CmpLT64U, mkexpr(len2), mkU64(1)));
+
+   /* There is at least one byte there. Read it. */
+   IRTemp byte1 = newTemp(Ity_I64);
+   assign(byte1, unop(Iop_8Uto64, load(Ity_I8, mkexpr(addr2))));
+
+   /* Call the helper to get number of bytes and invalid byte indicator */
+   IRTemp retval1 = newTemp(Ity_I64);
+   assign(retval1, s390_call_cu12_cu14_helper1(mkexpr(byte1),
+                                               mkU64(extended_checking)));
+
+   /* Check for invalid 1st byte */
+   IRExpr *is_invalid = unop(Iop_64to1, mkexpr(retval1));
+   s390_cc_set(2);
+   next_insn_if(is_invalid);
+
+   /* How many bytes do we have to read? */
+   IRTemp num_src_bytes = newTemp(Ity_I64);
+   assign(num_src_bytes, binop(Iop_Shr64, mkexpr(retval1), mkU8(8)));
+
+   /* Now test whether the 2nd operand is exhausted */
+   s390_cc_set(0);
+   next_insn_if(binop(Iop_CmpLT64U, mkexpr(len2), mkexpr(num_src_bytes)));
+
+   /* Read the remaining bytes */
+   IRExpr *cond, *addr, *byte2, *byte3, *byte4;
+
+   cond  = binop(Iop_CmpLE64U, mkU64(2), mkexpr(num_src_bytes));
+   addr  = binop(Iop_Add64, mkexpr(addr2), mkU64(1));
+   byte2 = mkite(cond, unop(Iop_8Uto64, load(Ity_I8, addr)), mkU64(0));
+   cond  = binop(Iop_CmpLE64U, mkU64(3), mkexpr(num_src_bytes));
+   addr  = binop(Iop_Add64, mkexpr(addr2), mkU64(2));
+   byte3 = mkite(cond, unop(Iop_8Uto64, load(Ity_I8, addr)), mkU64(0));
+   cond  = binop(Iop_CmpLE64U, mkU64(4), mkexpr(num_src_bytes));
+   addr  = binop(Iop_Add64, mkexpr(addr2), mkU64(3));
+   byte4 = mkite(cond, unop(Iop_8Uto64, load(Ity_I8, addr)), mkU64(0));
+
+   /* Call the helper to get the converted value and invalid byte indicator.
+      We can pass at most 5 arguments; therefore some encoding is needed
+      here */
+   IRExpr *stuff = binop(Iop_Or64,
+                         binop(Iop_Shl64, mkexpr(num_src_bytes), mkU8(1)),
+                         mkU64(extended_checking));
+   IRTemp retval2 = newTemp(Ity_I64);
+
+   if (is_cu12) {
+      assign(retval2, s390_call_cu12_helper2(mkexpr(byte1), byte2, byte3,
+                                             byte4, stuff));
+   } else {
+      assign(retval2, s390_call_cu14_helper2(mkexpr(byte1), byte2, byte3,
+                                             byte4, stuff));
+   }
+
+   /* Check for invalid character */
+   s390_cc_set(2);
+   is_invalid = unop(Iop_64to1, mkexpr(retval2));
+   next_insn_if(is_invalid);
+
+   /* Now test whether the 1st operand is exhausted */
+   IRTemp num_bytes = newTemp(Ity_I64);
+   assign(num_bytes, binop(Iop_And64,
+                           binop(Iop_Shr64, mkexpr(retval2), mkU8(8)),
+                           mkU64(0xff)));
+   s390_cc_set(1);
+   next_insn_if(binop(Iop_CmpLT64U, mkexpr(len1), mkexpr(num_bytes)));
+
+   /* Extract the bytes to be stored at addr1 */
+   IRTemp data = newTemp(Ity_I64);
+   assign(data, binop(Iop_Shr64, mkexpr(retval2), mkU8(16)));
+
+   if (is_cu12) {
+      /* To store the bytes construct 2 dirty helper calls. The helper calls
+         are guarded (num_bytes == 2 and num_bytes == 4, respectively) such
+         that only one of them will be called at runtime. */
+
+      Int i;
+      for (i = 2; i <= 4; ++i) {
+         IRDirty *d;
+
+         if (i == 3) continue;  // skip this one
+
+         d = unsafeIRDirty_0_N(0 /* regparms */, "s390x_dirtyhelper_CUxy",
+                               &s390x_dirtyhelper_CUxy,
+                               mkIRExprVec_3(mkexpr(addr1), mkexpr(data),
+                                             mkexpr(num_bytes)));
+         d->guard = binop(Iop_CmpEQ64, mkexpr(num_bytes), mkU64(i));
+         d->mFx   = Ifx_Write;
+         d->mAddr = mkexpr(addr1);
+         d->mSize = i;
+         stmt(IRStmt_Dirty(d));
+      }
+   } else {
+      // cu14
+      store(mkexpr(addr1), unop(Iop_64to32, mkexpr(data)));
+   }
+
+   /* Update source address and length */
+   put_gpr_dw0(r2,     binop(Iop_Add64, mkexpr(addr2), mkexpr(num_src_bytes)));
+   put_gpr_dw0(r2 + 1, binop(Iop_Sub64, mkexpr(len2),  mkexpr(num_src_bytes)));
+
+   /* Update destination address and length */
+   put_gpr_dw0(r1,     binop(Iop_Add64, mkexpr(addr1), mkexpr(num_bytes)));
+   put_gpr_dw0(r1 + 1, binop(Iop_Sub64, mkexpr(len1),  mkexpr(num_bytes)));
+
+   iterate();
+}
+
+static HChar *
+s390_irgen_CU12(UChar m3, UChar r1, UChar r2)
+{
+   s390_irgen_cu12_cu14(m3, r1, r2, /* is_cu12 = */ 1);
+
+   return "cu12";
+}
+
+static HChar *
+s390_irgen_CU14(UChar m3, UChar r1, UChar r2)
+{
+   s390_irgen_cu12_cu14(m3, r1, r2, /* is_cu12 = */ 0);
+
+   return "cu14";
+}
 
 /*------------------------------------------------------------*/
 /*--- Build IR for special instructions                    ---*/
@@ -10858,12 +11760,13 @@ s390_irgen_client_request(void)
    if (0)
       vex_printf("%%R3 = client_request ( %%R2 )\n");
 
-   irsb->next = mkU64((ULong)(guest_IA_curr_instr
-                              + S390_SPECIAL_OP_PREAMBLE_SIZE
-                              + S390_SPECIAL_OP_SIZE));
-   irsb->jumpkind = Ijk_ClientReq;
+   Addr64 next = guest_IA_curr_instr + S390_SPECIAL_OP_PREAMBLE_SIZE
+                                     + S390_SPECIAL_OP_SIZE;
 
+   dis_res->jk_StopHere = Ijk_ClientReq;
    dis_res->whatNext = Dis_StopHere;
+
+   put_IA(mkaddr_expr(next));
 }
 
 static void
@@ -10878,16 +11781,17 @@ s390_irgen_guest_NRADDR(void)
 static void
 s390_irgen_call_noredir(void)
 {
+   Addr64 next = guest_IA_curr_instr + S390_SPECIAL_OP_PREAMBLE_SIZE
+                                     + S390_SPECIAL_OP_SIZE;
+
    /* Continue after special op */
-   put_gpr_dw0(14, mkU64(guest_IA_curr_instr
-                         + S390_SPECIAL_OP_PREAMBLE_SIZE
-                         + S390_SPECIAL_OP_SIZE));
+   put_gpr_dw0(14, mkaddr_expr(next));
 
    /* The address is in REG1, all parameters are in the right (guest) places */
-   irsb->next     = get_gpr_dw0(1);
-   irsb->jumpkind = Ijk_NoRedir;
+   put_IA(get_gpr_dw0(1));
 
    dis_res->whatNext = Dis_StopHere;
+   dis_res->jk_StopHere = Ijk_NoRedir;
 }
 
 /* Force proper alignment for the structures below. */
@@ -10922,8 +11826,6 @@ s390_decode_2byte_and_irgen(UChar *bytes)
    ((char *)(&ovl.value))[1] = bytes[1];
 
    switch (ovl.value & 0xffff) {
-   case 0x0000: /* invalid opcode */
-      s390_format_RR_RR(s390_irgen_00, 0, 0); goto ok;
    case 0x0101: /* PR */ goto unimplemented;
    case 0x0102: /* UPT */ goto unimplemented;
    case 0x0104: /* PTFF */ goto unimplemented;
@@ -11194,11 +12096,11 @@ s390_decode_4byte_and_irgen(UChar *bytes)
    switch ((ovl.value & 0xffff0000) >> 16) {
    case 0x8000: /* SSM */ goto unimplemented;
    case 0x8200: /* LPSW */ goto unimplemented;
-   case 0x9300: s390_format_S_RD(s390_irgen_TS, ovl.fmt.S.b2, ovl.fmt.S.d2);
-                                 goto ok;
+   case 0x9300: /* TS */ goto unimplemented;
    case 0xb202: /* STIDP */ goto unimplemented;
    case 0xb204: /* SCK */ goto unimplemented;
-   case 0xb205: s390_format_S_RD(s390_irgen_STCK, ovl.fmt.S.b2, ovl.fmt.S.d2);goto ok;
+   case 0xb205: s390_format_S_RD(s390_irgen_STCK, ovl.fmt.S.b2, ovl.fmt.S.d2);
+                goto ok;
    case 0xb206: /* SCKC */ goto unimplemented;
    case 0xb207: /* STCKC */ goto unimplemented;
    case 0xb208: /* SPT */ goto unimplemented;
@@ -11286,9 +12188,13 @@ s390_decode_4byte_and_irgen(UChar *bytes)
                                  goto ok;
    case 0xb29d: s390_format_S_RD(s390_irgen_LFPC, ovl.fmt.S.b2, ovl.fmt.S.d2);
                                  goto ok;
-   case 0xb2a5: /* TRE */ goto unimplemented;
-   case 0xb2a6: /* CU21 */ goto unimplemented;
-   case 0xb2a7: /* CU12 */ goto unimplemented;
+   case 0xb2a5: s390_format_RRE_FF(s390_irgen_TRE, ovl.fmt.RRE.r1, ovl.fmt.RRE.r2);  goto ok;
+   case 0xb2a6: s390_format_RRF_M0RERE(s390_irgen_CU21, ovl.fmt.RRF3.r3,
+                                       ovl.fmt.RRF3.r1, ovl.fmt.RRF3.r2);
+      goto ok;
+   case 0xb2a7: s390_format_RRF_M0RERE(s390_irgen_CU12, ovl.fmt.RRF3.r3,
+                                       ovl.fmt.RRF3.r1, ovl.fmt.RRF3.r2);
+      goto ok;
    case 0xb2b0: s390_format_S_RD(s390_irgen_STFLE, ovl.fmt.S.b2, ovl.fmt.S.d2);
                                  goto ok;
    case 0xb2b1: /* STFL */ goto unimplemented;
@@ -11649,10 +12555,14 @@ s390_decode_4byte_and_irgen(UChar *bytes)
    case 0xb98a: /* CSPG */ goto unimplemented;
    case 0xb98d: /* EPSW */ goto unimplemented;
    case 0xb98e: /* IDTE */ goto unimplemented;
-   case 0xb990: /* TRTT */ goto unimplemented;
-   case 0xb991: /* TRTO */ goto unimplemented;
-   case 0xb992: /* TROT */ goto unimplemented;
-   case 0xb993: /* TROO */ goto unimplemented;
+   case 0xb990: s390_format_RRF_M0RERE(s390_irgen_TRTT, ovl.fmt.RRF3.r3,
+                                   ovl.fmt.RRF3.r1, ovl.fmt.RRF3.r2);  goto ok;
+   case 0xb991: s390_format_RRF_M0RERE(s390_irgen_TRTO, ovl.fmt.RRF3.r3,
+                                   ovl.fmt.RRF3.r1, ovl.fmt.RRF3.r2);  goto ok;
+   case 0xb992: s390_format_RRF_M0RERE(s390_irgen_TROT, ovl.fmt.RRF3.r3,
+                                   ovl.fmt.RRF3.r1, ovl.fmt.RRF3.r2);  goto ok;
+   case 0xb993: s390_format_RRF_M0RERE(s390_irgen_TROO, ovl.fmt.RRF3.r3,
+                                   ovl.fmt.RRF3.r1, ovl.fmt.RRF3.r2);  goto ok;
    case 0xb994: s390_format_RRE_RR(s390_irgen_LLCR, ovl.fmt.RRE.r1,
                                    ovl.fmt.RRE.r2);  goto ok;
    case 0xb995: s390_format_RRE_RR(s390_irgen_LLHR, ovl.fmt.RRE.r1,
@@ -11674,10 +12584,16 @@ s390_decode_4byte_and_irgen(UChar *bytes)
    case 0xb9aa: /* LPTEA */ goto unimplemented;
    case 0xb9ae: /* RRBM */ goto unimplemented;
    case 0xb9af: /* PFMF */ goto unimplemented;
-   case 0xb9b0: /* CU14 */ goto unimplemented;
-   case 0xb9b1: /* CU24 */ goto unimplemented;
-   case 0xb9b2: /* CU41 */ goto unimplemented;
-   case 0xb9b3: /* CU42 */ goto unimplemented;
+   case 0xb9b0: s390_format_RRF_M0RERE(s390_irgen_CU14, ovl.fmt.RRF3.r3,
+                                       ovl.fmt.RRF3.r1, ovl.fmt.RRF3.r2);
+      goto ok;
+   case 0xb9b1: s390_format_RRF_M0RERE(s390_irgen_CU24, ovl.fmt.RRF3.r3,
+                                       ovl.fmt.RRF3.r1, ovl.fmt.RRF3.r2);
+      goto ok;
+   case 0xb9b2: s390_format_RRE_RR(s390_irgen_CU41, ovl.fmt.RRE.r1,
+                                   ovl.fmt.RRE.r2);  goto ok;
+   case 0xb9b3: s390_format_RRE_RR(s390_irgen_CU42, ovl.fmt.RRE.r1,
+                                   ovl.fmt.RRE.r2);  goto ok;
    case 0xb9bd: /* TRTRE */ goto unimplemented;
    case 0xb9be: /* SRSTU */ goto unimplemented;
    case 0xb9bf: /* TRTE */ goto unimplemented;
@@ -11910,7 +12826,8 @@ s390_decode_4byte_and_irgen(UChar *bytes)
    case 0xb7: /* LCTL */ goto unimplemented;
    case 0xba: s390_format_RS_RRRD(s390_irgen_CS, ovl.fmt.RS.r1, ovl.fmt.RS.r3,
                                   ovl.fmt.RS.b2, ovl.fmt.RS.d2);  goto ok;
-   case 0xbb: /* CDS */ goto unimplemented;
+   case 0xbb: s390_format_RS_RRRD(s390_irgen_CDS, ovl.fmt.RS.r1, ovl.fmt.RS.r3,
+                                  ovl.fmt.RS.b2, ovl.fmt.RS.d2);  goto ok;
    case 0xbd: s390_format_RS_RURD(s390_irgen_CLM, ovl.fmt.RS.r1, ovl.fmt.RS.r3,
                                   ovl.fmt.RS.b2, ovl.fmt.RS.d2);  goto ok;
    case 0xbe: s390_format_RS_RURD(s390_irgen_STCM, ovl.fmt.RS.r1, ovl.fmt.RS.r3,
@@ -12539,8 +13456,14 @@ s390_decode_6byte_and_irgen(UChar *bytes)
                                                 ovl.fmt.RSY.r3, ovl.fmt.RSY.b2,
                                                 ovl.fmt.RSY.dl2,
                                                 ovl.fmt.RSY.dh2);  goto ok;
-   case 0xeb0000000031ULL: /* CDSY */ goto unimplemented;
-   case 0xeb000000003eULL: /* CDSG */ goto unimplemented;
+   case 0xeb0000000031ULL: s390_format_RSY_RRRD(s390_irgen_CDSY, ovl.fmt.RSY.r1,
+                                                ovl.fmt.RSY.r3, ovl.fmt.RSY.b2,
+                                                ovl.fmt.RSY.dl2,
+                                                ovl.fmt.RSY.dh2);  goto ok;
+   case 0xeb000000003eULL: s390_format_RSY_RRRD(s390_irgen_CDSG, ovl.fmt.RSY.r1,
+                                                ovl.fmt.RSY.r3, ovl.fmt.RSY.b2,
+                                                ovl.fmt.RSY.dl2,
+                                                ovl.fmt.RSY.dh2);  goto ok;
    case 0xeb0000000044ULL: s390_format_RSY_RRRD(s390_irgen_BXHG, ovl.fmt.RSY.r1,
                                                 ovl.fmt.RSY.r3, ovl.fmt.RSY.b2,
                                                 ovl.fmt.RSY.dl2,
@@ -13073,7 +13996,9 @@ s390_decode_6byte_and_irgen(UChar *bytes)
    case 0xd9ULL: /* MVCK */ goto unimplemented;
    case 0xdaULL: /* MVCP */ goto unimplemented;
    case 0xdbULL: /* MVCS */ goto unimplemented;
-   case 0xdcULL: /* TR */ goto unimplemented;
+   case 0xdcULL: s390_format_SS_L0RDRD(s390_irgen_TR, ovl.fmt.SS.l,
+                                       ovl.fmt.SS.b1, ovl.fmt.SS.d1,
+                                       ovl.fmt.SS.b2, ovl.fmt.SS.d2);  goto ok;
    case 0xddULL: /* TRT */ goto unimplemented;
    case 0xdeULL: /* ED */ goto unimplemented;
    case 0xdfULL: /* EDMK */ goto unimplemented;
@@ -13209,11 +14134,10 @@ s390_decode_and_irgen(UChar *bytes, UInt insn_length, DisResult *dres)
       }
    }
    /* If next instruction is execute, stop here */
-   if (irsb->next == NULL && dis_res->whatNext == Dis_Continue
-       && bytes[insn_length] == 0x44) {
-      irsb->next = IRExpr_Const(IRConst_U64(guest_IA_next_instr));
+   if (dis_res->whatNext == Dis_Continue && bytes[insn_length] == 0x44) {
+      put_IA(mkaddr_expr(guest_IA_next_instr));
       dis_res->whatNext = Dis_StopHere;
-      dis_res->continueAt = 0;
+      dis_res->jk_StopHere = Ijk_Boring;
    }
 
    if (status == S390_DECODE_OK) return insn_length;  /* OK */
@@ -13252,14 +14176,6 @@ s390_decode_and_irgen(UChar *bytes, UInt insn_length, DisResult *dres)
 }
 
 
-/* Generate an IRExpr for an address. */
-static __inline__ IRExpr *
-mkaddr_expr(Addr64 addr)
-{
-   return IRExpr_Const(IRConst_U64(addr));
-}
-
-
 /* Disassemble a single instruction INSN into IR. */
 static DisResult
 disInstr_S390_WRK(UChar *insn)
@@ -13287,6 +14203,7 @@ disInstr_S390_WRK(UChar *insn)
    dres.whatNext   = Dis_Continue;
    dres.len        = insn_length;
    dres.continueAt = 0;
+   dres.jk_StopHere = Ijk_INVALID;
 
    /* fixs390: consider chasing of conditional jumps */
 
@@ -13296,16 +14213,30 @@ disInstr_S390_WRK(UChar *insn)
          error message.
          Tell the dispatcher that this insn cannot be decoded, and so has
          not been executed, and (is currently) the next to be executed.
-         IA should be up-to-date since it made so at the start of each
-         insn, but nevertheless be paranoid and update it again right
-         now. */
-      addStmtToIRSB(irsb, IRStmt_Put(S390X_GUEST_OFFSET(guest_IA),
-                                     mkaddr_expr(guest_IA_curr_instr)));
+         The insn address in the guest state needs to be set to 
+         guest_IA_curr_instr, otherwise the complaint will report an
+         incorrect address. */
+      put_IA(mkaddr_expr(guest_IA_curr_instr));
 
-      irsb->next = mkaddr_expr(guest_IA_next_instr);
-      irsb->jumpkind = Ijk_NoDecode;
-      dres.whatNext = Dis_StopHere;
-      dres.len = 0;
+      dres.whatNext    = Dis_StopHere;
+      dres.jk_StopHere = Ijk_NoDecode;
+      dres.continueAt  = 0;
+      dres.len         = 0;
+   } else {
+      /* Decode success */
+      switch (dres.whatNext) {
+      case Dis_Continue:
+         put_IA(mkaddr_expr(guest_IA_next_instr));
+         break;
+      case Dis_ResteerU:
+      case Dis_ResteerC:
+         put_IA(mkaddr_expr(dres.continueAt));
+         break;
+      case Dis_StopHere:
+         break;
+      default:
+         vassert(0);
+      }
    }
 
    return dres;
@@ -13321,7 +14252,6 @@ disInstr_S390_WRK(UChar *insn)
 
 DisResult
 disInstr_S390(IRSB        *irsb_IN,
-              Bool         put_IP,
               Bool       (*resteerOkFn)(void *, Addr64),
               Bool         resteerCisOk,
               void        *callback_opaque,
@@ -13343,11 +14273,6 @@ disInstr_S390(IRSB        *irsb_IN,
    irsb = irsb_IN;
    resteer_fn = resteerOkFn;
    resteer_data = callback_opaque;
-
-   /* We may be asked to update the guest IA before going further. */
-   if (put_IP)
-      addStmtToIRSB(irsb, IRStmt_Put(S390X_GUEST_OFFSET(guest_IA),
-                                     mkaddr_expr(guest_IA_curr_instr)));
 
    return disInstr_S390_WRK(guest_code + delta);
 }

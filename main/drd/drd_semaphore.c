@@ -1,8 +1,7 @@
-/* -*- mode: C; c-basic-offset: 3; indent-tabs-mode: nil; -*- */
 /*
   This file is part of drd, a thread error detector.
 
-  Copyright (C) 2006-2011 Bart Van Assche <bvanassche@acm.org>.
+  Copyright (C) 2006-2012 Bart Van Assche <bvanassche@acm.org>.
 
   This program is free software; you can redistribute it and/or
   modify it under the terms of the GNU General Public License as
@@ -340,8 +339,7 @@ void DRD_(semaphore_pre_wait)(const Addr semaphore)
 
 /**
  * Called after sem_wait() finished.
- * @note Do not rely on the value of 'waited' -- some glibc versions do
- *       not set it correctly.
+ * @note Some C libraries do not set the 'waited' value correctly.
  */
 void DRD_(semaphore_post_wait)(const DrdThreadId tid, const Addr semaphore,
                                const Bool waited)
@@ -349,16 +347,17 @@ void DRD_(semaphore_post_wait)(const DrdThreadId tid, const Addr semaphore,
    struct semaphore_info* p;
    Segment* sg;
 
+   tl_assert(waited == 0 || waited == 1);
    p = semaphore_get(semaphore);
    if (s_trace_semaphore)
-      DRD_(trace_msg)("[%d] sem_wait      0x%lx value %u -> %u",
+      DRD_(trace_msg)("[%d] sem_wait      0x%lx value %u -> %u%s",
                       DRD_(thread_get_running_tid)(), semaphore,
-                      p ? p->value : 0, p ? p->value - 1 : 0);
+                      p ? p->value : 0, p ? p->value - waited : 0,
+		      waited ? "" : " (did not wait)");
 
-   if (p)
-   {
+   if (p) {
       p->waiters--;
-      p->value--;
+      p->value -= waited;
    }
 
    /*
@@ -378,6 +377,9 @@ void DRD_(semaphore_post_wait)(const DrdThreadId tid, const Addr semaphore,
                               &sei);
       return;
    }
+
+   if (!waited)
+      return;
 
    if (p->waits_to_skip > 0)
       p->waits_to_skip--;

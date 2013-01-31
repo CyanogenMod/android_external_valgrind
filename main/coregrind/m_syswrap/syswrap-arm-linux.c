@@ -7,9 +7,9 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2000-2011 Nicholas Nethercote
+   Copyright (C) 2000-2012 Nicholas Nethercote
       njn@valgrind.org
-   Copyright (C) 2008-2011 Evan Geller
+   Copyright (C) 2008-2012 Evan Geller
       gaze@bea.ms
 
    This program is free software; you can redistribute it and/or
@@ -114,6 +114,7 @@ ULong do_syscall_clone_arm_linux   ( Word (*fn)(void *),
                                      void* tls );
 asm(
 ".text\n"
+".globl do_syscall_clone_arm_linux\n"
 "do_syscall_clone_arm_linux:\n"
 
 /*Setup child stack */
@@ -150,6 +151,7 @@ asm(
 
 // forward declarations
 static void setup_child ( ThreadArchState*, ThreadArchState* );
+static void assign_guest_tls(ThreadId ctid, Addr tlsptr);
 static SysRes sys_set_tls ( ThreadId tid, Addr tlsptr );
             
 /* 
@@ -228,12 +230,12 @@ static SysRes do_clone ( ThreadId ptid,
       ctst->client_stack_szB  = 0;
    }
 
+   vg_assert(VG_(owns_BigLock_LL)(ptid));
    VG_TRACK ( pre_thread_ll_create, ptid, ctid );
 
    if (flags & VKI_CLONE_SETTLS) {
-      res = sys_set_tls(ctid, child_tls);
-      if (sr_isError(res))
-         goto out;
+      /* Just assign the tls pointer in the guest TPIDRURO. */
+      assign_guest_tls(ctid, child_tls);
    }
     
    flags &= ~VKI_CLONE_SETTLS;
@@ -280,10 +282,53 @@ void setup_child ( /*OUT*/ ThreadArchState *child,
    child->vex_shadow2 = parent->vex_shadow2;
 }
 
-static SysRes sys_set_tls ( ThreadId tid, Addr tlsptr )
+static void assign_guest_tls(ThreadId tid, Addr tlsptr)
 {
    VG_(threads)[tid].arch.vex.guest_TPIDRURO = tlsptr;
+}
+
+/* Assigns tlsptr to the guest TPIDRURO.
+   If needed for the specific hardware, really executes
+   the set_tls syscall.
+*/
+static SysRes sys_set_tls ( ThreadId tid, Addr tlsptr )
+{
+   assign_guest_tls(tid, tlsptr);
+#if defined(ANDROID_HARDWARE_emulator)
+   /* Android emulator does not provide an hw tls register.
+      So, the tls register is emulated by the kernel.
+      This emulated value is set by the __NR_ARM_set_tls syscall.
+      The emulated value must be read by the kernel helper function
+      located at 0xffff0fe0.
+      
+      The emulated tlsptr is located at 0xffff0ff0
+      (so slightly after the kernel helper function).
+      Note that applications are not supposed to read this directly.
+      
+      For compatibility : if there is a hw tls register, the kernel
+      will put at 0xffff0fe0 the instructions to read it, so
+      as to have old applications calling the kernel helper
+      working properly.
+
+      For having emulated guest TLS working correctly with
+      Valgrind, it is needed to execute the syscall to set
+      the emulated TLS value in addition to the assignment
+      of TPIDRURO.
+
+      Note: the below means that if we need thread local storage
+      for Valgrind host, then there will be a conflict between
+      the need of the guest tls and of the host tls.
+      If all the guest code would cleanly call 0xffff0fe0,
+      then we might maybe intercept this. However, at least
+      __libc_preinit reads directly 0xffff0ff0.
+   */
+   /* ??? might call the below if auxv->u.a_val & VKI_HWCAP_TLS ???
+      Unclear if real hardware having tls hw register sets
+      VKI_HWCAP_TLS. */
+   return VG_(do_syscall1) (__NR_ARM_set_tls, tlsptr);
+#else
    return VG_(mk_SysRes_Success)( 0 );
+#endif
 }
 
 /* ---------------------------------------------------------------------
@@ -305,6 +350,7 @@ DECL_TEMPLATE(arm_linux, sys_setsockopt);
 DECL_TEMPLATE(arm_linux, sys_getsockopt);
 DECL_TEMPLATE(arm_linux, sys_connect);
 DECL_TEMPLATE(arm_linux, sys_accept);
+DECL_TEMPLATE(arm_linux, sys_accept4);
 DECL_TEMPLATE(arm_linux, sys_sendto);
 DECL_TEMPLATE(arm_linux, sys_recvfrom);
 //XXX: Semaphore code ripped from AMD64.
@@ -391,6 +437,13 @@ PRE(sys_socketcall)
       break;
    }
 
+   case VKI_SYS_ACCEPT4: {
+      /*int accept(int s, struct sockaddr *add, int *addrlen, int flags)*/
+      PRE_MEM_READ( "socketcall.accept4(args)", ARG2, 4*sizeof(Addr) );
+      ML_(generic_PRE_sys_accept)( tid, ARG2_0, ARG2_1, ARG2_2 );
+      break;
+   }
+
    case VKI_SYS_SENDTO:
      /* int sendto(int s, const void *msg, int len,
                     unsigned int flags,
@@ -472,7 +525,7 @@ PRE(sys_socketcall)
       * (after all it's glibc providing the arguments array)
        PRE_MEM_READ( "socketcall.sendmsg(args)", ARG2, 3*sizeof(Addr) );
      */
-     ML_(generic_PRE_sys_sendmsg)( tid, ARG2_0, ARG2_1 );
+     ML_(generic_PRE_sys_sendmsg)( tid, "msg", (struct vki_msghdr *)ARG2_1 );
      break;
    }
 
@@ -483,7 +536,7 @@ PRE(sys_socketcall)
       * (after all it's glibc providing the arguments array)
        PRE_MEM_READ("socketcall.recvmsg(args)", ARG2, 3*sizeof(Addr) );
      */
-     ML_(generic_PRE_sys_recvmsg)( tid, ARG2_0, ARG2_1 );
+     ML_(generic_PRE_sys_recvmsg)( tid, "msg", (struct vki_msghdr *)ARG2_1 );
      break;
    }
 
@@ -536,7 +589,9 @@ POST(sys_socketcall)
     break;
 
   case VKI_SYS_ACCEPT:
+  case VKI_SYS_ACCEPT4:
     /* int accept(int s, struct sockaddr *addr, int *addrlen); */
+    /* int accept4(int s, struct sockaddr *addr, int *addrlen, int flags); */
     r = ML_(generic_POST_sys_accept)( tid, VG_(mk_SysRes_Success)(RES),
                   ARG2_0, ARG2_1, ARG2_2 );
     SET_STATUS_from_SysRes(r);
@@ -587,7 +642,7 @@ POST(sys_socketcall)
     break;
 
   case VKI_SYS_RECVMSG:
-    ML_(generic_POST_sys_recvmsg)( tid, ARG2_0, ARG2_1 );
+    ML_(generic_POST_sys_recvmsg)( tid, "msg", (struct vki_msghdr *)ARG2_1, RES );
     break;
 
   default:
@@ -666,6 +721,23 @@ POST(sys_accept)
    SET_STATUS_from_SysRes(r);
 }
 
+PRE(sys_accept4)
+{
+   *flags |= SfMayBlock;
+   PRINT("sys_accept4 ( %ld, %#lx, %ld, %ld )",ARG1,ARG2,ARG3,ARG4);
+   PRE_REG_READ4(long, "accept4",
+                 int, s, struct sockaddr *, addr, int, *addrlen, int, flags);
+   ML_(generic_PRE_sys_accept)(tid, ARG1,ARG2,ARG3);
+}
+POST(sys_accept4)
+{
+   SysRes r;
+   vg_assert(SUCCESS);
+   r = ML_(generic_POST_sys_accept)(tid, VG_(mk_SysRes_Success)(RES),
+                                         ARG1,ARG2,ARG3);
+   SET_STATUS_from_SysRes(r);
+}
+
 PRE(sys_sendto)
 {
    *flags |= SfMayBlock;
@@ -699,7 +771,7 @@ PRE(sys_sendmsg)
    PRINT("sys_sendmsg ( %ld, %#lx, %ld )",ARG1,ARG2,ARG3);
    PRE_REG_READ3(long, "sendmsg",
                  int, s, const struct msghdr *, msg, int, flags);
-   ML_(generic_PRE_sys_sendmsg)(tid, ARG1,ARG2);
+   ML_(generic_PRE_sys_sendmsg)(tid, "msg", (struct vki_msghdr *)ARG2);
 }
 
 PRE(sys_recvmsg)
@@ -707,11 +779,11 @@ PRE(sys_recvmsg)
    *flags |= SfMayBlock;
    PRINT("sys_recvmsg ( %ld, %#lx, %ld )",ARG1,ARG2,ARG3);
    PRE_REG_READ3(long, "recvmsg", int, s, struct msghdr *, msg, int, flags);
-   ML_(generic_PRE_sys_recvmsg)(tid, ARG1,ARG2);
+   ML_(generic_PRE_sys_recvmsg)(tid, "msg", (struct vki_msghdr *)ARG2);
 }
 POST(sys_recvmsg)
 {
-   ML_(generic_POST_sys_recvmsg)(tid, ARG1,ARG2);
+   ML_(generic_POST_sys_recvmsg)(tid, "msg", (struct vki_msghdr *)ARG2, RES);
 }
 
 //XXX: Semaphore code ripped from AMD64.
@@ -1213,6 +1285,7 @@ PRE(sys_sigsuspend)
 
 PRE(sys_set_tls)
 {
+   PRINT("set_tls (%lx)",ARG1);
    PRE_REG_READ1(long, "set_tls", unsigned long, addr);
 
    SET_STATUS_from_SysRes( sys_set_tls( tid, ARG1 ) );
@@ -1782,14 +1855,14 @@ static SyscallTableEntry syscall_main_table[] = {
 
 //   LINX_(__NR_tee,               sys_ni_syscall),       // 315
 //   LINX_(__NR_vmsplice,          sys_ni_syscall),       // 316
-//   LINX_(__NR_move_pages,        sys_ni_syscall),       // 317
+   LINXY(__NR_move_pages,        sys_move_pages),       // 317
 //   LINX_(__NR_getcpu,            sys_ni_syscall),       // 318
 
    LINX_(__NR_utimensat,         sys_utimensat),        // 320
    LINXY(__NR_signalfd,          sys_signalfd),         // 321
    LINXY(__NR_timerfd_create,    sys_timerfd_create),   // 322
    LINX_(__NR_eventfd,           sys_eventfd),          // 323
-//   LINX_(__NR_fallocate,        sys_ni_syscall),        // 324
+
    LINXY(__NR_timerfd_settime,   sys_timerfd_settime),  // 325
    LINXY(__NR_timerfd_gettime,   sys_timerfd_gettime),   // 326
 
@@ -1807,11 +1880,20 @@ static SyscallTableEntry syscall_main_table[] = {
 
    LINXY(__NR_epoll_pwait,       sys_epoll_pwait),      // 346
 
+   LINX_(__NR_fallocate,         sys_fallocate),        // 352
+
    LINXY(__NR_signalfd4,         sys_signalfd4),        // 355
    LINX_(__NR_eventfd2,          sys_eventfd2),         // 356
-
+   LINXY(__NR_epoll_create1,     sys_epoll_create1),    // 357
+   LINXY(__NR_dup3,              sys_dup3),             // 358
    LINXY(__NR_pipe2,             sys_pipe2),            // 359
-   LINXY(__NR_inotify_init1,     sys_inotify_init1)     // 360
+   LINXY(__NR_inotify_init1,     sys_inotify_init1),    // 360
+   LINXY(__NR_preadv,            sys_preadv),           // 361
+   LINX_(__NR_pwritev,           sys_pwritev),          // 362
+   LINXY(__NR_rt_tgsigqueueinfo, sys_rt_tgsigqueueinfo),// 363
+   LINXY(__NR_perf_event_open,   sys_perf_event_open),  // 364
+
+   PLAXY(__NR_accept4,           sys_accept4)           // 366
 };
 
 

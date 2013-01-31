@@ -7,7 +7,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2000-2011 Julian Seward
+   Copyright (C) 2000-2012 Julian Seward
       jseward@acm.org
 
    This program is free software; you can redistribute it and/or
@@ -151,15 +151,23 @@ extern Addr VG_(am_get_advisory)
 extern Addr VG_(am_get_advisory_client_simple) 
    ( Addr start, SizeT len, /*OUT*/Bool* ok );
 
+/* Returns True if [start, start + len - 1] is covered by a single
+   free segment, otherwise returns False.
+   This allows to check the following case:
+   VG_(am_get_advisory_client_simple) (first arg == 0, meaning
+   this-or-nothing) is too lenient, and may allow us to trash
+   the next segment along.  So make very sure that the proposed
+   new area really is free.  This is perhaps overly
+   conservative, but it fixes #129866. */
+extern Bool VG_(am_covered_by_single_free_segment)
+   ( Addr start, SizeT len);
+
 /* Notifies aspacem that the client completed an mmap successfully.
    The segment array is updated accordingly.  If the returned Bool is
    True, the caller should immediately discard translations from the
    specified address range. */
 extern Bool VG_(am_notify_client_mmap)
    ( Addr a, SizeT len, UInt prot, UInt flags, Int fd, Off64T offset );
-
-extern Bool VG_(am_notify_fake_client_mmap)
-   ( Addr a, SizeT len, UInt prot, UInt flags, HChar* fileName, Off64T offset );
 
 /* Notifies aspacem that the client completed a shmat successfully.
    The segment array is updated accordingly.  If the returned Bool is
@@ -246,8 +254,6 @@ extern SysRes VG_(am_sbrk_anon_float_valgrind)( SizeT cszB );
    mapping in object files to read their debug info.  */
 extern SysRes VG_(am_mmap_file_float_valgrind)
    ( SizeT length, UInt prot, Int fd, Off64T offset );
-extern SysRes VG_(am_mmap_file_float_valgrind_flags)
-   ( SizeT length, UInt prot, UInt flags, Int fd, Off64T offset );
 
 /* Map shared a file at an unconstrained address for V, and update the
    segment array accordingly.  This is used by V for communicating
@@ -337,7 +343,8 @@ extern Bool VG_(am_relocate_nooverlap_client)( /*OUT*/Bool* need_discard,
 // stacks.  The address space manager provides and suitably
 // protects such stacks.
 
-#if defined(VGP_ppc32_linux) || defined(VGP_ppc64_linux)
+#if defined(VGP_ppc32_linux) || defined(VGP_ppc64_linux) \
+    || defined(VGP_mips32_linux)
 # define VG_STACK_GUARD_SZB  65536  // 1 or 16 pages
 # define VG_STACK_ACTIVE_SZB (4096 * 256) // 1Mb
 #else

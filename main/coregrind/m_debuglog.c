@@ -7,7 +7,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2000-2011 Julian Seward 
+   Copyright (C) 2000-2012 Julian Seward 
       jseward@acm.org
 
    This program is free software; you can redistribute it and/or
@@ -73,28 +73,20 @@ void VG_(debugLog_setXml)(Bool xml)
 
 static UInt local_sys_write_stderr ( HChar* buf, Int n )
 {
-   volatile Int block[2];
-   block[0] = (Int)buf;
-   block[1] = n;
+   Int result;
+
    __asm__ volatile (
-      "pushl %%ebx\n"           /* ebx is callee-save */
-      "movl  %0, %%ebx\n"       /* ebx = &block */
-      "pushl %%ebx\n"           /* save &block */
-      "movl  0(%%ebx), %%ecx\n" /* %ecx = buf */
-      "movl  4(%%ebx), %%edx\n" /* %edx = n */
+      "pushl %%ebx\n"
       "movl  $"VG_STRINGIFY(__NR_write)", %%eax\n" /* %eax = __NR_write */
       "movl  $2, %%ebx\n"       /* %ebx = stderr */
       "int   $0x80\n"           /* write(stderr, buf, n) */
-      "popl  %%ebx\n"           /* reestablish &block */
-      "movl  %%eax, 0(%%ebx)\n" /* block[0] = result */
-      "popl  %%ebx\n"           /* restore ebx */
-      : /*wr*/
-      : /*rd*/    "r" (block)
-      : /*trash*/ "eax", "edi", "ecx", "edx", "memory", "cc"
+      "popl %%ebx\n"
+      : /*wr*/    "=a" (result)
+      : /*rd*/    "c" (buf), "d" (n)
+      : /*trash*/ "edi", "memory", "cc"
    );
-   if (block[0] < 0) 
-      block[0] = -1;
-   return block[0];
+
+   return result >= 0 ? result : -1;
 }
 
 static UInt local_sys_getpid ( void )
@@ -396,6 +388,43 @@ static UInt local_sys_getpid ( void )
    if (__res >= (ULong)(-125))
       __res = -1;
    return (UInt)(__res);
+}
+
+#elif defined(VGP_mips32_linux)
+static UInt local_sys_write_stderr ( HChar* buf, Int n )
+{
+   volatile Int block[2];
+   block[0] = (Int)buf;
+   block[1] = n;
+   __asm__ volatile (
+      "li   $4, 2\n\t"        /* stderr */
+      "lw   $5, 0(%0)\n\t"    /* buf */
+      "lw   $6, 4(%0)\n\t"    /* n */
+      "move $7, $0\n\t"
+      "li   $2, %1\n\t"       /* set v0 = __NR_write */
+      "syscall\n\t"           /* write() */
+      "nop\n\t"
+      :
+      : "r" (block), "n" (__NR_write)
+      : "2", "4", "5", "6", "7"
+   );
+   if (block[0] < 0)
+      block[0] = -1;
+   return (UInt)block[0];
+}
+
+static UInt local_sys_getpid ( void )
+{
+   UInt __res;
+   __asm__ volatile (
+      "li   $2, %1\n\t"       /* set v0 = __NR_getpid */
+      "syscall\n\t"      /* getpid() */
+      "nop\n\t"
+      "move  %0, $2\n"
+      : "=r" (__res)
+      : "n" (__NR_getpid)
+      : "$2" );
+   return __res;
 }
 
 

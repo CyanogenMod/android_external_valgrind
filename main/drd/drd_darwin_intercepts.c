@@ -1,8 +1,7 @@
-/* -*- mode: C; c-basic-offset: 3; indent-tabs-mode: nil; -*- */
 /*
   This file is part of drd, a thread error detector.
 
-  Copyright (C) 2006-2011 Bart Van Assche <bvanassche@acm.org>.
+  Copyright (C) 2006-2012 Bart Van Assche <bvanassche@acm.org>.
 
   This program is free software; you can redistribute it and/or
   modify it under the terms of the GNU General Public License as
@@ -44,7 +43,7 @@ void* VG_WRAP_FUNCTION_ZZ(dyld, ZuZZN4dyld18fastBindLazySymbolEPP11ImageLoaderm)
 {
    void* res;
    OrigFn fn;
-  
+
    VALGRIND_GET_ORIG_FN(fn);
 
    ANNOTATE_IGNORE_READS_AND_WRITES_BEGIN();
