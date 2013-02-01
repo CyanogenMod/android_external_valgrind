@@ -14,8 +14,7 @@
 
 LOCAL_PATH := $(call my-dir)
 
-# other build targets can be added once we are actively using them:
-# dynamic_annotations, tsan, unittest
+# unittest can be built with "mmm external/valgrind/unittest"
 subdirs := $(addprefix $(LOCAL_PATH)/,$(addsuffix /Android.mk, \
         main \
     ))
