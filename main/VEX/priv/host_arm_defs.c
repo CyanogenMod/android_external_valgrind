@@ -708,12 +708,20 @@ HChar* showARMUnaryOp ( ARMUnaryOp op ) {
    }
 }
 
-HChar* showARMMulOp ( ARMMulOp op ) {
+HChar* showARMMulOp ( ARMMulDivOp op ) {
    switch (op) {
       case ARMmul_PLAIN: return "mul";
       case ARMmul_ZX:    return "umull";
       case ARMmul_SX:    return "smull";
       default: vpanic("showARMMulOp");
+   }
+}
+
+HChar* showARMDivOp ( ARMMulDivOp op ) {
+   switch (op) {
+      case ARMdiv_S:     return "sdiv";
+      case ARMdiv_U:     return "udiv";
+      default: vpanic("showARMDivOp");
    }
 }
 
@@ -1216,10 +1224,19 @@ ARMInstr* ARMInstr_Call ( ARMCondCode cond, HWord target, Int nArgRegs ) {
    i->ARMin.Call.nArgRegs = nArgRegs;
    return i;
 }
-ARMInstr* ARMInstr_Mul ( ARMMulOp op ) {
+ARMInstr* ARMInstr_Mul ( ARMMulDivOp op ) {
    ARMInstr* i = LibVEX_Alloc(sizeof(ARMInstr));
    i->tag          = ARMin_Mul;
    i->ARMin.Mul.op = op;
+   return i;
+}
+ARMInstr* ARMInstr_Div ( ARMMulDivOp op, HReg dst, HReg argL, HReg argR ) {
+   ARMInstr* i = LibVEX_Alloc(sizeof(ARMInstr));
+   i->tag          = ARMin_Div;
+   i->ARMin.Div.op = op;
+   i->ARMin.Div.dst  = dst;
+   i->ARMin.Div.argL = argL;
+   i->ARMin.Div.argR = argR;
    return i;
 }
 ARMInstr* ARMInstr_LdrEX ( Int szB ) {
@@ -1662,6 +1679,14 @@ void ppARMInstr ( ARMInstr* i ) {
             vex_printf("r1:r0, r2, r3");
          }
          return;
+      case ARMin_Div:
+         vex_printf("%-5s ", showARMDivOp(i->ARMin.Div.op));
+         ppHRegARM(i->ARMin.Div.dst);
+         vex_printf(", ");
+         ppHRegARM(i->ARMin.Div.argL);
+         vex_printf(", ");
+         ppHRegARM(i->ARMin.Div.argR);
+         return;
       case ARMin_LdrEX: {
          HChar* sz = "";
          switch (i->ARMin.LdrEX.szB) {
@@ -2083,6 +2108,11 @@ void getRegUsage_ARMInstr ( HRegUsage* u, ARMInstr* i, Bool mode64 )
          if (i->ARMin.Mul.op != ARMmul_PLAIN)
             addHRegUse(u, HRmWrite, hregARM_R1());
          return;
+      case ARMin_Div:
+         addHRegUse(u, HRmWrite, i->ARMin.Div.dst);
+         addHRegUse(u, HRmRead, i->ARMin.Div.argL);
+         addHRegUse(u, HRmRead, i->ARMin.Div.argR);
+         return;
       case ARMin_LdrEX:
          addHRegUse(u, HRmRead, hregARM_R4());
          addHRegUse(u, HRmWrite, hregARM_R2());
@@ -2317,6 +2347,11 @@ void mapRegs_ARMInstr ( HRegRemap* m, ARMInstr* i, Bool mode64 )
       case ARMin_Call:
          return;
       case ARMin_Mul:
+         return;
+      case ARMin_Div:
+         i->ARMin.Div.dst = lookupHRegRemap(m, i->ARMin.Div.dst);
+         i->ARMin.Div.argL = lookupHRegRemap(m, i->ARMin.Div.argL);
+         i->ARMin.Div.argR = lookupHRegRemap(m, i->ARMin.Div.argR);
          return;
       case ARMin_LdrEX:
          return;
@@ -3302,6 +3337,16 @@ Int emit_ARMInstr ( /*MB_MOD*/Bool* is_profInc,
             default: vassert(0);
          }
          goto bad;
+      }
+      case ARMin_Div: {
+         UInt subopc = i->ARMin.Div.op == ARMdiv_U ?
+                        X0011 : X0001;
+         UInt rD    = iregNo(i->ARMin.Div.dst);
+         UInt rN    = iregNo(i->ARMin.Div.argL);
+         UInt rM    = iregNo(i->ARMin.Div.argR);
+         UInt instr = XXXXXXXX(X1110, X0111, subopc, rD, 0xF, rM, X0001, rN);
+         *p++ = instr;
+         goto done;
       }
       case ARMin_LdrEX: {
          /* E1D42F9F   ldrexb r2, [r4]
