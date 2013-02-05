@@ -1193,6 +1193,19 @@ static HReg iselIntExpr_R_wrk ( ISelEnv* env, IRExpr* e )
          default: break;
       }
 
+      /* SDIV/UDIV */
+      if (e->Iex.Binop.op == Iop_DivU32 || e->Iex.Binop.op == Iop_DivS32) {
+         HReg     dst  = newVRegI(env);
+         HReg     argL = iselIntExpr_R(env, e->Iex.Binop.arg1);
+         HReg     argR = iselIntExpr_R(env, e->Iex.Binop.arg2);
+
+         addInstr(env,
+                  ARMInstr_Div(e->Iex.Binop.op == Iop_DivU32 ?
+                                  ARMdiv_U : ARMdiv_S,
+                               dst, argL, argR));
+         return dst;
+      }
+
       /* SHL/SHR/SAR */
       switch (e->Iex.Binop.op) {
          case Iop_Shl32: sop = ARMsh_SHL; goto sh_binop;
@@ -1889,7 +1902,7 @@ static void iselInt64Expr_wrk ( HReg* rHi, HReg* rLo, ISelEnv* env, IRExpr* e )
             HReg     argR = iselIntExpr_R(env, e->Iex.Binop.arg2);
             HReg     tHi  = newVRegI(env);
             HReg     tLo  = newVRegI(env);
-            ARMMulOp mop  = e->Iex.Binop.op == Iop_MullS32
+            ARMMulDivOp mop  = e->Iex.Binop.op == Iop_MullS32
                                ? ARMmul_SX : ARMmul_ZX;
             addInstr(env, mk_iMOVds_RR(hregARM_R2(), argL));
             addInstr(env, mk_iMOVds_RR(hregARM_R3(), argR));

@@ -383,12 +383,15 @@ typedef
    enum {
       ARMmul_PLAIN=60,
       ARMmul_ZX,
-      ARMmul_SX
+      ARMmul_SX,
+      ARMdiv_S,
+      ARMdiv_U
    }
-   ARMMulOp;
+   ARMMulDivOp;
 
-extern HChar* showARMMulOp ( ARMMulOp op );
+extern HChar* showARMMulOp ( ARMMulDivOp op );
 
+extern HChar* showARMDivOp ( ARMMulDivOp op );
 
 typedef
    enum {
@@ -570,6 +573,7 @@ typedef
       ARMin_CMov,
       ARMin_Call,
       ARMin_Mul,
+      ARMin_Div,
       ARMin_LdrEX,
       ARMin_StrEX,
       /* vfp */
@@ -727,8 +731,15 @@ typedef
             complexity).  Hence hardwire it.  At least using caller-saves
             registers, which are less likely to be in use. */
          struct {
-            ARMMulOp op;
+            ARMMulDivOp op;
          } Mul;
+         /* ARMdiv_S/ARMdiv_U: signed/unsigned integer divides, respectively. */
+         struct {
+            ARMMulDivOp op;
+            HReg        dst;
+            HReg        argL;
+            HReg        argR;
+         } Div;
          /* LDREX{,H,B} r2, [r4]  and
             LDREXD r2, r3, [r4]   (on LE hosts, transferred value is r3:r2)
             Again, hardwired registers since this is not performance
@@ -958,7 +969,9 @@ extern ARMInstr* ARMInstr_XAssisted ( HReg dstGA, ARMAMode1* amR15T,
                                       ARMCondCode cond, IRJumpKind jk );
 extern ARMInstr* ARMInstr_CMov     ( ARMCondCode, HReg dst, ARMRI84* src );
 extern ARMInstr* ARMInstr_Call     ( ARMCondCode, HWord, Int nArgRegs );
-extern ARMInstr* ARMInstr_Mul      ( ARMMulOp op );
+extern ARMInstr* ARMInstr_Mul      ( ARMMulDivOp op );
+extern ARMInstr* ARMInstr_Div      ( ARMMulDivOp op, HReg dst, HReg argL,
+                                     HReg argR );
 extern ARMInstr* ARMInstr_LdrEX    ( Int szB );
 extern ARMInstr* ARMInstr_StrEX    ( Int szB );
 extern ARMInstr* ARMInstr_VLdStD   ( Bool isLoad, HReg, ARMAModeV* );
