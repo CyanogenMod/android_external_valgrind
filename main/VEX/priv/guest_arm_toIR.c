@@ -12365,7 +12365,22 @@ static Bool decode_CP10_CP11_instruction (
          IRTemp rmode = newTemp(Ity_I32);
          assign(rmode, mkU32(Irrm_NEAREST)); // rmode that this insn is defd to use
          IRTemp src32 = newTemp(Ity_I32);
-         assign(src32,  unop(Iop_ReinterpF32asI32, getFReg(d)));
+         if (dp_op == 0) {
+            assign(src32,  unop(Iop_ReinterpF32asI32, getFReg(d)));
+         } else {
+            /* Example code sequence of using vcvt.f64.s32. The s32 value is
+               initialized in s14 but loaded via d7 (s14 is the low half of
+               d7), so we need to decode the register using getDReg instead of
+               getFReg. Since the conversion size is from s32 to f64, we also
+               need to explicitly extract the low half of i64 here.
+
+               81a0:       ee07 2a10       vmov            s14, r2
+               81a4:       eeba 7bef       vcvt.f64.s32    d7, d7, #1
+             */
+            IRTemp src64 = newTemp(Ity_I64);
+            assign(src64,  unop(Iop_ReinterpF64asI64, getDReg(d)));
+            assign(src32, unop(Iop_64to32, mkexpr(src64)));
+         }
          IRExpr* as_F64 = unop( unsyned ? Iop_I32UtoF64 : Iop_I32StoF64,
                                 mkexpr(src32 ) );
          IRTemp scale = newTemp(Ity_F64);
