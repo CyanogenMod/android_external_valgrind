@@ -32,7 +32,7 @@
 /* #undef GLIBC_2_10 */
 
 /* Define to 1 if you're using glibc 2.11.x */
-#define GLIBC_2_11 1
+/* #dundef GLIBC_2_11 1 */
 
 /* Define to 1 if you're using glibc 2.12.x */
 /* #undef GLIBC_2_12 */
@@ -84,11 +84,11 @@
 
 /* Define to 1 if gcc supports __sync_bool_compare_and_swap() and
    __sync_add_and_fetch() for the primary target */
-#define HAVE_BUILTIN_ATOMIC 1
+/* #undef HAVE_BUILTIN_ATOMIC */
 
 /* Define to 1 if g++ supports __sync_bool_compare_and_swap() and
    __sync_add_and_fetch() */
-#define HAVE_BUILTIN_ATOMIC_CXX 1
+/* #undef HAVE_BUILTIN_ATOMIC_CXX */
 
 /* Define to 1 if you have the `clock_gettime' function. */
 #define HAVE_CLOCK_GETTIME 1
@@ -97,7 +97,7 @@
 #define HAVE_CLOCK_MONOTONIC 1
 
 /* Define to 1 if you have the <endian.h> header file. */
-#define HAVE_ENDIAN_H 1
+/* #undef HAVE_ENDIAN_H */
 
 /* Define to 1 if you have the `epoll_create' function. */
 #define HAVE_EPOLL_CREATE 1
@@ -160,7 +160,7 @@
 /* #undef HAVE_PROCESS_VM_WRITEV */
 
 /* Define to 1 if you have the `pthread_barrier_init' function. */
-#define HAVE_PTHREAD_BARRIER_INIT 1
+/* #undef HAVE_PTHREAD_BARRIER_INIT */
 
 /* Define to 1 if you have the `pthread_condattr_setclock' function. */
 #define HAVE_PTHREAD_CONDATTR_SETCLOCK 1
@@ -169,7 +169,7 @@
 /* #undef HAVE_PTHREAD_CREATE_GLIBC_2_0 */
 
 /* Define to 1 if you have the `PTHREAD_MUTEX_ADAPTIVE_NP' constant. */
-#define HAVE_PTHREAD_MUTEX_ADAPTIVE_NP 1
+/* #undef HAVE_PTHREAD_MUTEX_ADAPTIVE_NP */
 
 /* Define to 1 if you have the `PTHREAD_MUTEX_ERRORCHECK_NP' constant. */
 #define HAVE_PTHREAD_MUTEX_ERRORCHECK_NP 1
@@ -181,7 +181,7 @@
 #define HAVE_PTHREAD_MUTEX_TIMEDLOCK 1
 
 /* Define to 1 if pthread_mutex_t has a member __data.__kind. */
-#define HAVE_PTHREAD_MUTEX_T__DATA__KIND 1
+/* #undef HAVE_PTHREAD_MUTEX_T__DATA__KIND */
 
 /* Define to 1 if pthread_mutex_t has a member called __m_kind. */
 /* #undef HAVE_PTHREAD_MUTEX_T__M_KIND */
@@ -200,7 +200,7 @@
 #define HAVE_PTHREAD_RWLOCK_TIMEDWRLOCK 1
 
 /* Define to 1 if you have the `pthread_spin_lock' function. */
-#define HAVE_PTHREAD_SPIN_LOCK 1
+/* #undef HAVE_PTHREAD_SPIN_LOCK */
 
 /* Define to 1 if you have the `pthread_yield' function. */
 #define HAVE_PTHREAD_YIELD 1
@@ -344,7 +344,7 @@
 #define VERSION "3.8.1"
 
 /* Temporary files directory */
-#define VG_TMPDIR "/tmp"
+#define VG_TMPDIR "/data/local/tmp"
 
 /* Define to `int' if <sys/types.h> doesn't define. */
 /* #undef gid_t */

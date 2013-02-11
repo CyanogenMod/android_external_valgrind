@@ -1249,7 +1249,13 @@ void find_debug_file( struct _DebugInfo* di,
          VG_(sprintf)(debugpath, "%s/.debug/%s", objdir, debugname);
          if ((addr = open_debug_file(debugpath, NULL, crc, rel_ok, &size)) == 0) {
             VG_(sprintf)(debugpath, "/usr/lib/debug%s/%s", objdir, debugname);
-            addr = open_debug_file(debugpath, NULL, crc, rel_ok, &size);
+            if ((addr = open_debug_file(debugpath, NULL, crc, rel_ok, &size)) == 0) {
+#if defined(VGPV_arm_linux_android) || defined(VGPV_x86_linux_android)
+               VG_(sprintf)(debugpath, "/data/local/symbols%s/%s", objdir,
+                            debugname);
+               addr = open_debug_file(debugpath, NULL, crc, rel_ok, &size);
+#endif
+            }
          }
       }
 
