@@ -7,7 +7,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2000-2011 Julian Seward
+   Copyright (C) 2000-2012 Julian Seward
       jseward@acm.org
 
    This program is free software; you can redistribute it and/or
@@ -41,7 +41,6 @@
 
 /* Move an fd into the Valgrind-safe range */
 extern Int VG_(safe_fd) ( Int oldfd );
-extern Int reopen_output_fd(Bool xml);
 extern Int VG_(fcntl)   ( Int fd, Int cmd, Addr arg );
 
 /* Convert an fd into a filename */

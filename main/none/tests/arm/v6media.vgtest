@@ -1,4 +1,2 @@
 prog: v6media
 vgopts: -q
-prog: v6media
-vgopts: -q

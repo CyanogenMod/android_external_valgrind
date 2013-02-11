@@ -7,7 +7,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2000-2011 Julian Seward
+   Copyright (C) 2000-2012 Julian Seward
       jseward@acm.org
 
    This program is free software; you can redistribute it and/or
@@ -663,7 +663,6 @@ void VG_(track_stop_client_code)(
       ll_exit (in the child's context)
 */
 void VG_(track_pre_thread_ll_create) (void(*f)(ThreadId tid, ThreadId child));
-void VG_(track_workq_task_start) (void(*f)(ThreadId tid, Addr workitem));
 void VG_(track_pre_thread_first_insn)(void(*f)(ThreadId tid));
 void VG_(track_pre_thread_ll_exit)   (void(*f)(ThreadId tid));
 

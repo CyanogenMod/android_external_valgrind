@@ -7,7 +7,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2000-2011 Julian Seward 
+   Copyright (C) 2000-2012 Julian Seward 
       jseward@acm.org
 
    This program is free software; you can redistribute it and/or
@@ -136,6 +136,17 @@ static void fill_phdr(ESZ(Phdr) *phdr, const NSegment *seg, UInt off, Bool write
    phdr->p_align = VKI_PAGE_SIZE;
 }
 
+#if defined(VGPV_arm_linux_android) || defined(VGPV_x86_linux_android)
+/* Android's libc doesn't provide a definition for this.  Hence: */
+typedef
+   struct {
+      Elf32_Word n_namesz;
+      Elf32_Word n_descsz;
+      Elf32_Word n_type;
+   }
+   Elf32_Nhdr;
+#endif
+
 struct note {
    struct note *next;
    ESZ(Nhdr) note;
@@ -148,7 +159,7 @@ static UInt note_size(const struct note *n)
                             + VG_ROUNDUP(n->note.n_descsz, 4);
 }
 
-#if !defined(VGPV_arm_linux_android)
+#if !defined(VGPV_arm_linux_android) && !defined(VGPV_x86_linux_android)
 static void add_note(struct note **list, const Char *name, UInt type,
                      const void *data, UInt datasz)
 {
@@ -170,7 +181,7 @@ static void add_note(struct note **list, const Char *name, UInt type,
    VG_(memcpy)(n->name, name, namelen);
    VG_(memcpy)(n->name+VG_ROUNDUP(namelen,4), data, datasz);
 }
-#endif /* !defined(VGPV_arm_linux_android) */
+#endif /* !defined(VGPV_*_linux_android) */
 
 static void write_note(Int fd, const struct note *n)
 {
@@ -364,6 +375,15 @@ static void fill_prstatus(const ThreadState *tst,
    DO(8);  DO(9);  DO(10); DO(11); DO(12); DO(13); DO(14); DO(15);
 #  undef DO
    regs->orig_gpr2 = arch->vex.guest_r2;
+#elif defined(VGP_mips32_linux)
+#  define DO(n)  regs->MIPS_r##n = arch->vex.guest_r##n
+   DO(0);  DO(1);  DO(2);  DO(3);  DO(4);  DO(5);  DO(6);  DO(7);
+   DO(8);  DO(9);  DO(10); DO(11); DO(12); DO(13); DO(14); DO(15);
+   DO(16); DO(17); DO(18); DO(19); DO(20); DO(21); DO(22); DO(23);
+   DO(24); DO(25); DO(26); DO(27); DO(28); DO(29); DO(30); DO(31);
+#  undef DO
+   regs->MIPS_hi   = arch->vex.guest_HI;
+   regs->MIPS_lo   = arch->vex.guest_LO;
 #else
 #  error Unknown ELF platform
 #endif
@@ -406,7 +426,8 @@ static void fill_fpu(const ThreadState *tst, vki_elf_fpregset_t *fpu)
 //::    fpu->mxcsr_mask = ?;
 //::    fpu->st_space = ?;
 
-#  define DO(n)  VG_(memcpy)(fpu->xmm_space + n * 4, &arch->vex.guest_XMM##n, sizeof(arch->vex.guest_XMM##n))
+#  define DO(n)  VG_(memcpy)(fpu->xmm_space + n * 4, \
+                             &arch->vex.guest_YMM##n[0], 16)
    DO(0);  DO(1);  DO(2);  DO(3);  DO(4);  DO(5);  DO(6);  DO(7);
    DO(8);  DO(9);  DO(10); DO(11); DO(12); DO(13); DO(14); DO(15);
 #  undef DO
@@ -443,12 +464,19 @@ static void fill_fpu(const ThreadState *tst, vki_elf_fpregset_t *fpu)
    DO(0);  DO(1);  DO(2);  DO(3);  DO(4);  DO(5);  DO(6);  DO(7);
    DO(8);  DO(9);  DO(10); DO(11); DO(12); DO(13); DO(14); DO(15);
 # undef DO
+#elif defined(VGP_mips32_linux)
+#  define DO(n)  (*fpu)[n] = *(double*)(&arch->vex.guest_f##n)
+   DO(0);  DO(1);  DO(2);  DO(3);  DO(4);  DO(5);  DO(6);  DO(7);
+   DO(8);  DO(9);  DO(10); DO(11); DO(12); DO(13); DO(14); DO(15);
+   DO(16); DO(17); DO(18); DO(19); DO(20); DO(21); DO(22); DO(23);
+   DO(24); DO(25); DO(26); DO(27); DO(28); DO(29); DO(30); DO(31);
+#  undef DO
 #else
 #  error Unknown ELF platform
 #endif
 }
 
-#if defined(VGP_x86_linux)
+#if defined(VGP_x86_linux) && !defined(VGPV_x86_linux_android)
 static void fill_xfpu(const ThreadState *tst, vki_elf_fpxregset_t *xfpu)
 {
    ThreadArchState* arch = (ThreadArchState*)&tst->arch;
@@ -561,11 +589,13 @@ void make_elf_coredump(ThreadId tid, const vki_siginfo_t *si, UInt max_size)
 	 continue;
 
 #     if defined(VGP_x86_linux)
+#     if !defined(VGPV_arm_linux_android) && !defined(VGPV_x86_linux_android)
       {
          vki_elf_fpxregset_t xfpu;
          fill_xfpu(&VG_(threads)[i], &xfpu);
          add_note(&notelist, "LINUX", NT_PRXFPREG, &xfpu, sizeof(xfpu));
       }
+#     endif
 #     endif
 
       fill_fpu(&VG_(threads)[i], &fpu);

@@ -7,11 +7,11 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2004-2011 OpenWorks LLP
+   Copyright (C) 2004-2012 OpenWorks LLP
       info@open-works.net
 
    NEON support is
-   Copyright (C) 2010-2011 Samsung Electronics
+   Copyright (C) 2010-2012 Samsung Electronics
    contributed by Dmitry Zhurikhin <zhur@ispras.ru>
               and Kirill Batuzov <batuzovk@ispras.ru>
 
@@ -84,9 +84,6 @@
              32-bit virtual HReg, which holds the high half
              of the value.
 
-   - The name of the vreg in which we stash a copy of the link reg, so
-     helper functions don't kill it.
-
    - The code array, that is, the insns selected so far.
 
    - A counter, for generating new virtual registers.
@@ -94,23 +91,38 @@
    - The host hardware capabilities word.  This is set at the start
      and does not change.
 
-   Note, this is all host-independent.  */
+   - A Bool for indicating whether we may generate chain-me
+     instructions for control flow transfers, or whether we must use
+     XAssisted.
+
+   - The maximum guest address of any guest insn in this block.
+     Actually, the address of the highest-addressed byte from any insn
+     in this block.  Is set at the start and does not change.  This is
+     used for detecting jumps which are definitely forward-edges from
+     this block, and therefore can be made (chained) to the fast entry
+     point of the destination, thereby avoiding the destination's
+     event check.
+
+   Note, this is all (well, mostly) host-independent.
+*/
 
 typedef
    struct {
+      /* Constant -- are set at the start and do not change. */
       IRTypeEnv*   type_env;
 
       HReg*        vregmap;
       HReg*        vregmapHI;
       Int          n_vregmap;
 
-      HReg         savedLR;
-
-      HInstrArray* code;
-
-      Int          vreg_ctr;
-
       UInt         hwcaps;
+
+      Bool         chainingAllowed;
+      Addr64       max_ga;
+
+      /* These are modified as we go along. */
+      HInstrArray* code;
+      Int          vreg_ctr;
    }
    ISelEnv;
 
@@ -1121,14 +1133,15 @@ static HReg iselIntExpr_R_wrk ( ISelEnv* env, IRExpr* e )
 
 //zz   /* --------- TERNARY OP --------- */
 //zz   case Iex_Triop: {
+//zz      IRTriop *triop = e->Iex.Triop.details;
 //zz      /* C3210 flags following FPU partial remainder (fprem), both
 //zz         IEEE compliant (PREM1) and non-IEEE compliant (PREM). */
-//zz      if (e->Iex.Triop.op == Iop_PRemC3210F64
-//zz          || e->Iex.Triop.op == Iop_PRem1C3210F64) {
+//zz      if (triop->op == Iop_PRemC3210F64
+//zz          || triop->op == Iop_PRem1C3210F64) {
 //zz         HReg junk = newVRegF(env);
 //zz         HReg dst  = newVRegI(env);
-//zz         HReg srcL = iselDblExpr(env, e->Iex.Triop.arg2);
-//zz         HReg srcR = iselDblExpr(env, e->Iex.Triop.arg3);
+//zz         HReg srcL = iselDblExpr(env, triop->arg2);
+//zz         HReg srcR = iselDblExpr(env, triop->arg3);
 //zz         /* XXXROUNDINGFIXME */
 //zz         /* set roundingmode here */
 //zz         addInstr(env, X86Instr_FpBinary(
@@ -1262,7 +1275,7 @@ static HReg iselIntExpr_R_wrk ( ISelEnv* env, IRExpr* e )
           || e->Iex.Binop.op == Iop_GetElem16x4
           || e->Iex.Binop.op == Iop_GetElem32x2) {
          HReg res = newVRegI(env);
-         HReg arg = iselNeon64Expr(env, e->Iex.Triop.arg1);
+         HReg arg = iselNeon64Expr(env, e->Iex.Binop.arg1);
          UInt index, size;
          if (e->Iex.Binop.arg2->tag != Iex_Const ||
              typeOfIRExpr(env->type_env, e->Iex.Binop.arg2) != Ity_I8) {
@@ -1287,7 +1300,7 @@ static HReg iselIntExpr_R_wrk ( ISelEnv* env, IRExpr* e )
           || e->Iex.Binop.op == Iop_GetElem16x8
           || e->Iex.Binop.op == Iop_GetElem32x4) {
          HReg res = newVRegI(env);
-         HReg arg = iselNeonExpr(env, e->Iex.Triop.arg1);
+         HReg arg = iselNeonExpr(env, e->Iex.Binop.arg1);
          UInt index, size;
          if (e->Iex.Binop.arg2->tag != Iex_Const ||
              typeOfIRExpr(env->type_env, e->Iex.Binop.arg2) != Ity_I8) {
@@ -1349,6 +1362,12 @@ static HReg iselIntExpr_R_wrk ( ISelEnv* env, IRExpr* e )
             fn = &h_generic_calc_QSub8Ux4; break;
          case Iop_Sad8Ux4:
             fn = &h_generic_calc_Sad8Ux4; break;
+         case Iop_QAdd32S:
+            fn = &h_generic_calc_QAdd32S; break;
+         case Iop_QSub32S:
+            fn = &h_generic_calc_QSub32S; break;
+         case Iop_QSub16Ux2:
+            fn = &h_generic_calc_QSub16Ux2; break;
          default:
             break;
       }
@@ -1514,7 +1533,7 @@ static HReg iselIntExpr_R_wrk ( ISelEnv* env, IRExpr* e )
          }
          case Iop_64to8: {
             HReg rHi, rLo;
-            if (arm_hwcaps & VEX_HWCAPS_ARM_NEON) {
+            if (env->hwcaps & VEX_HWCAPS_ARM_NEON) {
                HReg tHi = newVRegI(env);
                HReg tLo = newVRegI(env);
                HReg tmp = iselNeon64Expr(env, e->Iex.Unop.arg);
@@ -1819,7 +1838,7 @@ static void iselInt64Expr_wrk ( HReg* rHi, HReg* rLo, ISelEnv* env, IRExpr* e )
 
    /* read 64-bit IRTemp */
    if (e->tag == Iex_RdTmp) {
-      if (arm_hwcaps & VEX_HWCAPS_ARM_NEON) {
+      if (env->hwcaps & VEX_HWCAPS_ARM_NEON) {
          HReg tHi = newVRegI(env);
          HReg tLo = newVRegI(env);
          HReg tmp = iselNeon64Expr(env, e);
@@ -2028,7 +2047,7 @@ static void iselInt64Expr_wrk ( HReg* rHi, HReg* rLo, ISelEnv* env, IRExpr* e )
    /* It is convenient sometimes to call iselInt64Expr even when we
       have NEON support (e.g. in do_helper_call we need 64-bit
       arguments as 2 x 32 regs). */
-   if (arm_hwcaps & VEX_HWCAPS_ARM_NEON) {
+   if (env->hwcaps & VEX_HWCAPS_ARM_NEON) {
       HReg tHi = newVRegI(env);
       HReg tLo = newVRegI(env);
       HReg tmp = iselNeon64Expr(env, e);
@@ -3585,18 +3604,20 @@ static HReg iselNeon64Expr_wrk ( ISelEnv* env, IRExpr* e )
    } /* if (e->tag == Iex_Unop) */
 
    if (e->tag == Iex_Triop) {
-      switch (e->Iex.Triop.op) {
+      IRTriop *triop = e->Iex.Triop.details;
+
+      switch (triop->op) {
          case Iop_Extract64: {
             HReg res = newVRegD(env);
-            HReg argL = iselNeon64Expr(env, e->Iex.Triop.arg1);
-            HReg argR = iselNeon64Expr(env, e->Iex.Triop.arg2);
+            HReg argL = iselNeon64Expr(env, triop->arg1);
+            HReg argR = iselNeon64Expr(env, triop->arg2);
             UInt imm4;
-            if (e->Iex.Triop.arg3->tag != Iex_Const ||
-                typeOfIRExpr(env->type_env, e->Iex.Triop.arg3) != Ity_I8) {
+            if (triop->arg3->tag != Iex_Const ||
+                typeOfIRExpr(env->type_env, triop->arg3) != Ity_I8) {
                vpanic("ARM target supports Iop_Extract64 with constant "
                       "third argument less than 16 only\n");
             }
-            imm4 = e->Iex.Triop.arg3->Iex.Const.con->Ico.U8;
+            imm4 = triop->arg3->Iex.Const.con->Ico.U8;
             if (imm4 >= 8) {
                vpanic("ARM target supports Iop_Extract64 with constant "
                       "third argument less than 16 only\n");
@@ -3609,16 +3630,16 @@ static HReg iselNeon64Expr_wrk ( ISelEnv* env, IRExpr* e )
          case Iop_SetElem16x4:
          case Iop_SetElem32x2: {
             HReg res = newVRegD(env);
-            HReg dreg = iselNeon64Expr(env, e->Iex.Triop.arg1);
-            HReg arg = iselIntExpr_R(env, e->Iex.Triop.arg3);
+            HReg dreg = iselNeon64Expr(env, triop->arg1);
+            HReg arg = iselIntExpr_R(env, triop->arg3);
             UInt index, size;
-            if (e->Iex.Triop.arg2->tag != Iex_Const ||
-                typeOfIRExpr(env->type_env, e->Iex.Triop.arg2) != Ity_I8) {
+            if (triop->arg2->tag != Iex_Const ||
+                typeOfIRExpr(env->type_env, triop->arg2) != Ity_I8) {
                vpanic("ARM target supports SetElem with constant "
                       "second argument only\n");
             }
-            index = e->Iex.Triop.arg2->Iex.Const.con->Ico.U8;
-            switch (e->Iex.Triop.op) {
+            index = triop->arg2->Iex.Const.con->Ico.U8;
+            switch (triop->op) {
                case Iop_SetElem8x8: vassert(index < 8); size = 0; break;
                case Iop_SetElem16x4: vassert(index < 4); size = 1; break;
                case Iop_SetElem32x2: vassert(index < 2); size = 2; break;
@@ -5232,18 +5253,20 @@ static HReg iselNeonExpr_wrk ( ISelEnv* env, IRExpr* e )
    }
 
    if (e->tag == Iex_Triop) {
-      switch (e->Iex.Triop.op) {
+      IRTriop *triop = e->Iex.Triop.details;
+
+      switch (triop->op) {
          case Iop_ExtractV128: {
             HReg res = newVRegV(env);
-            HReg argL = iselNeonExpr(env, e->Iex.Triop.arg1);
-            HReg argR = iselNeonExpr(env, e->Iex.Triop.arg2);
+            HReg argL = iselNeonExpr(env, triop->arg1);
+            HReg argR = iselNeonExpr(env, triop->arg2);
             UInt imm4;
-            if (e->Iex.Triop.arg3->tag != Iex_Const ||
-                typeOfIRExpr(env->type_env, e->Iex.Triop.arg3) != Ity_I8) {
+            if (triop->arg3->tag != Iex_Const ||
+                typeOfIRExpr(env->type_env, triop->arg3) != Ity_I8) {
                vpanic("ARM target supports Iop_ExtractV128 with constant "
                       "third argument less than 16 only\n");
             }
-            imm4 = e->Iex.Triop.arg3->Iex.Const.con->Ico.U8;
+            imm4 = triop->arg3->Iex.Const.con->Ico.U8;
             if (imm4 >= 16) {
                vpanic("ARM target supports Iop_ExtractV128 with constant "
                       "third argument less than 16 only\n");
@@ -5339,7 +5362,7 @@ static HReg iselDblExpr_wrk ( ISelEnv* env, IRExpr* e )
    if (e->tag == Iex_Unop) {
       switch (e->Iex.Unop.op) {
          case Iop_ReinterpI64asF64: {
-            if (arm_hwcaps & VEX_HWCAPS_ARM_NEON) {
+            if (env->hwcaps & VEX_HWCAPS_ARM_NEON) {
                return iselNeon64Expr(env, e->Iex.Unop.arg);
             } else {
                HReg srcHi, srcLo;
@@ -5400,16 +5423,18 @@ static HReg iselDblExpr_wrk ( ISelEnv* env, IRExpr* e )
    }
 
    if (e->tag == Iex_Triop) {
-      switch (e->Iex.Triop.op) {
+      IRTriop *triop = e->Iex.Triop.details;
+
+      switch (triop->op) {
          case Iop_DivF64:
          case Iop_MulF64:
          case Iop_AddF64:
          case Iop_SubF64: {
             ARMVfpOp op = 0; /*INVALID*/
-            HReg argL = iselDblExpr(env, e->Iex.Triop.arg2);
-            HReg argR = iselDblExpr(env, e->Iex.Triop.arg3);
+            HReg argL = iselDblExpr(env, triop->arg2);
+            HReg argR = iselDblExpr(env, triop->arg3);
             HReg dst  = newVRegD(env);
-            switch (e->Iex.Triop.op) {
+            switch (triop->op) {
                case Iop_DivF64: op = ARMvfp_DIV; break;
                case Iop_MulF64: op = ARMvfp_MUL; break;
                case Iop_AddF64: op = ARMvfp_ADD; break;
@@ -5543,16 +5568,18 @@ static HReg iselFltExpr_wrk ( ISelEnv* env, IRExpr* e )
    }
 
    if (e->tag == Iex_Triop) {
-      switch (e->Iex.Triop.op) {
+      IRTriop *triop = e->Iex.Triop.details;
+
+      switch (triop->op) {
          case Iop_DivF32:
          case Iop_MulF32:
          case Iop_AddF32:
          case Iop_SubF32: {
             ARMVfpOp op = 0; /*INVALID*/
-            HReg argL = iselFltExpr(env, e->Iex.Triop.arg2);
-            HReg argR = iselFltExpr(env, e->Iex.Triop.arg3);
+            HReg argL = iselFltExpr(env, triop->arg2);
+            HReg argR = iselFltExpr(env, triop->arg3);
             HReg dst  = newVRegF(env);
-            switch (e->Iex.Triop.op) {
+            switch (triop->op) {
                case Iop_DivF32: op = ARMvfp_DIV; break;
                case Iop_MulF32: op = ARMvfp_MUL; break;
                case Iop_AddF32: op = ARMvfp_ADD; break;
@@ -5631,7 +5658,7 @@ static void iselStmt ( ISelEnv* env, IRStmt* stmt )
          return;
       }
       if (tyd == Ity_I64) {
-         if (arm_hwcaps & VEX_HWCAPS_ARM_NEON) {
+         if (env->hwcaps & VEX_HWCAPS_ARM_NEON) {
             HReg dD = iselNeon64Expr(env, stmt->Ist.Store.data);
             ARMAModeN* am = iselIntExpr_AModeN(env, stmt->Ist.Store.addr);
             addInstr(env, ARMInstr_NLdStD(False, dD, am));
@@ -5680,7 +5707,7 @@ static void iselStmt ( ISelEnv* env, IRStmt* stmt )
            return;
        }
        if (tyd == Ity_I64) {
-          if (arm_hwcaps & VEX_HWCAPS_ARM_NEON) {
+          if (env->hwcaps & VEX_HWCAPS_ARM_NEON) {
              HReg addr = newVRegI(env);
              HReg qD = iselNeon64Expr(env, stmt->Ist.Put.data);
              addInstr(env, ARMInstr_Add32(addr, hregARM_R8(),
@@ -5765,7 +5792,7 @@ static void iselStmt ( ISelEnv* env, IRStmt* stmt )
          return;
       }
       if (ty == Ity_I64) {
-         if (arm_hwcaps & VEX_HWCAPS_ARM_NEON) {
+         if (env->hwcaps & VEX_HWCAPS_ARM_NEON) {
             HReg src = iselNeon64Expr(env, stmt->Ist.WrTmp.data);
             HReg dst = lookupIRTemp(env, tmp);
             addInstr(env, ARMInstr_NUnary(ARMneon_COPY, dst, src, 4, False));
@@ -5824,7 +5851,7 @@ static void iselStmt ( ISelEnv* env, IRStmt* stmt )
       retty = typeOfIRTemp(env->type_env, d->tmp);
 
       if (retty == Ity_I64) {
-         if (arm_hwcaps & VEX_HWCAPS_ARM_NEON) {
+         if (env->hwcaps & VEX_HWCAPS_ARM_NEON) {
             HReg tmp = lookupIRTemp(env, d->tmp);
             addInstr(env, ARMInstr_VXferD(True, tmp, hregARM_R1(),
                                                      hregARM_R0()));
@@ -5878,7 +5905,7 @@ static void iselStmt ( ISelEnv* env, IRStmt* stmt )
                move it into a result register pair.  On a NEON capable
                CPU, the result register will be a 64 bit NEON
                register, so we must move it there instead. */
-            if (arm_hwcaps & VEX_HWCAPS_ARM_NEON) {
+            if (env->hwcaps & VEX_HWCAPS_ARM_NEON) {
                HReg dst = lookupIRTemp(env, res);
                addInstr(env, ARMInstr_VXferD(True, dst, hregARM_R3(),
                                                         hregARM_R2()));
@@ -5964,15 +5991,56 @@ static void iselStmt ( ISelEnv* env, IRStmt* stmt )
 
    /* --------- EXIT --------- */
    case Ist_Exit: {
-      HReg        gnext;
-      ARMCondCode cc;
       if (stmt->Ist.Exit.dst->tag != Ico_U32)
          vpanic("isel_arm: Ist_Exit: dst is not a 32-bit value");
-      gnext = iselIntExpr_R(env, IRExpr_Const(stmt->Ist.Exit.dst));
-      cc    = iselCondCode(env, stmt->Ist.Exit.guard);
-      addInstr(env, mk_iMOVds_RR(hregARM_R14(), env->savedLR));
-      addInstr(env, ARMInstr_Goto(stmt->Ist.Exit.jk, cc, gnext));
-      return;
+
+      ARMCondCode cc     = iselCondCode(env, stmt->Ist.Exit.guard);
+      ARMAMode1*  amR15T = ARMAMode1_RI(hregARM_R8(),
+                                        stmt->Ist.Exit.offsIP);
+
+      /* Case: boring transfer to known address */
+      if (stmt->Ist.Exit.jk == Ijk_Boring
+          || stmt->Ist.Exit.jk == Ijk_Call
+          || stmt->Ist.Exit.jk == Ijk_Ret) {
+         if (env->chainingAllowed) {
+            /* .. almost always true .. */
+            /* Skip the event check at the dst if this is a forwards
+               edge. */
+            Bool toFastEP
+               = ((Addr32)stmt->Ist.Exit.dst->Ico.U32) > env->max_ga;
+            if (0) vex_printf("%s", toFastEP ? "Y" : ",");
+            addInstr(env, ARMInstr_XDirect(stmt->Ist.Exit.dst->Ico.U32,
+                                           amR15T, cc, toFastEP));
+         } else {
+            /* .. very occasionally .. */
+            /* We can't use chaining, so ask for an assisted transfer,
+               as that's the only alternative that is allowable. */
+            HReg r = iselIntExpr_R(env, IRExpr_Const(stmt->Ist.Exit.dst));
+            addInstr(env, ARMInstr_XAssisted(r, amR15T, cc, Ijk_Boring));
+         }
+         return;
+      }
+
+      /* Case: assisted transfer to arbitrary address */
+      switch (stmt->Ist.Exit.jk) {
+         /* Keep this list in sync with that in iselNext below */
+         case Ijk_ClientReq:
+         case Ijk_NoDecode:
+         case Ijk_NoRedir:
+         case Ijk_Sys_syscall:
+         case Ijk_TInval:
+         {
+            HReg r = iselIntExpr_R(env, IRExpr_Const(stmt->Ist.Exit.dst));
+            addInstr(env, ARMInstr_XAssisted(r, amR15T, cc,
+                                             stmt->Ist.Exit.jk));
+            return;
+         }
+         default:
+            break;
+      }
+
+      /* Do we ever expect to see any other kind? */
+      goto stmt_fail;
    }
 
    default: break;
@@ -5987,19 +6055,86 @@ static void iselStmt ( ISelEnv* env, IRStmt* stmt )
 /*--- ISEL: Basic block terminators (Nexts)             ---*/
 /*---------------------------------------------------------*/
 
-static void iselNext ( ISelEnv* env, IRExpr* next, IRJumpKind jk )
+static void iselNext ( ISelEnv* env,
+                       IRExpr* next, IRJumpKind jk, Int offsIP )
 {
-   HReg rDst;
    if (vex_traceflags & VEX_TRACE_VCODE) {
-      vex_printf("\n-- goto {");
+      vex_printf( "\n-- PUT(%d) = ", offsIP);
+      ppIRExpr( next );
+      vex_printf( "; exit-");
       ppIRJumpKind(jk);
-      vex_printf("} ");
-      ppIRExpr(next);
-      vex_printf("\n");
+      vex_printf( "\n");
    }
-   rDst = iselIntExpr_R(env, next);
-   addInstr(env, mk_iMOVds_RR(hregARM_R14(), env->savedLR));
-   addInstr(env, ARMInstr_Goto(jk, ARMcc_AL, rDst));
+
+   /* Case: boring transfer to known address */
+   if (next->tag == Iex_Const) {
+      IRConst* cdst = next->Iex.Const.con;
+      vassert(cdst->tag == Ico_U32);
+      if (jk == Ijk_Boring || jk == Ijk_Call) {
+         /* Boring transfer to known address */
+         ARMAMode1* amR15T = ARMAMode1_RI(hregARM_R8(), offsIP);
+         if (env->chainingAllowed) {
+            /* .. almost always true .. */
+            /* Skip the event check at the dst if this is a forwards
+               edge. */
+            Bool toFastEP
+               = ((Addr64)cdst->Ico.U32) > env->max_ga;
+            if (0) vex_printf("%s", toFastEP ? "X" : ".");
+            addInstr(env, ARMInstr_XDirect(cdst->Ico.U32,
+                                           amR15T, ARMcc_AL, 
+                                           toFastEP));
+         } else {
+            /* .. very occasionally .. */
+            /* We can't use chaining, so ask for an assisted transfer,
+               as that's the only alternative that is allowable. */
+            HReg r = iselIntExpr_R(env, next);
+            addInstr(env, ARMInstr_XAssisted(r, amR15T, ARMcc_AL,
+                                             Ijk_Boring));
+         }
+         return;
+      }
+   }
+
+   /* Case: call/return (==boring) transfer to any address */
+   switch (jk) {
+      case Ijk_Boring: case Ijk_Ret: case Ijk_Call: {
+         HReg       r      = iselIntExpr_R(env, next);
+         ARMAMode1* amR15T = ARMAMode1_RI(hregARM_R8(), offsIP);
+         if (env->chainingAllowed) {
+            addInstr(env, ARMInstr_XIndir(r, amR15T, ARMcc_AL));
+         } else {
+            addInstr(env, ARMInstr_XAssisted(r, amR15T, ARMcc_AL,
+                                                Ijk_Boring));
+         }
+         return;
+      }
+      default:
+         break;
+   }
+
+   /* Case: assisted transfer to arbitrary address */
+   switch (jk) {
+      /* Keep this list in sync with that for Ist_Exit above */
+      case Ijk_ClientReq:
+      case Ijk_NoDecode:
+      case Ijk_NoRedir:
+      case Ijk_Sys_syscall:
+      {
+         HReg       r      = iselIntExpr_R(env, next);
+         ARMAMode1* amR15T = ARMAMode1_RI(hregARM_R8(), offsIP);
+         addInstr(env, ARMInstr_XAssisted(r, amR15T, ARMcc_AL, jk));
+         return;
+      }
+      default:
+         break;
+   }
+
+   vex_printf( "\n-- PUT(%d) = ", offsIP);
+   ppIRExpr( next );
+   vex_printf( "; exit-");
+   ppIRJumpKind(jk);
+   vex_printf( "\n");
+   vassert(0); // are we expecting any other kind?
 }
 
 
@@ -6009,21 +6144,27 @@ static void iselNext ( ISelEnv* env, IRExpr* next, IRJumpKind jk )
 
 /* Translate an entire SB to arm code. */
 
-HInstrArray* iselSB_ARM ( IRSB* bb, VexArch      arch_host,
-                                    VexArchInfo* archinfo_host,
-                                    VexAbiInfo*  vbi/*UNUSED*/ )
+HInstrArray* iselSB_ARM ( IRSB* bb,
+                          VexArch      arch_host,
+                          VexArchInfo* archinfo_host,
+                          VexAbiInfo*  vbi/*UNUSED*/,
+                          Int offs_Host_EvC_Counter,
+                          Int offs_Host_EvC_FailAddr,
+                          Bool chainingAllowed,
+                          Bool addProfInc,
+                          Addr64 max_ga )
 {
-   Int      i, j;
-   HReg     hreg, hregHI;
-   ISelEnv* env;
-   UInt     hwcaps_host = archinfo_host->hwcaps;
-   static UInt counter = 0;
+   Int       i, j;
+   HReg      hreg, hregHI;
+   ISelEnv*  env;
+   UInt      hwcaps_host = archinfo_host->hwcaps;
+   ARMAMode1 *amCounter, *amFailAddr;
 
    /* sanity ... */
    vassert(arch_host == VexArchARM);
 
    /* hwcaps should not change from one ISEL call to another. */
-   arm_hwcaps = hwcaps_host;
+   arm_hwcaps = hwcaps_host; // JRS 2012 Mar 31: FIXME (RM)
 
    /* Make up an initial environment to use. */
    env = LibVEX_Alloc(sizeof(ISelEnv));
@@ -6041,6 +6182,11 @@ HInstrArray* iselSB_ARM ( IRSB* bb, VexArch      arch_host,
    env->vregmap   = LibVEX_Alloc(env->n_vregmap * sizeof(HReg));
    env->vregmapHI = LibVEX_Alloc(env->n_vregmap * sizeof(HReg));
 
+   /* and finally ... */
+   env->chainingAllowed = chainingAllowed;
+   env->hwcaps          = hwcaps_host;
+   env->max_ga          = max_ga;
+
    /* For each IR temporary, allocate a suitably-kinded virtual
       register. */
    j = 0;
@@ -6052,7 +6198,7 @@ HInstrArray* iselSB_ARM ( IRSB* bb, VexArch      arch_host,
          case Ity_I16:
          case Ity_I32:  hreg   = mkHReg(j++, HRcInt32, True); break;
          case Ity_I64:
-            if (arm_hwcaps & VEX_HWCAPS_ARM_NEON) {
+            if (hwcaps_host & VEX_HWCAPS_ARM_NEON) {
                hreg = mkHReg(j++, HRcFlt64, True);
             } else {
                hregHI = mkHReg(j++, HRcInt32, True);
@@ -6070,21 +6216,27 @@ HInstrArray* iselSB_ARM ( IRSB* bb, VexArch      arch_host,
    }
    env->vreg_ctr = j;
 
-   /* Keep a copy of the link reg, since any call to a helper function
-      will trash it, and we can't get back to the dispatcher once that
-      happens. */
-   env->savedLR = newVRegI(env);
-   addInstr(env, mk_iMOVds_RR(env->savedLR, hregARM_R14()));
+   /* The very first instruction must be an event check. */
+   amCounter  = ARMAMode1_RI(hregARM_R8(), offs_Host_EvC_Counter);
+   amFailAddr = ARMAMode1_RI(hregARM_R8(), offs_Host_EvC_FailAddr);
+   addInstr(env, ARMInstr_EvCheck(amCounter, amFailAddr));
+
+   /* Possibly a block counter increment (for profiling).  At this
+      point we don't know the address of the counter, so just pretend
+      it is zero.  It will have to be patched later, but before this
+      translation is used, by a call to LibVEX_patchProfCtr. */
+   if (addProfInc) {
+      addInstr(env, ARMInstr_ProfInc());
+   }
 
    /* Ok, finally we can iterate over the statements. */
    for (i = 0; i < bb->stmts_used; i++)
-      iselStmt(env,bb->stmts[i]);
+      iselStmt(env, bb->stmts[i]);
 
-   iselNext(env,bb->next,bb->jumpkind);
+   iselNext(env, bb->next, bb->jumpkind, bb->offsIP);
 
    /* record the number of vregs we used. */
    env->code->n_vregs = env->vreg_ctr;
-   counter++;
    return env->code;
 }
 

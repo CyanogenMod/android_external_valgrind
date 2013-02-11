@@ -107,34 +107,6 @@ extern void reset_valgrind_sink(char* info);
    If debug info not found for this pc, assumes arm */
 extern Addr thumb_pc (Addr pc);
 
-/* True if gdbserver is single stepping the valgrind process */
-extern Bool valgrind_single_stepping(void);
-
-/* Set Valgrind in single stepping mode or not according to Bool. */
-extern void valgrind_set_single_stepping(Bool);
-
-/* gets the addr at which a (possible) break must be ignored once.
-   If there is no such break to be ignored once, 0 is returned.
-   This is needed for the following case:
-   The user sets a break at address AAA.
-   The break is encountered. Then the user does stepi 
-   (i.e. step one instruction).
-   In such a case, the already encountered break must be ignored
-   to ensure the stepi will advance by one instruction: a "break"
-   is implemented in valgrind by some helper code just after the
-   instruction mark at which the break is set. This helper code
-   verifies if either there is a break at the current PC
-   or if we are in stepping mode. If we are in stepping mode,
-   the already encountered break must be ignored once to advance
-   to the next instruction.
-   ??? need to check if this is *really* needed. */
-extern Addr valgrind_get_ignore_break_once(void);
-
-/* When addr > 0, ensures the next stop reply packet informs
-   gdb about the encountered watchpoint.
-   Use addr 0x0 to reset. */
-extern void VG_(set_watchpoint_stop_address) (Addr addr);
-
 /* when invoked by vgdb using ptrace, contains the tid chosen
    by vgdb (if vgdb gives a tid different of 0: a 0 tid by
    vgdb means use the running_tid if there is one running
@@ -230,31 +202,24 @@ struct thread_info;
    gdbserver by calling call_gdbserver.
    On return, call gdbserver_deliver_signal to effectively
    deliver the signal or not. */
-extern void gdbserver_signal_encountered (Int sigNo);
+extern void gdbserver_signal_encountered (Int vki_sigNo);
 /* between these two calls, call call_gdbserver */
 /* If gdbserver_deliver_signal True, then gdb did not ask
    to ignore the signal, so signal can be delivered to the guest. */
-extern Bool gdbserver_deliver_signal (Int sigNo);
+extern Bool gdbserver_deliver_signal (Int vki_sigNo);
 
 /* To optimise signal handling, gdb can instruct gdbserver to
-   not stop on some signals. In the below, a 1 indicates the signal
+   not stop on some signals. In the below, a 1 indicates the gdb_nr signal
    has to be passed directly to the guest, without asking gdb.
    A 0 indicates gdb has to be consulted to see if signal has
    or has not to be passed. The gdb consultation is to
    be done using the above two functions. */
-extern int pass_signals[];
+extern int pass_signals[]; /* indexed by gdb signal nr */
 
 
 #include "target.h"
 
 /* Target-specific functions */
-
-void initialize_low (void);
-
-/* initialize or re-initialize the register set of the low target.
-   if shadow_mode, then (re-)define the normal and valgrind shadow registers
-   else (re-)define only the normal registers. */
-void initialize_shadow_low (Bool shadow_mode);
 
 /* From inferiors.c.  */
 
@@ -323,6 +288,14 @@ int decode_X_packet (char *from, int packet_len, CORE_ADDR * mem_addr_ptr,
 
 int unhexify (char *bin, const char *hex, int count);
 int hexify (char *hex, const char *bin, int count);
+/* heximage builds an image of bin according to byte order of the architecture 
+   Useful for register and int image */
+char* heximage (char *buf, char *bin, int count);
+
+/* convert from CORE_ADDR to void* */
+void* C2v(CORE_ADDR addr);
+
+
 int remote_escape_output (const gdb_byte *buffer, int len,
 			  gdb_byte *out_buf, int *out_len,
 			  int out_maxlen);

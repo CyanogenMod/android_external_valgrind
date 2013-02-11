@@ -6,7 +6,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2011-2011 Philippe Waroquiers
+   Copyright (C) 2011-2012 Philippe Waroquiers
 
    This program is free software; you can redistribute it and/or
    modify it under the terms of the GNU General Public License as
@@ -80,7 +80,8 @@
    can be "waken up". PTRACEINVOKER implies some architecture
    specific code and/or some OS specific code. */
 #if defined(VGA_arm) || defined(VGA_x86) || defined(VGA_amd64) \
-    || defined(VGA_ppc32) || defined(VGA_ppc64) || defined(VGA_s390x)
+    || defined(VGA_ppc32) || defined(VGA_ppc64) || defined(VGA_s390x) \
+    || defined(VGP_mips32_linux)
 #define PTRACEINVOKER
 #else
 I_die_here : (PTRACEINVOKER) architecture missing in vgdb.c
@@ -181,25 +182,27 @@ const char *vgdb_tmpdir(void)
    const char *tmpdir;
 
    tmpdir = getenv("TMPDIR");
-   if (tmpdir == NULL || *tmpdir == '\0') tmpdir = VG_TMPDIR;
-   if (tmpdir == NULL || *tmpdir == '\0') tmpdir = "/tmp";    /* fallback */
+   if (tmpdir == NULL || *tmpdir == '\0')
+     tmpdir = VG_TMPDIR;
+   if (tmpdir == NULL || *tmpdir == '\0')
+     tmpdir = "/tmp";    /* fallback */
 
    return tmpdir;
 }
 
-/* Return the path prefix for the named pipes (FIFOs) used by vgdb/gdb
+/* Return the default path prefix for the named pipes (FIFOs) used by vgdb/gdb
    to communicate with valgrind */
 static
 char *vgdb_prefix_default(void)
 {
-   const char *tmpdir;
-   HChar *prefix;
-   
-   tmpdir = vgdb_tmpdir();
-   prefix = vmalloc(strlen(tmpdir) + strlen("/vgdb-pipe") + 1);
-   strcpy(prefix, tmpdir);
-   strcat(prefix, "/vgdb-pipe");
+   static HChar *prefix;
 
+   if (prefix == NULL) {
+      const char *tmpdir = vgdb_tmpdir();
+      prefix = vmalloc(strlen(tmpdir) + strlen("/vgdb-pipe") + 1);
+      strcpy(prefix, tmpdir);
+      strcat(prefix, "/vgdb-pipe");
+   }
    return prefix;
 }
 
@@ -340,7 +343,7 @@ int ptrace_read_memory (pid_t inferior_pid, CORE_ADDR memaddr,
    to inferior's memory at MEMADDR.
    On failure (cannot write the inferior)
    returns the value of errno.  */
-
+__attribute__((unused)) /* not used on all platforms */
 static
 int ptrace_write_memory (pid_t inferior_pid, CORE_ADDR memaddr, 
                          const unsigned char *myaddr, int len)
@@ -437,8 +440,10 @@ char *status_image (int status)
    if (WIFSTOPPED(status))
       APPEND ("WIFSTOPPED %d ", WSTOPSIG(status));
 
+#ifdef WIFCONTINUED
    if (WIFCONTINUED(status))
       APPEND ("WIFCONTINUED ");
+#endif
 
    return result;
 #undef APPEND
@@ -919,6 +924,8 @@ Bool invoke_gdbserver (int pid)
    sp = user_mod.regs.gpr[1];
 #elif defined(VGA_s390x)
    sp = user_mod.regs.gprs[15];
+#elif defined(VGA_mips32)
+   sp = user_mod.regs[29*2];
 #else
    I_die_here : (sp) architecture missing in vgdb.c
 #endif
@@ -991,6 +998,19 @@ Bool invoke_gdbserver (int pid)
 
 #elif defined(VGA_s390x)
       XERROR(0, "(fn32) s390x has no 32bits implementation");
+#elif defined(VGA_mips32)
+      /* put check arg in register 4 */
+      user_mod.regs[4*2] = check;
+      user_mod.regs[4*2+1] = 0xffffffff; // sign extend $a0
+      /* This sign extension is needed when vgdb 32 bits runs
+         on a 64 bits OS. */
+      /* put NULL return address in ra */
+      user_mod.regs[31*2] = bad_return;
+      user_mod.regs[31*2+1] = 0;
+      user_mod.regs[34*2] = shared32->invoke_gdbserver;
+      user_mod.regs[34*2+1] = 0;
+      user_mod.regs[25*2] = shared32->invoke_gdbserver;
+      user_mod.regs[25*2+1] = 0;
 #else
       I_die_here : architecture missing in vgdb.c
 #endif
@@ -1070,6 +1090,8 @@ Bool invoke_gdbserver (int pid)
       user_mod.regs.gprs[15] = sp;
       /* set program counter */
       user_mod.regs.psw.addr = shared64->invoke_gdbserver;
+#elif defined(VGA_mips32)
+      assert(0); // cannot vgdb a 64 bits executable with a 32 bits exe
 #else
       I_die_here: architecture missing in vgdb.c
 #endif
@@ -1364,7 +1386,7 @@ static char *from_gdb_to_pid; /* fifo name to write gdb command to pid */
 static
 Bool read_from_gdb_write_to_pid(int to_pid)
 {
-   char buf[PBUFSIZ];
+   char buf[PBUFSIZ+1]; // +1 for trailing \0
    int nrread;
 
    nrread = read_buf(from_gdb, buf, "from gdb on stdin");
@@ -1388,7 +1410,7 @@ static char *to_gdb_from_pid; /* fifo name to read pid replies */
 static
 Bool read_from_pid_write_to_gdb(int from_pid)
 {
-   char buf[PBUFSIZ];
+   char buf[PBUFSIZ+1]; // +1 for trailing \0
    int nrread;
 
    nrread = read_buf(from_pid, buf, "from pid");
@@ -1493,14 +1515,14 @@ fromhex (int a)
 static int
 readchar (int fd)
 {
-  static unsigned char buf[PBUFSIZ];
+  static unsigned char buf[PBUFSIZ+1]; // +1 for trailing \0
   static int bufcnt = 0;
   static unsigned char *bufp;
 
   if (bufcnt-- > 0)
      return *bufp++;
 
-  bufcnt = read (fd, buf, sizeof (buf));
+  bufcnt = read_buf (fd, buf, "static buf readchar");
 
   if (bufcnt <= 0) {
      if (bufcnt == 0) {
@@ -1619,7 +1641,7 @@ void received_signal (int signum)
       sigpipe++;
    } else if (signum == SIGALRM) {
       sigalrm++;
-#if defined(VGPV_arm_linux_android)
+#if defined(VGPV_arm_linux_android) || defined(VGPV_x86_linux_android)
       /* Android has no pthread_cancel. As it also does not have
          PTRACE_INVOKER, there is no need for cleanup action.
          So, we just do nothing. */
@@ -1810,10 +1832,10 @@ void gdb_relay (int pid)
                if (!read_from_gdb_write_to_pid(to_pid))
                   shutting_down = True;
                break;
-               case FROM_PID:
-                  if (!read_from_pid_write_to_gdb(from_pid))
-                     shutting_down = True;
-                  break;
+            case FROM_PID:
+               if (!read_from_pid_write_to_gdb(from_pid))
+                  shutting_down = True;
+               break;
             default: XERROR(0, "unexpected POLLIN on %s\n",
                                ppConnectionKind(ck));
             }
@@ -1874,7 +1896,7 @@ void standalone_send_commands(int pid,
    unsigned char hex[3];
    unsigned char cksum;
    unsigned char *hexcommand;
-   unsigned char buf[PBUFSIZ];
+   unsigned char buf[PBUFSIZ+1]; // +1 for trailing \0
    int buflen;
    int nc;
 
@@ -2151,19 +2173,19 @@ int search_arg_pid(int arg_pid, int check_trials, Bool show_list)
          errno = 0; /* avoid complain if vgdb_dir is empty */
          while ((f = readdir (vgdb_dir))) {
             struct stat st;
-            char pathname[strlen(vgdb_dir_name) + strlen(f->d_name)];
+            char pathname[strlen(vgdb_dir_name) + strlen(f->d_name) + 1];
             char *wrongpid;
             int newpid;
 
             strcpy (pathname, vgdb_dir_name);
             strcat (pathname, f->d_name);
-            DEBUG(3, "trying %s\n", pathname);
+            DEBUG(3, "checking pathname is FIFO %s\n", pathname);
             if (stat (pathname, &st) != 0) {
                if (debuglevel >= 3)
                   ERROR (errno, "vgdb error: stat %s searching vgdb fifo\n", 
                          pathname);
             } else if (S_ISFIFO (st.st_mode)) {
-               DEBUG(3, "trying %s\n", pathname);
+               DEBUG(3, "trying FIFO %s\n", pathname);
                if (strncmp (pathname, vgdb_format, 
                             strlen (vgdb_format)) == 0) {
                   newpid = strtol(pathname + strlen (vgdb_format), 

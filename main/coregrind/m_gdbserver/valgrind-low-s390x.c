@@ -36,7 +36,7 @@
 
 #include "libvex_guest_s390x.h"
 
-struct reg regs[] = {
+static struct reg regs[] = {
   { "pswm", 0, 64 },
   { "pswa", 64, 64 },
   { "r0", 128, 64 },
@@ -88,6 +88,7 @@ struct reg regs[] = {
   { "f13", 2528, 64 },
   { "f14", 2592, 64 },
   { "f15", 2656, 64 },
+  { "orig_r2", 2720, 64 },
 };
 static const char *expedite_regs[] = { "r14", "r15", "pswa", 0 };
 #define num_regs (sizeof (regs) / sizeof (regs[0]))
@@ -181,8 +182,19 @@ void transfer_register (ThreadId tid, int abs_regno, void * buf,
    case 48: VG_(transfer) (&s390x->guest_f13, buf, dir, size, mod); break;
    case 49: VG_(transfer) (&s390x->guest_f14, buf, dir, size, mod); break;
    case 50: VG_(transfer) (&s390x->guest_f15, buf, dir, size, mod); break;
+   case 51:  *mod = False; break; //GDBTD??? { "orig_r2", 0, 64 },  
    default: vg_assert(0);
    }
+}
+
+static
+char* target_xml (Bool shadow_mode)
+{
+   if (shadow_mode) {
+      return "s390x-generic-valgrind.xml";
+   } else {
+      return "s390x-generic.xml";
+   }  
 }
 
 static struct valgrind_target_ops low_target = {
@@ -193,8 +205,7 @@ static struct valgrind_target_ops low_target = {
    get_pc,
    set_pc,
    "s390x",
-   NULL, // target_xml not needed.
-   NULL // no xml shadow target description (yet?)
+   target_xml
 };
 
 void s390x_init_architecture (struct valgrind_target_ops *target)

@@ -7,7 +7,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2000-2011 Julian Seward 
+   Copyright (C) 2000-2012 Julian Seward 
       jseward@acm.org
 
    This program is free software; you can redistribute it and/or
@@ -65,6 +65,10 @@
 #include "pub_core_translate.h"     // For VG_(translate)
 #include "pub_core_trampoline.h"
 #include "pub_core_transtab.h"
+#include "pub_tool_inner.h"
+#if defined(ENABLE_INNER_CLIENT_REQUEST)
+#include "valgrind.h"
+#endif 
 
 
 /*====================================================================*/
@@ -157,7 +161,9 @@ static void usage_NORETURN ( Bool debug_help )
 "                              [use current 'ulimit' value]\n"
 "\n"
 "  user options for Valgrind tools that replace malloc:\n"
-"    --alignment=<number>      set minimum alignment of heap allocations [%ld]\n"
+"    --alignment=<number>      set minimum alignment of heap allocations [%s]\n"
+"    --redzone-size=<number>   set minimum size of redzones added before/after\n"
+"                              heap blocks (in bytes). [%s]\n"
 "\n"
 "  uncommon user options for all Valgrind tools:\n"
 "    --fullpath-after=         (with nothing after the '=')\n"
@@ -180,12 +186,18 @@ static void usage_NORETURN ( Bool debug_help )
 "    --run-libc-freeres=no|yes free up glibc memory at exit on Linux? [yes]\n"
 "    --sim-hints=hint1,hint2,...  known hints:\n"
 "                                 lax-ioctls, enable-outer, fuse-compatible [none]\n"
+"    --fair-sched=no|yes|try   schedule threads fairly on multicore systems [no]\n"
 "    --kernel-variant=variant1,variant2,...  known variants: bproc [none]\n"
 "                              handle non-standard kernel variants\n"
 "    --show-emwarns=no|yes     show warnings about emulation limits? [no]\n"
 "    --require-text-symbol=:sonamepattern:symbolpattern    abort run if the\n"
 "                              stated shared object doesn't have the stated\n"
 "                              text symbol.  Patterns can contain ? and *.\n"
+"    --soname-synonyms=syn1=pattern1,syn2=pattern2,... synonym soname\n"
+"              specify patterns for function wrapping or replacement.\n"
+"              To use a non-libc malloc library that is\n"
+"                  in the main exe:  --soname-synonyms=somalloc=NONE\n"
+"                  in libxyzzy.so:   --soname-synonyms=somalloc=libxyzzy.so\n"
 "\n";
 
    Char* usage2 = 
@@ -197,6 +209,7 @@ static void usage_NORETURN ( Bool debug_help )
 "    --trace-flags=<XXXXXXXX>   show generated code? (X = 0|1) [00000000]\n"
 "    --profile-flags=<XXXXXXXX> ditto, but for profiling (X = 0|1) [00000000]\n"
 "    --trace-notbelow=<number> only show BBs above <number> [999999999]\n"
+"    --trace-notabove=<number> only show BBs below <number> [0]\n"
 "    --trace-syscalls=no|yes   show all system calls? [no]\n"
 "    --trace-signals=no|yes    show signal handling details? [no]\n"
 "    --trace-symtab=no|yes     show symbol table details? [no]\n"
@@ -208,6 +221,8 @@ static void usage_NORETURN ( Bool debug_help )
 "    --trace-redir=no|yes      show redirection details? [no]\n"
 "    --trace-sched=no|yes      show thread scheduler details? [no]\n"
 "    --profile-heap=no|yes     profile Valgrind's own space use\n"
+"    --core-redzone=<number>   set minimum size of redzones added before/after\n"
+"                              heap blocks allocated for Valgrind internal use (in bytes) [4]\n"
 "    --wait-for-gdb=yes|no     pause on startup to wait for gdb attach\n"
 "    --sym-offsets=yes|no      show syms in form 'name+offset' ? [no]\n"
 "    --command-line-only=no|yes  only use command line options [no]\n"
@@ -215,7 +230,9 @@ static void usage_NORETURN ( Bool debug_help )
 "  Vex options for all Valgrind tools:\n"
 "    --vex-iropt-verbosity=<0..9>           [0]\n"
 "    --vex-iropt-level=<0..2>               [2]\n"
-"    --vex-iropt-precise-memory-exns=no|yes [no]\n"
+"    --vex-iropt-register-updates=unwindregs-at-mem-access\n"
+"                                |allregs-at-mem-access\n"
+"                                |allregs-at-each-insn  [unwindregs-at-mem-access]\n"
 "    --vex-iropt-unroll-thresh=<0..400>     [120]\n"
 "    --vex-guest-max-insns=<1..100>         [50]\n"
 "    --vex-guest-chase-thresh=<0..99>       [10]\n"
@@ -229,7 +246,7 @@ static void usage_NORETURN ( Bool debug_help )
 "       0000 0100   show selecting insns\n"
 "       0000 0010   show after reg-alloc\n"
 "       0000 0001   show final assembly\n"
-"      (Nb: you need --trace-notbelow with --trace-flags for full details)\n"
+"      (Nb: you need --trace-notbelow and/or --trace-notabove with --trace-flags for full details)\n"
 "\n"
 "  debugging options for Valgrind tools that report errors\n"
 "    --dump-error=<number>     show translation for basic block associated\n"
@@ -244,22 +261,36 @@ static void usage_NORETURN ( Bool debug_help )
 "  Extra options read from ~/.valgrindrc, $VALGRIND_OPTS, ./.valgrindrc\n"
 "\n"
 "  %s is %s\n"
-"  Valgrind is Copyright (C) 2000-2011, and GNU GPL'd, by Julian Seward et al.\n"
-"  LibVEX is Copyright (C) 2004-2011, and GNU GPL'd, by OpenWorks LLP et al.\n"
+"  Valgrind is Copyright (C) 2000-2012, and GNU GPL'd, by Julian Seward et al.\n"
+"  LibVEX is Copyright (C) 2004-2012, and GNU GPL'd, by OpenWorks LLP et al.\n"
 "\n"
 "  Bug reports, feedback, admiration, abuse, etc, to: %s.\n"
 "\n";
 
    Char* gdb_path = GDB_PATH;
+   Char default_alignment[30];
+   Char default_redzone_size[30];
 
    // Ensure the message goes to stdout
    VG_(log_output_sink).fd = 1;
    VG_(log_output_sink).is_socket = False;
 
-   /* 'usage1' expects two int, two char* argument, and one SizeT argument. */
+   if (VG_(needs).malloc_replacement) {
+      VG_(sprintf)(default_alignment,    "%d",  VG_MIN_MALLOC_SZB);
+      VG_(sprintf)(default_redzone_size, "%lu", VG_(tdict).tool_client_redzone_szB);
+   } else {
+      VG_(strcpy)(default_alignment,    "not used by this tool");
+      VG_(strcpy)(default_redzone_size, "not used by this tool");
+   }
+   /* 'usage1' a type as described after each arg. */
    VG_(printf)(usage1, 
-               VG_(clo_vgdb_error), gdb_path, VG_MIN_MALLOC_SZB,
-               VG_(clo_vgdb_poll), VG_(vgdb_prefix_default)()); 
+               VG_(clo_vgdb_error)        /* int */,
+               gdb_path                   /* char* */,
+               default_alignment          /* char* */,
+               default_redzone_size       /* char* */,
+               VG_(clo_vgdb_poll)         /* int */,
+               VG_(vgdb_prefix_default)() /* char* */
+               ); 
    if (VG_(details).name) {
       VG_(printf)("  user options for %s:\n", VG_(details).name);
       if (VG_(needs).command_line_options)
@@ -293,6 +324,7 @@ static void usage_NORETURN ( Bool debug_help )
    - get the toolname (--tool=)
    - set VG_(clo_max_stackframe) (--max-stackframe=)
    - set VG_(clo_main_stacksize) (--main-stacksize=)
+   - set VG_(clo_sim_hints) (--sim-hints=)
 
    That's all it does.  The main command line processing is done below
    by main_process_cmd_line_options.  Note that
@@ -333,65 +365,12 @@ static void early_process_cmd_line_options ( /*OUT*/Int* need_help,
       // before main_process_cmd_line_options().
       else if VG_INT_CLO(str, "--max-stackframe", VG_(clo_max_stackframe)) {}
       else if VG_INT_CLO(str, "--main-stacksize", VG_(clo_main_stacksize)) {}
+
+      // Set up VG_(clo_sim_hints). This is needed a.o. for an inner
+      // running in an outer, to have "no-inner-prefix" enabled
+      // as early as possible.
+      else if VG_STR_CLO (str, "--sim-hints",     VG_(clo_sim_hints)) {}
    }
-}
-
-Int reopen_output_fd(Bool xml) {
-  // Returns FD
-  Char *filename = NULL;
-  Char *fsname_unexpanded = xml ? VG_(clo_xml_fname_unexpanded) :
-                                 VG_(clo_log_fname_unexpanded);
-  const Char *output_type = xml ? "xml" : "log";
-  Int ret = -1;
-  SysRes sres;
-
-  vg_assert(fsname_unexpanded != NULL);
-  vg_assert(VG_(strlen)(fsname_unexpanded) <= 900); /* paranoia */
-
-  // Nb: we overwrite an existing file of this name without asking
-  // any questions.
-  filename = VG_(expand_file_name)(xml ? "--xml-file" : "--log-file",
-                                   fsname_unexpanded);
-  sres = VG_(open)(filename,
-                   VKI_O_CREAT|VKI_O_WRONLY|VKI_O_TRUNC,
-                   VKI_S_IRUSR|VKI_S_IWUSR);
-  if (!sr_isError(sres)) {
-    ret = sr_Res(sres);
-    if (xml)
-      VG_(clo_xml_fname_expanded) = filename;
-    else
-      VG_(clo_log_fname_expanded) = filename;
-
-    /* strdup here is probably paranoid overkill, but ... */
-    // TODO: do we need to do anything with it?
-    /* *fsname_unexpanded = VG_(strdup)( "main.mpclo.2",
-                                         xml_fsname_unexpanded ); */
-  } else {
-    VG_(message)(Vg_UserMsg,
-                 "Can't create %s file '%s' (%s); giving up!\n",
-                 output_type, filename, VG_(strerror)(sr_Err(sres)));
-    VG_(fmsg_bad_option)("--[xml|log]-file=<file>",
-        "--[xml|log]-file=<file> (didn't work out for some reason.)");
-    /*NOTREACHED*/
-  }
-
-  return ret;
-}
-
-static Int move_fd_into_safe_range(Int fd, Bool xml) {
-   OutputSink *sink = xml ? &(VG_(xml_output_sink)) : &(VG_(log_output_sink));
-   // Move fd into the safe range, so it doesn't conflict with any app fds.
-   fd = VG_(fcntl)(fd, VKI_F_DUPFD, VG_(fd_hard_limit));
-   if (fd < 0) {
-      VG_(printf)("valgrind: failed to move %s file fd "
-                  "into safe range, using stderr\n", xml ? "XML" : "log");
-      sink->fd = 2;   // stderr
-      sink->is_socket = False;
-   } else {
-      sink->fd = fd;
-      VG_(fcntl)(fd, VKI_F_SETFD, VKI_FD_CLOEXEC);
-   }
-   return fd;
 }
 
 /* The main processing for command line options.  See comments above
@@ -420,11 +399,13 @@ static Int move_fd_into_safe_range(Int fd, Bool xml) {
 */
 static
 void main_process_cmd_line_options ( /*OUT*/Bool* logging_to_fd,
+                                     /*OUT*/Char** xml_fname_unexpanded,
                                      const HChar* toolname )
 {
    // VG_(clo_log_fd) is used by all the messaging.  It starts as 2 (stderr)
    // and we cannot change it until we know what we are changing it to is
    // ok.  So we have tmp_log_fd to hold the tmp fd prior to that point.
+   SysRes sres;
    Int    i, tmp_log_fd, tmp_xml_fd;
    Int    toolname_len = VG_(strlen)(toolname);
    Char*  tmp_str;         // Used in a couple of places.
@@ -506,7 +487,25 @@ void main_process_cmd_line_options ( /*OUT*/Bool* logging_to_fd,
       else if VG_STREQ(     arg, "-d")                   {}
       else if VG_STREQN(16, arg, "--max-stackframe")     {}
       else if VG_STREQN(16, arg, "--main-stacksize")     {}
+      else if VG_STREQN(11, arg,  "--sim-hints")         {}
       else if VG_STREQN(14, arg, "--profile-heap")       {}
+      else if VG_STREQN(14, arg, "--core-redzone-size")  {}
+      else if VG_STREQN(14, arg, "--redzone-size")       {}
+
+      /* Obsolete options. Report an error and exit */
+      else if VG_STREQN(34, arg, "--vex-iropt-precise-memory-exns=no") {
+         VG_(fmsg_bad_option)
+            (arg,
+             "--vex-iropt-precise-memory-exns is obsolete\n"
+             "Use --vex-iropt-register-updates=unwindregs-at-mem-access instead\n");
+      }
+      else if VG_STREQN(35, arg, "--vex-iropt-precise-memory-exns=yes") {
+         VG_(fmsg_bad_option)
+            (arg,
+             "--vex-iropt-precise-memory-exns is obsolete\n"
+             "Use --vex-iropt-register-updates=allregs-at-mem-access instead\n"
+             " (or --vex-iropt-register-updates=allregs-at-each-insn)\n");
+      }
 
       // These options are new.
       else if (VG_STREQ(arg, "-v") ||
@@ -523,7 +522,12 @@ void main_process_cmd_line_options ( /*OUT*/Bool* logging_to_fd,
 
       else if VG_XACT_CLO(arg, "--vgdb=no",        VG_(clo_vgdb), Vg_VgdbNo) {}
       else if VG_XACT_CLO(arg, "--vgdb=yes",       VG_(clo_vgdb), Vg_VgdbYes) {}
-      else if VG_XACT_CLO(arg, "--vgdb=full",      VG_(clo_vgdb), Vg_VgdbFull) {}
+      else if VG_XACT_CLO(arg, "--vgdb=full",      VG_(clo_vgdb), Vg_VgdbFull) {
+         /* automatically updates register values at each insn
+            with --vgdb=full */
+         VG_(clo_vex_control).iropt_register_updates 
+            = VexRegUpdAllregsAtEachInsn;
+      }
       else if VG_INT_CLO (arg, "--vgdb-poll",      VG_(clo_vgdb_poll)) {}
       else if VG_INT_CLO (arg, "--vgdb-error",     VG_(clo_vgdb_error)) {}
       else if VG_STR_CLO (arg, "--vgdb-prefix",    VG_(clo_vgdb_prefix)) {}
@@ -531,6 +535,7 @@ void main_process_cmd_line_options ( /*OUT*/Bool* logging_to_fd,
                             VG_(clo_vgdb_shadow_registers)) {}
       else if VG_BOOL_CLO(arg, "--db-attach",      VG_(clo_db_attach)) {}
       else if VG_BOOL_CLO(arg, "--demangle",       VG_(clo_demangle)) {}
+      else if VG_STR_CLO (arg, "--soname-synonyms",VG_(clo_soname_synonyms)) {}
       else if VG_BOOL_CLO(arg, "--error-limit",    VG_(clo_error_limit)) {}
       else if VG_INT_CLO (arg, "--error-exitcode", VG_(clo_error_exitcode)) {}
       else if VG_BOOL_CLO(arg, "--show-emwarns",   VG_(clo_show_emwarns)) {}
@@ -542,6 +547,17 @@ void main_process_cmd_line_options ( /*OUT*/Bool* logging_to_fd,
       else if VG_BOOL_CLO(arg, "--trace-children",   VG_(clo_trace_children)) {}
       else if VG_BOOL_CLO(arg, "--child-silent-after-fork",
                             VG_(clo_child_silent_after_fork)) {}
+      else if VG_STR_CLO(arg, "--fair-sched",        tmp_str) {
+         if (VG_(strcmp)(tmp_str, "yes") == 0)
+            VG_(clo_fair_sched) = enable_fair_sched;
+         else if (VG_(strcmp)(tmp_str, "try") == 0)
+            VG_(clo_fair_sched) = try_fair_sched;
+         else if (VG_(strcmp)(tmp_str, "no") == 0)
+            VG_(clo_fair_sched) = disable_fair_sched;
+         else
+            VG_(fmsg_bad_option)(arg, "");
+
+      }
       else if VG_BOOL_CLO(arg, "--trace-sched",      VG_(clo_trace_sched)) {}
       else if VG_BOOL_CLO(arg, "--trace-signals",    VG_(clo_trace_signals)) {}
       else if VG_BOOL_CLO(arg, "--trace-symtab",     VG_(clo_trace_symtab)) {}
@@ -558,7 +574,6 @@ void main_process_cmd_line_options ( /*OUT*/Bool* logging_to_fd,
       else if VG_BOOL_CLO(arg, "--trace-syscalls",   VG_(clo_trace_syscalls)) {}
       else if VG_BOOL_CLO(arg, "--wait-for-gdb",     VG_(clo_wait_for_gdb)) {}
       else if VG_STR_CLO (arg, "--db-command",       VG_(clo_db_command)) {}
-      else if VG_STR_CLO (arg, "--sim-hints",        VG_(clo_sim_hints)) {}
       else if VG_BOOL_CLO(arg, "--sym-offsets",      VG_(clo_sym_offsets)) {}
       else if VG_BOOL_CLO(arg, "--read-var-info",    VG_(clo_read_var_info)) {}
 
@@ -578,8 +593,6 @@ void main_process_cmd_line_options ( /*OUT*/Bool* logging_to_fd,
                                                     VG_(clo_smc_check),
                                                     Vg_SmcAllNonFile);
 
-      else if VG_STR_CLO (arg, "--memfs-malloc-path",  VG_(clo_memfs_malloc_path)) {}
-      else if VG_INT_CLO (arg, "--memfs-page-size",   VG_(clo_memfs_page_size))   {}
       else if VG_STR_CLO (arg, "--kernel-variant",  VG_(clo_kernel_variant)) {}
 
       else if VG_BOOL_CLO(arg, "--dsymutil",        VG_(clo_dsymutil)) {}
@@ -593,8 +606,18 @@ void main_process_cmd_line_options ( /*OUT*/Bool* logging_to_fd,
                        VG_(clo_vex_control).iropt_verbosity, 0, 10) {}
       else if VG_BINT_CLO(arg, "--vex-iropt-level",
                        VG_(clo_vex_control).iropt_level, 0, 2) {}
-      else if VG_BOOL_CLO(arg, "--vex-iropt-precise-memory-exns",
-                       VG_(clo_vex_control).iropt_precise_memory_exns) {}
+      else if VG_XACT_CLO(arg, 
+                       "--vex-iropt-register-updates=unwindregs-at-mem-access",
+                       VG_(clo_vex_control).iropt_register_updates,
+                       VexRegUpdUnwindregsAtMemAccess);
+      else if VG_XACT_CLO(arg, 
+                       "--vex-iropt-register-updates=allregs-at-mem-access",
+                       VG_(clo_vex_control).iropt_register_updates,
+                       VexRegUpdAllregsAtMemAccess);
+      else if VG_XACT_CLO(arg, 
+                       "--vex-iropt-register-updates=allregs-at-each-insn",
+                       VG_(clo_vex_control).iropt_register_updates,
+                       VexRegUpdAllregsAtEachInsn);
       else if VG_BINT_CLO(arg, "--vex-iropt-unroll-thresh",
                        VG_(clo_vex_control).iropt_unroll_thresh, 0, 400) {}
       else if VG_BINT_CLO(arg, "--vex-guest-max-insns",
@@ -615,13 +638,9 @@ void main_process_cmd_line_options ( /*OUT*/Bool* logging_to_fd,
 
       else if VG_STR_CLO(arg, "--log-file", log_fsname_unexpanded) {
          log_to = VgLogTo_File;
-         VG_(clo_log_fname_unexpanded) =
-             VG_(strdup)("", log_fsname_unexpanded);
       }
       else if VG_STR_CLO(arg, "--xml-file", xml_fsname_unexpanded) {
          xml_to = VgLogTo_File;
-         VG_(clo_xml_fname_unexpanded) =
-             VG_(strdup)("", xml_fsname_unexpanded);
       }
  
       else if VG_STR_CLO(arg, "--log-socket", log_fsname_unexpanded) {
@@ -722,14 +741,14 @@ void main_process_cmd_line_options ( /*OUT*/Bool* logging_to_fd,
 
       else if VG_INT_CLO (arg, "--trace-notbelow", VG_(clo_trace_notbelow)) {}
 
+      else if VG_INT_CLO (arg, "--trace-notabove", VG_(clo_trace_notabove)) {}
+
       else if VG_XACT_CLO(arg, "--gen-suppressions=no",
                                VG_(clo_gen_suppressions), 0) {}
       else if VG_XACT_CLO(arg, "--gen-suppressions=yes",
                                VG_(clo_gen_suppressions), 1) {}
       else if VG_XACT_CLO(arg, "--gen-suppressions=all",
                                VG_(clo_gen_suppressions), 2) {}
-
-      else if VG_STR_CLO(arg, "--nacl-file", VG_(clo_nacl_file)) {}
 
       else if ( ! VG_(needs).command_line_options
              || ! VG_TDICT_CALL(tool_process_cmd_line_option, arg) ) {
@@ -758,15 +777,39 @@ void main_process_cmd_line_options ( /*OUT*/Bool* logging_to_fd,
    if (VG_(clo_verbosity) < 0)
       VG_(clo_verbosity) = 0;
 
+   if (VG_(clo_trace_notbelow) == -1) {
+     if (VG_(clo_trace_notabove) == -1) {
+       /* [] */
+       VG_(clo_trace_notbelow) = 2147483647;
+       VG_(clo_trace_notabove) = 0;
+     } else {
+       /* [0 .. notabove] */
+       VG_(clo_trace_notbelow) = 0;
+     }
+   } else {
+     if (VG_(clo_trace_notabove) == -1) {
+       /* [notbelow .. ]  */
+       VG_(clo_trace_notabove) = 2147483647;
+     } else {
+       /* [notbelow .. notabove]  */
+     }
+   }
+
    VG_(dyn_vgdb_error) = VG_(clo_vgdb_error);
+
+   if (VG_(clo_gen_suppressions) > 0 && 
+       !VG_(needs).core_errors && !VG_(needs).tool_errors) {
+      VG_(fmsg_bad_option)("--gen-suppressions=yes",
+         "Can't use --gen-suppressions= with %s\n"
+         "because it doesn't generate errors.\n", VG_(details).name);
+   }
 
    /* If XML output is requested, check that the tool actually
       supports it. */
    if (VG_(clo_xml) && !VG_(needs).xml_output) {
       VG_(clo_xml) = False;
-      VG_(message)(Vg_UserMsg, 
+      VG_(fmsg_bad_option)("--xml=yes",
          "%s does not support XML output.\n", VG_(details).name); 
-      VG_(fmsg_bad_option)("--xml=yes", "\n");
       /*NOTREACHED*/
    }
 
@@ -850,7 +893,27 @@ void main_process_cmd_line_options ( /*OUT*/Bool* logging_to_fd,
          break;
 
       case VgLogTo_File: {
-         tmp_log_fd = reopen_output_fd(False);
+         Char* logfilename;
+
+         vg_assert(log_fsname_unexpanded != NULL);
+         vg_assert(VG_(strlen)(log_fsname_unexpanded) <= 900); /* paranoia */
+
+         // Nb: we overwrite an existing file of this name without asking
+         // any questions.
+         logfilename = VG_(expand_file_name)("--log-file",
+                                             log_fsname_unexpanded);
+         sres = VG_(open)(logfilename, 
+                          VKI_O_CREAT|VKI_O_WRONLY|VKI_O_TRUNC, 
+                          VKI_S_IRUSR|VKI_S_IWUSR);
+         if (!sr_isError(sres)) {
+            tmp_log_fd = sr_Res(sres);
+            VG_(clo_log_fname_expanded) = logfilename;
+         } else {
+            VG_(fmsg)("can't create log file '%s': %s\n", 
+                      logfilename, VG_(strerror)(sr_Err(sres)));
+            VG_(exit)(1);
+            /*NOTREACHED*/
+         }
          break;
       }
 
@@ -889,7 +952,30 @@ void main_process_cmd_line_options ( /*OUT*/Bool* logging_to_fd,
          break;
 
       case VgLogTo_File: {
-         tmp_xml_fd = reopen_output_fd(True);
+         Char* xmlfilename;
+
+         vg_assert(xml_fsname_unexpanded != NULL);
+         vg_assert(VG_(strlen)(xml_fsname_unexpanded) <= 900); /* paranoia */
+
+         // Nb: we overwrite an existing file of this name without asking
+         // any questions.
+         xmlfilename = VG_(expand_file_name)("--xml-file",
+                                             xml_fsname_unexpanded);
+         sres = VG_(open)(xmlfilename, 
+                          VKI_O_CREAT|VKI_O_WRONLY|VKI_O_TRUNC, 
+                          VKI_S_IRUSR|VKI_S_IWUSR);
+         if (!sr_isError(sres)) {
+            tmp_xml_fd = sr_Res(sres);
+            VG_(clo_xml_fname_expanded) = xmlfilename;
+            /* strdup here is probably paranoid overkill, but ... */
+            *xml_fname_unexpanded = VG_(strdup)( "main.mpclo.2",
+                                                 xml_fsname_unexpanded );
+         } else {
+            VG_(fmsg)("can't create XML file '%s': %s\n", 
+                      xmlfilename, VG_(strerror)(sr_Err(sres)));
+            VG_(exit)(1);
+            /*NOTREACHED*/
+         }
          break;
       }
 
@@ -935,7 +1021,18 @@ void main_process_cmd_line_options ( /*OUT*/Bool* logging_to_fd,
    // Finalise the output fds: the log fd ..
 
    if (tmp_log_fd >= 0) {
-      tmp_log_fd = move_fd_into_safe_range(tmp_log_fd, False);
+      // Move log_fd into the safe range, so it doesn't conflict with
+      // any app fds.
+      tmp_log_fd = VG_(fcntl)(tmp_log_fd, VKI_F_DUPFD, VG_(fd_hard_limit));
+      if (tmp_log_fd < 0) {
+         VG_(message)(Vg_UserMsg, "valgrind: failed to move logfile fd "
+                                  "into safe range, using stderr\n");
+         VG_(log_output_sink).fd = 2;   // stderr
+         VG_(log_output_sink).is_socket = False;
+      } else {
+         VG_(log_output_sink).fd = tmp_log_fd;
+         VG_(fcntl)(VG_(log_output_sink).fd, VKI_F_SETFD, VKI_FD_CLOEXEC);
+      }
    } else {
       // If they said --log-fd=-1, don't print anything.  Plausible for use in
       // regression testing suites that use client requests to count errors.
@@ -946,7 +1043,18 @@ void main_process_cmd_line_options ( /*OUT*/Bool* logging_to_fd,
    // Finalise the output fds: and the XML fd ..
 
    if (tmp_xml_fd >= 0) {
-      tmp_xml_fd = move_fd_into_safe_range(tmp_xml_fd, True);
+      // Move xml_fd into the safe range, so it doesn't conflict with
+      // any app fds.
+      tmp_xml_fd = VG_(fcntl)(tmp_xml_fd, VKI_F_DUPFD, VG_(fd_hard_limit));
+      if (tmp_xml_fd < 0) {
+         VG_(message)(Vg_UserMsg, "valgrind: failed to move XML file fd "
+                                  "into safe range, using stderr\n");
+         VG_(xml_output_sink).fd = 2;   // stderr
+         VG_(xml_output_sink).is_socket = False;
+      } else {
+         VG_(xml_output_sink).fd = tmp_xml_fd;
+         VG_(fcntl)(VG_(xml_output_sink).fd, VKI_F_SETFD, VKI_FD_CLOEXEC);
+      }
    } else {
       // If they said --xml-fd=-1, don't print anything.  Plausible for use in
       // regression testing suites that use client requests to count errors.
@@ -1019,7 +1127,7 @@ static void print_file_vars(Char* format)
 /*=== Printing the preamble                                        ===*/
 /*====================================================================*/
 
-// Print the command, escaping any chars that require it.
+// Print the argument, escaping any chars that require it.
 static void umsg_arg(const Char* arg)
 {
    SizeT len = VG_(strlen)(arg);
@@ -1027,29 +1135,25 @@ static void umsg_arg(const Char* arg)
    Int i;
    for (i = 0; i < len; i++) {
       if (VG_(strchr)(special, arg[i])) {
-        VG_(umsg)("\\");   // escape with a backslash if necessary
+         VG_(umsg)("\\");   // escape with a backslash if necessary
       }
       VG_(umsg)("%c", arg[i]);
    }
 }
 
 // Send output to the XML-stream and escape any XML meta-characters.
-static void xml_arg(const Char* arg) {
-  VG_(printf_xml)("%t", arg);
+static void xml_arg(const Char* arg)
+{
+   VG_(printf_xml)("%pS", arg);
 }
 
 /* Ok, the logging sink is running now.  Print a suitable preamble.
    If logging to file or a socket, write details of parent PID and
    command line args, to help people trying to interpret the
    results of a run which encompasses multiple processes. */
-// TODO(timurrrr): we add a non-static declaration of this function since
-// we need it in coregrind/m_libcproc.c
-// NOTE: Keep this definition in sync with coregrind/m_libcproc.c
-//       in case of merge conflict.
-// Should we move it to some header file?
-void print_preamble ( Bool logging_to_fd, const HChar* toolname );
-
-void print_preamble ( Bool logging_to_fd, const HChar* toolname )
+static void print_preamble ( Bool logging_to_fd, 
+                             Char* xml_fname_unexpanded,
+                             const HChar* toolname )
 {
    Int    i;
    HChar* xpre  = VG_(clo_xml) ? "  <line>" : "";
@@ -1060,15 +1164,9 @@ void print_preamble ( Bool logging_to_fd, const HChar* toolname )
    void (*umsg_or_xml_arg)( const Char* )
       = VG_(clo_xml) ? xml_arg : umsg_arg;
 
-   static const char* last_toolname = NULL;
    vg_assert( VG_(args_for_client) );
    vg_assert( VG_(args_for_valgrind) );
-
-   // This way you may pass toolname == NULL provided the first invocation
-   // with toolname != NULL takes place in valgrind_main().
-   toolname = (toolname == NULL ? last_toolname : toolname);
    vg_assert( toolname );
-   last_toolname = toolname;
 
    if (VG_(clo_xml)) {
       VG_(printf_xml)("<?xml version=\"1.0\"?>\n");
@@ -1080,7 +1178,7 @@ void print_preamble ( Bool logging_to_fd, const HChar* toolname )
       VG_(printf_xml)("\n");
    }
 
-   if (VG_(clo_xml) || VG_(clo_verbosity) > 0) {
+   if (VG_(clo_xml) || VG_(clo_verbosity > 0)) {
 
       if (VG_(clo_xml))
          VG_(printf_xml)("<preamble>\n");
@@ -1117,7 +1215,7 @@ void print_preamble ( Bool logging_to_fd, const HChar* toolname )
       // favour utility and simplicity over aesthetics.
       umsg_or_xml("%sCommand: ", xpre);
       if (VG_(args_the_exename))
-          umsg_or_xml_arg(VG_(args_the_exename));
+         umsg_or_xml_arg(VG_(args_the_exename));
           
       for (i = 0; i < VG_(sizeXA)( VG_(args_for_client) ); i++) {
          HChar* s = *(HChar**)VG_(indexXA)( VG_(args_for_client), i );
@@ -1136,7 +1234,6 @@ void print_preamble ( Bool logging_to_fd, const HChar* toolname )
    }
    else
    if (VG_(clo_xml)) {
-      Char *xml_fname_unexpanded = VG_(clo_xml_fname_unexpanded);
       VG_(printf_xml)("\n");
       VG_(printf_xml)("<pid>%d</pid>\n", VG_(getpid)());
       VG_(printf_xml)("<ppid>%d</ppid>\n", VG_(getppid)());
@@ -1188,6 +1285,15 @@ void print_preamble ( Bool logging_to_fd, const HChar* toolname )
       VG_(printf_xml)("\n");
    else if (VG_(clo_verbosity) > 0)
       VG_(umsg)("\n");
+
+#  if defined(VGO_darwin) && DARWIN_VERS == DARWIN_10_8
+   /* Uh, this doesn't play nice with XML output. */
+   umsg_or_xml( "WARNING: Support on MacOS 10.8 is experimental and mostly broken.\n");
+   umsg_or_xml( "WARNING: Expect incorrect results, assertions and crashes.\n");
+   umsg_or_xml( "WARNING: In particular, Memcheck on 32-bit programs will fail to\n");
+   umsg_or_xml( "WARNING: detect any errors associated with heap-allocated data.\n");
+   umsg_or_xml( "\n" );
+#  endif
 
    if (VG_(clo_verbosity) > 1) {
       SysRes fd;
@@ -1269,10 +1375,6 @@ static void setup_file_descriptors(void)
    if (show)
       VG_(printf)("fd limits: host, before: cur %lu max %lu\n", 
                   (UWord)rl.rlim_cur, (UWord)rl.rlim_max);
-
-   /* kcc: workaround for a Linux Kernel bug */
-   if (rl.rlim_cur > 1000000)  
-      rl.rlim_cur = 1000000;
 
    /* Work out where to move the soft limit to. */
    if (rl.rlim_cur + N_RESERVED_FDS <= rl.rlim_max) {
@@ -1438,9 +1540,23 @@ Int valgrind_main ( Int argc, HChar **argv, HChar **envp )
    Int     need_help          = 0; // 0 = no, 1 = --help, 2 = --help-debug
    ThreadId tid_main          = VG_INVALID_THREADID;
    Bool    logging_to_fd      = False;
+   Char* xml_fname_unexpanded = NULL;
    Int     loglevel, i;
    struct vki_rlimit zero = { 0, 0 };
    XArray* addr2dihandle = NULL;
+
+   // For an inner Valgrind, register the interim stack asap.
+   // This is needed to allow the outer valgrind to do stacktraces during init.
+   // Note that this stack is not unregistered when the main thread
+   // is switching to the (real) stack. Unregistering this would imply
+   // to save the stack id in a global variable, and have a "if"
+   // in run_a_thread_NORETURN to do the unregistration only for the
+   // main thread. This unregistration is not worth this complexity.
+   INNER_REQUEST
+      ((void) VALGRIND_STACK_REGISTER
+       (&VG_(interim_stack).bytes[0],
+        &VG_(interim_stack).bytes[0] + sizeof(VG_(interim_stack))));
+
 
    //============================================================
    //
@@ -1470,14 +1586,18 @@ Int valgrind_main ( Int argc, HChar **argv, HChar **envp )
    //--------------------------------------------------------------
    /* Start the debugging-log system ASAP.  First find out how many 
       "-d"s were specified.  This is a pre-scan of the command line.  Also
-      get --profile-heap=yes which is needed by the time we start up dynamic
-      memory management.  */
+      get --profile-heap=yes, --core-redzone-size, --redzone-size which are
+      needed by the time we start up dynamic memory management.  */
    loglevel = 0;
    for (i = 1; i < argc; i++) {
       if (argv[i][0] != '-') break;
       if VG_STREQ(argv[i], "--") break;
       if VG_STREQ(argv[i], "-d") loglevel++;
       if VG_BOOL_CLO(argv[i], "--profile-heap", VG_(clo_profile_heap)) {}
+      if VG_BINT_CLO(argv[i], "--core-redzone-size", VG_(clo_core_redzone_size),
+                     0, MAX_CLO_REDZONE_SZB) {}
+      if VG_BINT_CLO(argv[i], "--redzone-size", VG_(clo_redzone_size),
+                     0, MAX_CLO_REDZONE_SZB) {}
    }
 
    /* ... and start the debug logger.  Now we can safely emit logging
@@ -1493,7 +1613,24 @@ Int valgrind_main ( Int argc, HChar **argv, HChar **envp )
    VG_(debugLog)(1, "main", "Checking current stack is plausible\n");
    { HChar* limLo  = (HChar*)(&VG_(interim_stack).bytes[0]);
      HChar* limHi  = limLo + sizeof(VG_(interim_stack));
-     HChar* aLocal = (HChar*)&zero; /* any auto local will do */
+     HChar* volatile 
+            aLocal = (HChar*)&limLo; /* any auto local will do */
+     /* Re "volatile": Apple clang version 4.0
+        (tags/Apple/clang-421.0.57) (based on LLVM 3.1svn)" appeared
+        to miscompile the following check, causing run to abort at
+        this point (in 64-bit mode) even though aLocal is within limLo
+        .. limHi.  But in fact clang is within its rights to do
+        strange things here.  "The reason is that the comparisons
+        aLocal < limLo and aLocal >= limHi cause undefined behaviour
+        (according to c99 6.5.8) because they compare pointers that do
+        not point into the same aggregate."  Adding "volatile" appears
+        to fix it because "The compiler would have to prove that there
+        is undefined behavior in order to exploit it.  But as a
+        volatile variable can change its value in ways invisible to
+        the compiler, the compiler must make the conservative
+        assumption that it points into the same aggregate as the other
+        pointer its compared against.  I.e. the behaviour is possibly
+        defined." (Analysis by Florian Krohm). */
      if (aLocal < limLo || aLocal >= limHi) {
         /* something's wrong.  Stop. */
         VG_(debugLog)(0, "main", "Root stack %p to %p, a local %p\n",
@@ -1524,8 +1661,10 @@ Int valgrind_main ( Int argc, HChar **argv, HChar **envp )
    //   p: logging, plausible-stack
    //--------------------------------------------------------------
    VG_(debugLog)(1, "main", "Starting the address space manager\n");
-   vg_assert(VKI_PAGE_SIZE     == 4096 || VKI_PAGE_SIZE     == 65536);
-   vg_assert(VKI_MAX_PAGE_SIZE == 4096 || VKI_MAX_PAGE_SIZE == 65536);
+   vg_assert(VKI_PAGE_SIZE     == 4096 || VKI_PAGE_SIZE     == 65536
+             || VKI_PAGE_SIZE     == 16384);
+   vg_assert(VKI_MAX_PAGE_SIZE == 4096 || VKI_MAX_PAGE_SIZE == 65536
+             || VKI_MAX_PAGE_SIZE == 16384);
    vg_assert(VKI_PAGE_SIZE <= VKI_MAX_PAGE_SIZE);
    vg_assert(VKI_PAGE_SIZE     == (1 << VKI_PAGE_SHIFT));
    vg_assert(VKI_MAX_PAGE_SIZE == (1 << VKI_MAX_PAGE_SHIFT));
@@ -1535,7 +1674,7 @@ Int valgrind_main ( Int argc, HChar **argv, HChar **envp )
    //--------------------------------------------------------------
    // Start up the dynamic memory manager
    //   p: address space management
-   //   p: getting --profile-heap
+   //   p: getting --profile-heap,--core-redzone-size,--redzone-size
    //   In fact m_mallocfree is self-initialising, so there's no
    //   initialisation call to do.  Instead, try a simple malloc/
    //   free pair right now to check that nothing is broken.
@@ -1801,7 +1940,8 @@ Int valgrind_main ( Int argc, HChar **argv, HChar **envp )
    VG_(debugLog)(1, "main",
                     "(main_) Process Valgrind's command line options, "
                     "setup logging\n");
-   main_process_cmd_line_options ( &logging_to_fd, toolname );
+   main_process_cmd_line_options ( &logging_to_fd, &xml_fname_unexpanded,
+                                   toolname );
 
    //--------------------------------------------------------------
    // Zeroise the millisecond counter by doing a first read of it.
@@ -1814,10 +1954,10 @@ Int valgrind_main ( Int argc, HChar **argv, HChar **envp )
    //   p: tl_pre_clo_init            [for 'VG_(details).name' and friends]
    //   p: main_process_cmd_line_options()
    //         [for VG_(clo_verbosity), VG_(clo_xml),
-   //          logging_to_fd]
+   //          logging_to_fd, xml_fname_unexpanded]
    //--------------------------------------------------------------
    VG_(debugLog)(1, "main", "Print the preamble...\n");
-   print_preamble(logging_to_fd, toolname);
+   print_preamble(logging_to_fd, xml_fname_unexpanded, toolname);
    VG_(debugLog)(1, "main", "...finished the preamble\n");
 
    //--------------------------------------------------------------
@@ -1869,14 +2009,16 @@ Int valgrind_main ( Int argc, HChar **argv, HChar **envp )
       VG_(printf)("pid=%d, entering delay loop\n", VG_(getpid)());
 
 #     if defined(VGP_x86_linux)
-      iters = 5;
+      iters = 10;
 #     elif defined(VGP_amd64_linux) || defined(VGP_ppc64_linux)
       iters = 10;
 #     elif defined(VGP_ppc32_linux)
       iters = 5;
 #     elif defined(VGP_arm_linux)
-      iters = 1;
+      iters = 5;
 #     elif defined(VGP_s390x_linux)
+      iters = 10;
+#     elif defined(VGP_mips32_linux)
       iters = 10;
 #     elif defined(VGO_darwin)
       iters = 3;
@@ -1996,6 +2138,8 @@ Int valgrind_main ( Int argc, HChar **argv, HChar **envp )
                        buf );
       VG_(printf_xml)( "\n" );
    }
+
+   VG_(init_Threads)();
 
    //--------------------------------------------------------------
    // Initialise the scheduler (phase 1) [generates tid_main]
@@ -2455,6 +2599,10 @@ static void final_tidyup(ThreadId tid)
 #  if defined(VGP_ppc64_linux)
    VG_(threads)[tid].arch.vex.guest_GPR2 = r2;
 #  endif
+   /* mips-linux note: we need to set t9 */
+#  if defined(VGP_mips32_linux)
+   VG_(threads)[tid].arch.vex.guest_r25 = __libc_freeres_wrapper;
+#  endif
 
    /* Block all blockable signals by copying the real block state into
       the thread's block state*/
@@ -2676,7 +2824,14 @@ asm("\n"
        call _start_in_C_linux, passing it the initial SP. */
     "\tmr 3,1\n"
     "\tmr 1,16\n"
-    "\tbl ._start_in_C_linux\n"
+    "\tlis  14,   _start_in_C_linux@highest\n"
+    "\tori  14,14,_start_in_C_linux@higher\n"
+    "\tsldi 14,14,32\n"
+    "\toris 14,14,_start_in_C_linux@h\n"
+    "\tori  14,14,_start_in_C_linux@l\n"
+    "\tld 14,0(14)\n"
+    "\tmtctr 14\n"
+    "\tbctrl\n"
     "\tnop\n"
     "\ttrap\n"
 );
@@ -2743,6 +2898,50 @@ asm("\n"
     "\t.word "VG_STRINGIFY(VG_STACK_GUARD_SZB)"\n"
     "\t.word "VG_STRINGIFY(VG_STACK_ACTIVE_SZB)"\n"
 );
+#elif defined(VGP_mips32_linux)
+asm("\n"
+    "\t.type _gp_disp,@object\n"
+    ".text\n"
+    "\t.globl __start\n"
+    "\t.type __start,@function\n"
+    "__start:\n"
+
+    "\tbal 1f\n"
+    "\tnop\n"
+    
+    "1:\n"    
+
+    "\tlui      $28, %hi(_gp_disp)\n"
+    "\taddiu    $28, $28, %lo(_gp_disp)\n"
+    "\taddu     $28, $28, $31\n"
+    /* t1/$9 <- Addr(interim_stack) */
+    "\tlui      $9, %hi(vgPlain_interim_stack)\n"
+    /* t1/$9 <- Addr(interim_stack) */
+    "\taddiu    $9, %lo(vgPlain_interim_stack)\n"
+
+
+    "\tli    $10, "VG_STRINGIFY(VG_STACK_GUARD_SZB)"\n"
+    "\tli    $11, "VG_STRINGIFY(VG_STACK_ACTIVE_SZB)"\n"
+    
+    "\taddu     $9, $9, $10\n"
+    "\taddu     $9, $9, $11\n"
+    "\tli       $12, 0xFFFFFFF0\n"
+    "\tand      $9, $9, $12\n"
+    /* now t1/$9 = &vgPlain_interim_stack + VG_STACK_GUARD_SZB +
+       VG_STACK_ACTIVE_SZB rounded down to the nearest 16-byte
+       boundary.  And $29 is the original SP.  Set the SP to t1 and
+       call _start_in_C, passing it the initial SP. */
+       
+    "\tmove    $4, $29\n"     // a0 <- $sp (_start_in_C first arg)
+    "\tmove    $29, $9\n"     // $sp <- t1 (new sp)
+    
+    "\tlui     $25, %hi(_start_in_C_linux)\n"
+    "\taddiu   $25, %lo(_start_in_C_linux)\n"
+    
+    "\tbal  _start_in_C_linux\n"
+    "\tbreak  0x7\n"
+    ".previous\n"
+);
 #else
 #  error "Unknown linux platform"
 #endif
@@ -2755,8 +2954,12 @@ asm("\n"
 /* --- !!! --- EXTERNAL HEADERS end --- !!! --- */
 
 /* Avoid compiler warnings: this fn _is_ used, but labelling it
-   'static' causes gcc to complain it isn't. */
+   'static' causes gcc to complain it isn't.
+   attribute 'used' also ensures the code is not eliminated at link
+   time */
+__attribute__ ((used))
 void _start_in_C_linux ( UWord* pArgc );
+__attribute__ ((used))
 void _start_in_C_linux ( UWord* pArgc )
 {
    Int     r;
@@ -2836,6 +3039,7 @@ asm("\n"
     "\tandl  $~15, %eax\n"
     /* install it, and collect the original one */
     "\txchgl %eax, %esp\n"
+    "\tsubl  $12, %esp\n"  // keep stack 16 aligned; see #295428
     /* call _start_in_C_darwin, passing it the startup %esp */
     "\tpushl %eax\n"
     "\tcall  __start_in_C_darwin\n"

@@ -8,7 +8,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2000-2011 Nicholas Nethercote
+   Copyright (C) 2000-2012 Nicholas Nethercote
       njn@valgrind.org
 
    This program is free software; you can redistribute it and/or
@@ -408,7 +408,6 @@ DEF0(track_start_client_code,     ThreadId, ULong)
 DEF0(track_stop_client_code,      ThreadId, ULong)
 
 DEF0(track_pre_thread_ll_create,  ThreadId, ThreadId)
-DEF0(track_workq_task_start, ThreadId, Addr)
 DEF0(track_pre_thread_first_insn, ThreadId)
 DEF0(track_pre_thread_ll_exit,    ThreadId)
 

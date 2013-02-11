@@ -8,7 +8,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2000-2011 Julian Seward
+   Copyright (C) 2000-2012 Julian Seward
       jseward@acm.org
 
    This program is free software; you can redistribute it and/or
@@ -668,8 +668,10 @@ Addr setup_client_stack( void*  init_sp,
             /* When gdbserver sends the auxv to gdb, the AT_BASE has
                to be ignored, as otherwise gdb adds this offset
                to loaded shared libs, causing wrong address
-               relocation e.g. when inserting breaks. */
-            /* Android linker needs AT_BASE. Fixing Valgrind by breaking vgdb. */
+               relocation e.g. when inserting breaks.
+               However, ignoring AT_BASE makes V crash on Android 4.1.
+               So, keep the AT_BASE on android for now.
+               ??? Need to dig in depth about AT_BASE/GDB interaction */
 #           if !defined(VGPV_arm_linux_android)
             auxv->a_type = AT_IGNORE;
 #           endif
@@ -693,6 +695,15 @@ Addr setup_client_stack( void*  init_sp,
                                "ARM has-neon from-auxv: %s\n",
                                has_neon ? "YES" : "NO");
               VG_(machine_arm_set_has_NEON)( has_neon );
+              #define VKI_HWCAP_TLS 32768
+              Bool has_tls = (auxv->u.a_val & VKI_HWCAP_TLS) > 0;
+              VG_(debugLog)(2, "initimg",
+                               "ARM has-tls from-auxv: %s\n",
+                               has_tls ? "YES" : "NO");
+              /* If real hw sets properly HWCAP_TLS, we might
+                 use this info to decide to really execute set_tls syscall
+                 in syswrap-arm-linux.c rather than to base this on
+                 conditional compilation. */
             }
 #           endif
             break;
@@ -989,10 +1000,11 @@ void VG_(ii_finalise_image)( IIFinaliseImageInfo iifii )
    arch->vex.guest_EIP = iifii.initial_client_IP;
 
    /* initialise %cs, %ds and %ss to point at the operating systems
-      default code, data and stack segments */
+      default code, data and stack segments.  Also %es (see #291253). */
    asm volatile("movw %%cs, %0" : : "m" (arch->vex.guest_CS));
    asm volatile("movw %%ds, %0" : : "m" (arch->vex.guest_DS));
    asm volatile("movw %%ss, %0" : : "m" (arch->vex.guest_SS));
+   asm volatile("movw %%es, %0" : : "m" (arch->vex.guest_ES));
 
 #  elif defined(VGP_amd64_linux)
    vg_assert(0 == sizeof(VexGuestAMD64State) % 16);
@@ -1063,13 +1075,39 @@ void VG_(ii_finalise_image)( IIFinaliseImageInfo iifii )
       is also done by the kernel for the fpc during execve. */
    LibVEX_GuestS390X_initialise(&arch->vex);
 
-   /* Zero out the shadow area. */
-   VG_(memset)(&arch->vex_shadow1, 0, sizeof(VexGuestS390XState));
-   VG_(memset)(&arch->vex_shadow2, 0, sizeof(VexGuestS390XState));
+   /* Mark all registers as undefined ... */
+   VG_(memset)(&arch->vex_shadow1, 0xFF, sizeof(VexGuestS390XState));
+   VG_(memset)(&arch->vex_shadow2, 0x00, sizeof(VexGuestS390XState));
+   /* ... except SP, FPC, and IA */
+   VG_(memset)((UChar *)&arch->vex_shadow1 + VG_O_STACK_PTR, 0x00, 8);
+   VG_(memset)((UChar *)&arch->vex_shadow1 + VG_O_FPC_REG,   0x00, 4);
+   VG_(memset)((UChar *)&arch->vex_shadow1 + VG_O_INSTR_PTR, 0x00, 8);
 
    /* Put essential stuff into the new state. */
    arch->vex.guest_SP = iifii.initial_client_SP;
    arch->vex.guest_IA = iifii.initial_client_IP;
+   /* See sys_execve in <linux>/arch/s390/kernel/process.c */
+   arch->vex.guest_fpc = 0;
+
+   /* Tell the tool about the registers we just wrote */
+   VG_TRACK(post_reg_write, Vg_CoreStartup, /*tid*/1, VG_O_STACK_PTR, 8);
+   VG_TRACK(post_reg_write, Vg_CoreStartup, /*tid*/1, VG_O_FPC_REG,   4);
+   VG_TRACK(post_reg_write, Vg_CoreStartup, /*tid*/1, VG_O_INSTR_PTR, 8);
+   return;
+
+#  elif defined(VGP_mips32_linux)
+   vg_assert(0 == sizeof(VexGuestMIPS32State) % 16);
+   /* Zero out the initial state, and set up the simulated FPU in a
+      sane way. */
+   LibVEX_GuestMIPS32_initialise(&arch->vex);
+
+   /* Zero out the shadow areas. */
+   VG_(memset)(&arch->vex_shadow1, 0, sizeof(VexGuestMIPS32State));
+   VG_(memset)(&arch->vex_shadow2, 0, sizeof(VexGuestMIPS32State));
+
+   arch->vex.guest_r29 = iifii.initial_client_SP;
+   arch->vex.guest_PC = iifii.initial_client_IP;
+   arch->vex.guest_r31 = iifii.initial_client_SP;
 
 #  else
 #    error Unknown platform

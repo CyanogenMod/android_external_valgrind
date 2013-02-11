@@ -8,7 +8,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2000-2011 Julian Seward 
+   Copyright (C) 2000-2012 Julian Seward 
       jseward@acm.org
 
    This program is free software; you can redistribute it and/or
@@ -161,8 +161,6 @@ static void notify_core_of_mmap(Addr a, SizeT len, UInt prot,
 
 static void notify_tool_of_mmap(Addr a, SizeT len, UInt prot, ULong di_handle)
 {
-   SizeT fourgig = (1ULL << 32);
-   SizeT guardpage = 10 * fourgig;
    Bool rr, ww, xx;
 
    /* 'a' is the return value from a real kernel mmap, hence: */
@@ -174,12 +172,6 @@ static void notify_tool_of_mmap(Addr a, SizeT len, UInt prot, ULong di_handle)
    ww = toBool(prot & VKI_PROT_WRITE);
    xx = toBool(prot & VKI_PROT_EXEC);
 
-#ifdef VGA_amd64
-   if (len >= fourgig + 2 * guardpage) {
-     VG_(printf)("Valgrind: ignoring NaCl's mmap(84G)\n");
-     return;
-   }
-#endif  // VGA_amd64
    VG_TRACK( new_mem_mmap, a, len, rr, ww, xx, di_handle );
 }
 
@@ -411,16 +403,8 @@ SysRes do_mremap( Addr old_addr, SizeT old_len,
          non-fixed, which is not what we want */
    advised = VG_(am_get_advisory_client_simple)( needA, needL, &ok );
    if (ok) {
-      /* VG_(am_get_advisory_client_simple) (first arg == 0, meaning
-         this-or-nothing) is too lenient, and may allow us to trash
-         the next segment along.  So make very sure that the proposed
-         new area really is free.  This is perhaps overly
-         conservative, but it fixes #129866. */
-      NSegment const* segLo = VG_(am_find_nsegment)( needA );
-      NSegment const* segHi = VG_(am_find_nsegment)( needA + needL - 1 );
-      if (segLo == NULL || segHi == NULL 
-          || segLo != segHi || segLo->kind != SkFree)
-         ok = False;
+      /* Fixes bug #129866. */
+      ok = VG_(am_covered_by_single_free_segment) ( needA, needL );
    }
    if (ok && advised == needA) {
       ok = VG_(am_extend_map_client)( &d, (NSegment*)old_seg, needL );
@@ -474,15 +458,8 @@ SysRes do_mremap( Addr old_addr, SizeT old_len,
          non-fixed, which is not what we want */
    advised = VG_(am_get_advisory_client_simple)( needA, needL, &ok );
    if (ok) {
-      /* VG_(am_get_advisory_client_simple) (first arg == 0, meaning
-         this-or-nothing) is too lenient, and may allow us to trash
-         the next segment along.  So make very sure that the proposed
-         new area really is free. */
-      NSegment const* segLo = VG_(am_find_nsegment)( needA );
-      NSegment const* segHi = VG_(am_find_nsegment)( needA + needL - 1 );
-      if (segLo == NULL || segHi == NULL 
-          || segLo != segHi || segLo->kind != SkFree)
-         ok = False;
+      /* Fixes bug #129866. */
+      ok = VG_(am_covered_by_single_free_segment) ( needA, needL );
    }
    if (!ok || advised != needA)
       goto eNOMEM;
@@ -839,7 +816,7 @@ void pre_mem_read_sendmsg ( ThreadId tid, Bool read,
                             Char *msg, Addr base, SizeT size )
 {
    Char *outmsg = strdupcat ( "di.syswrap.pmrs.1",
-                              "socketcall.sendmsg", msg, VG_AR_CORE );
+                              "sendmsg", msg, VG_AR_CORE );
    PRE_MEM_READ( outmsg, base, size );
    VG_(arena_free) ( VG_AR_CORE, outmsg );
 }
@@ -849,7 +826,7 @@ void pre_mem_write_recvmsg ( ThreadId tid, Bool read,
                              Char *msg, Addr base, SizeT size )
 {
    Char *outmsg = strdupcat ( "di.syswrap.pmwr.1",
-                              "socketcall.recvmsg", msg, VG_AR_CORE );
+                              "recvmsg", msg, VG_AR_CORE );
    if ( read )
       PRE_MEM_READ( outmsg, base, size );
    else
@@ -867,45 +844,62 @@ void post_mem_write_recvmsg ( ThreadId tid, Bool read,
  
 static
 void msghdr_foreachfield ( 
-        ThreadId tid, 
-        struct vki_msghdr *msg, 
+        ThreadId tid,
+        Char *name,
+        struct vki_msghdr *msg,
+        UInt length,
         void (*foreach_func)( ThreadId, Bool, Char *, Addr, SizeT ) 
      )
 {
+   Char *fieldName;
+
    if ( !msg )
       return;
 
-   foreach_func ( tid, True, "(msg)", (Addr)&msg->msg_name, sizeof( msg->msg_name ) );
-   foreach_func ( tid, True, "(msg)", (Addr)&msg->msg_namelen, sizeof( msg->msg_namelen ) );
-   foreach_func ( tid, True, "(msg)", (Addr)&msg->msg_iov, sizeof( msg->msg_iov ) );
-   foreach_func ( tid, True, "(msg)", (Addr)&msg->msg_iovlen, sizeof( msg->msg_iovlen ) );
-   foreach_func ( tid, True, "(msg)", (Addr)&msg->msg_control, sizeof( msg->msg_control ) );
-   foreach_func ( tid, True, "(msg)", (Addr)&msg->msg_controllen, sizeof( msg->msg_controllen ) );
-   foreach_func ( tid, False, "(msg)", (Addr)&msg->msg_flags, sizeof( msg->msg_flags ) );
+   fieldName = VG_(arena_malloc) ( VG_AR_CORE, "di.syswrap.mfef", VG_(strlen)(name) + 32 );
 
-   if ( msg->msg_name )
-      foreach_func ( tid, False,
-                     "(msg.msg_name)", 
+   VG_(sprintf) ( fieldName, "(%s)", name );
+
+   foreach_func ( tid, True, fieldName, (Addr)&msg->msg_name, sizeof( msg->msg_name ) );
+   foreach_func ( tid, True, fieldName, (Addr)&msg->msg_namelen, sizeof( msg->msg_namelen ) );
+   foreach_func ( tid, True, fieldName, (Addr)&msg->msg_iov, sizeof( msg->msg_iov ) );
+   foreach_func ( tid, True, fieldName, (Addr)&msg->msg_iovlen, sizeof( msg->msg_iovlen ) );
+   foreach_func ( tid, True, fieldName, (Addr)&msg->msg_control, sizeof( msg->msg_control ) );
+   foreach_func ( tid, True, fieldName, (Addr)&msg->msg_controllen, sizeof( msg->msg_controllen ) );
+   foreach_func ( tid, False, fieldName, (Addr)&msg->msg_flags, sizeof( msg->msg_flags ) );
+
+   if ( msg->msg_name ) {
+      VG_(sprintf) ( fieldName, "(%s.msg_name)", name );
+      foreach_func ( tid, False, fieldName, 
                      (Addr)msg->msg_name, msg->msg_namelen );
+   }
 
    if ( msg->msg_iov ) {
       struct vki_iovec *iov = msg->msg_iov;
       UInt i;
 
-      foreach_func ( tid, True,
-                     "(msg.msg_iov)", 
+      VG_(sprintf) ( fieldName, "(%s.msg_iov)", name );
+
+      foreach_func ( tid, True, fieldName, 
                      (Addr)iov, msg->msg_iovlen * sizeof( struct vki_iovec ) );
 
-      for ( i = 0; i < msg->msg_iovlen; ++i, ++iov )
-         foreach_func ( tid, False,
-                        "(msg.msg_iov[i])", 
-                        (Addr)iov->iov_base, iov->iov_len );
+      for ( i = 0; i < msg->msg_iovlen; ++i, ++iov ) {
+         UInt iov_len = iov->iov_len <= length ? iov->iov_len : length;
+         VG_(sprintf) ( fieldName, "(%s.msg_iov[%u])", name, i );
+         foreach_func ( tid, False, fieldName, 
+                        (Addr)iov->iov_base, iov_len );
+         length = length - iov_len;
+      }
    }
 
-   if ( msg->msg_control )
-      foreach_func ( tid, False,
-                     "(msg.msg_control)", 
+   if ( msg->msg_control ) 
+   {
+      VG_(sprintf) ( fieldName, "(%s.msg_control)", name );
+      foreach_func ( tid, False, fieldName, 
                      (Addr)msg->msg_control, msg->msg_controllen );
+   }
+
+   VG_(arena_free) ( VG_AR_CORE, fieldName );
 }
 
 static void check_cmsg_for_fds(ThreadId tid, struct vki_msghdr *msg)
@@ -1513,31 +1507,23 @@ ML_(generic_POST_sys_getpeername) ( ThreadId tid,
 /* ------ */
 
 void 
-ML_(generic_PRE_sys_sendmsg) ( ThreadId tid,
-                               UWord arg0, UWord arg1 )
+ML_(generic_PRE_sys_sendmsg) ( ThreadId tid, Char *name, struct vki_msghdr *msg )
 {
-   /* int sendmsg(int s, const struct msghdr *msg, int flags); */
-   struct vki_msghdr *msg = (struct vki_msghdr *)arg1;
-   msghdr_foreachfield ( tid, msg, pre_mem_read_sendmsg );
+   msghdr_foreachfield ( tid, name, msg, ~0, pre_mem_read_sendmsg );
 }
 
 /* ------ */
 
 void
-ML_(generic_PRE_sys_recvmsg) ( ThreadId tid,
-                               UWord arg0, UWord arg1 )
+ML_(generic_PRE_sys_recvmsg) ( ThreadId tid, Char *name, struct vki_msghdr *msg )
 {
-   /* int recvmsg(int s, struct msghdr *msg, int flags); */
-   struct vki_msghdr *msg = (struct vki_msghdr *)arg1;
-   msghdr_foreachfield ( tid, msg, pre_mem_write_recvmsg );
+   msghdr_foreachfield ( tid, name, msg, ~0, pre_mem_write_recvmsg );
 }
 
 void 
-ML_(generic_POST_sys_recvmsg) ( ThreadId tid,
-                                UWord arg0, UWord arg1 )
+ML_(generic_POST_sys_recvmsg) ( ThreadId tid, Char *name, struct vki_msghdr *msg, UInt length )
 {
-   struct vki_msghdr *msg = (struct vki_msghdr *)arg1;
-   msghdr_foreachfield( tid, msg, post_mem_write_recvmsg );
+   msghdr_foreachfield( tid, name, msg, length, post_mem_write_recvmsg );
    check_cmsg_for_fds( tid, msg );
 }
 
@@ -1714,7 +1700,7 @@ ML_(generic_POST_sys_semctl) ( ThreadId tid,
 /* ------ */
 
 static
-UInt get_shm_size ( Int shmid )
+SizeT get_shm_size ( Int shmid )
 {
 #ifdef __NR_shmctl
 #  ifdef VKI_IPC_64
@@ -1739,7 +1725,7 @@ UInt get_shm_size ( Int shmid )
    if (sr_isError(__res))
       return 0;
  
-   return buf.shm_segsz;
+   return (SizeT) buf.shm_segsz;
 }
 
 UWord
@@ -1747,7 +1733,7 @@ ML_(generic_PRE_sys_shmat) ( ThreadId tid,
                              UWord arg0, UWord arg1, UWord arg2 )
 {
    /* void *shmat(int shmid, const void *shmaddr, int shmflg); */
-   UInt  segmentSize = get_shm_size ( arg0 );
+   SizeT  segmentSize = get_shm_size ( arg0 );
    UWord tmp;
    Bool  ok;
    if (arg1 == 0) {
@@ -1782,7 +1768,7 @@ ML_(generic_POST_sys_shmat) ( ThreadId tid,
                               UWord res,
                               UWord arg0, UWord arg1, UWord arg2 )
 {
-   UInt segmentSize = VG_PGROUNDUP(get_shm_size(arg0));
+   SizeT segmentSize = VG_PGROUNDUP(get_shm_size(arg0));
    if ( segmentSize > 0 ) {
       UInt prot = VKI_PROT_READ|VKI_PROT_WRITE;
       Bool d;
@@ -2567,6 +2553,7 @@ PRE(sys_execve)
       SET_STATUS_Failure( VKI_EFAULT );
       return;
    }
+
    // debug-only printing
    if (0) {
       VG_(printf)("ARG1 = %p(%s)\n", (void*)ARG1, (HChar*)ARG1);
@@ -2649,11 +2636,6 @@ PRE(sys_execve)
 
    } else {
       path = (Char*)ARG1;
-      if (VG_(clo_xml)) {
-        VG_(printf_xml)("\n<execv/>\n\n</valgrindoutput>\n\n");
-      } else {
-        VG_(umsg)("execv called - the tool will now quit\n");
-      }
    }
 
    // Set up the child's environment.
@@ -3935,7 +3917,11 @@ PRE(sys_setrlimit)
    arg1 &= ~_RLIMIT_POSIX_FLAG;
 #endif
 
-   if (arg1 == VKI_RLIMIT_NOFILE) {
+   if (ARG2 &&
+       ((struct vki_rlimit *)ARG2)->rlim_cur > ((struct vki_rlimit *)ARG2)->rlim_max) {
+      SET_STATUS_Failure( VKI_EINVAL );
+   }
+   else if (arg1 == VKI_RLIMIT_NOFILE) {
       if (((struct vki_rlimit *)ARG2)->rlim_cur > VG_(fd_hard_limit) ||
           ((struct vki_rlimit *)ARG2)->rlim_max != VG_(fd_hard_limit)) {
          SET_STATUS_Failure( VKI_EPERM );
@@ -4206,3 +4192,4 @@ POST(sys_sigaltstack)
 /*--------------------------------------------------------------------*/
 /*--- end                                                          ---*/
 /*--------------------------------------------------------------------*/
+

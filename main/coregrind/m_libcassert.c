@@ -7,7 +7,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2000-2011 Julian Seward 
+   Copyright (C) 2000-2012 Julian Seward 
       jseward@acm.org
 
    This program is free software; you can redistribute it and/or
@@ -151,6 +151,31 @@
         (srP)->r_sp = sp;                                 \
         (srP)->misc.S390X.r_fp = fp;                      \
         (srP)->misc.S390X.r_lr = lr;                      \
+      }
+#elif defined(VGP_mips32_linux)
+#  define GET_STARTREGS(srP)                              \
+      { UInt pc, sp, fp, ra, gp;                          \
+      asm("move $8, $31;"             /* t0 = ra */       \
+          "bal m_libcassert_get_ip;"  /* ra = pc */       \
+          "m_libcassert_get_ip:\n"                        \
+          "move %0, $31;"                                 \
+          "move $31, $8;"             /* restore lr */    \
+          "move %1, $29;"                                 \
+          "move %2, $30;"                                 \
+          "move %3, $31;"                                 \
+          "move %4, $28;"                                 \
+          : "=r" (pc),                                    \
+            "=r" (sp),                                    \
+            "=r" (fp),                                    \
+            "=r" (ra),                                    \
+            "=r" (gp)                                     \
+          : /* reads none */                              \
+          : "$8" /* trashed */ );                         \
+        (srP)->r_pc = (ULong)pc - 8;                      \
+        (srP)->r_sp = (ULong)sp;                          \
+        (srP)->misc.MIPS32.r30 = (ULong)fp;               \
+        (srP)->misc.MIPS32.r31 = (ULong)ra;               \
+        (srP)->misc.MIPS32.r28 = (ULong)gp;               \
       }
 #else
 #  error Unknown platform

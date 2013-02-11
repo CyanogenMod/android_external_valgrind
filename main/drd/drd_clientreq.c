@@ -1,8 +1,7 @@
-/* -*- mode: C; c-basic-offset: 3; indent-tabs-mode: nil; -*- */
 /*
   This file is part of drd, a thread error detector.
 
-  Copyright (C) 2006-2011 Bart Van Assche <bvanassche@acm.org>.
+  Copyright (C) 2006-2012 Bart Van Assche <bvanassche@acm.org>.
 
   This program is free software; you can redistribute it and/or
   modify it under the terms of the GNU General Public License as
@@ -70,6 +69,12 @@ void DRD_(clientreq_init)(void)
  * DRD's handler for Valgrind client requests. The code below handles both
  * DRD's public and tool-internal client requests.
  */
+#if defined(VGP_mips32_linux)
+ /* There is a cse related issue in gcc for MIPS. Optimization level
+    has to be lowered, so cse related optimizations are not
+    included. */
+ __attribute__((optimize("O1")))
+#endif
 static Bool handle_client_request(ThreadId vg_tid, UWord* arg, UWord* ret)
 {
    UWord result = 0;
@@ -221,7 +226,7 @@ static Bool handle_client_request(ThreadId vg_tid, UWord* arg, UWord* ret)
       break;
 
    case VG_USERREQ__DRD_START_TRACE_ADDR:
-      DRD_(start_tracing_address_range)(arg[1], arg[1] + arg[2]);
+      DRD_(start_tracing_address_range)(arg[1], arg[1] + arg[2], False);
       break;
 
    case VG_USERREQ__DRD_STOP_TRACE_ADDR:

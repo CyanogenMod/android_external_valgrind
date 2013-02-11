@@ -9,7 +9,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2000-2011 Julian Seward 
+   Copyright (C) 2000-2012 Julian Seward 
       jseward@acm.org
 
    This program is free software; you can redistribute it and/or
@@ -257,6 +257,21 @@ typedef
       Int   fp_off;
    }
    DiCfSI;
+#elif defined(VGA_mips32)
+typedef
+   struct {
+      Addr  base;
+      UInt  len;
+      UChar cfa_how; /* a CFIC_ value */
+      UChar ra_how;  /* a CFIR_ value */
+      UChar sp_how;  /* a CFIR_ value */
+      UChar fp_how;  /* a CFIR_ value */
+      Int   cfa_off;
+      Int   ra_off;
+      Int   sp_off;
+      Int   fp_off;
+   }
+   DiCfSI;
 #else
 #  error "Unknown arch"
 #endif
@@ -288,7 +303,8 @@ typedef
       Creg_ARM_R12,
       Creg_ARM_R15,
       Creg_ARM_R14,
-      Creg_S390_R14
+      Creg_S390_R14,
+      Creg_MIPS_RA
    }
    CfiReg;
 
@@ -405,13 +421,9 @@ ML_(cmp_for_DiAddrRange_range) ( const void* keyV, const void* elemV );
    true.  The initial state is one in which we have no observations,
    so have_rx_map and have_rw_map are both false.
 
-   This is all rather ad-hoc; for example it has no way to record more
-   than one rw or rx mapping for a given object, not because such
-   events have never been observed, but because we've never needed to
-   note more than the first one of any such in order when to decide to
-   read debug info.  It may be that in future we need to track more
-   state in order to make the decision, so this struct would then get
-   expanded.
+   This all started as a rather ad-hoc solution, but was further
+   expanded to handle weird object layouts, e.g. more than one rw
+   or rx mapping for one binary.
 
    The normal sequence of events is one of
 
@@ -428,28 +440,22 @@ ML_(cmp_for_DiAddrRange_range) ( const void* keyV, const void* elemV );
    where the upgrade is done by a call to vm_protect.  Hence we
    need to also track this possibility.
 */
+
+struct _DebugInfoMapping
+{
+   Addr  avma; /* these fields record the file offset, length */
+   SizeT size; /* and map address of each mapping             */
+   OffT  foff;
+   Bool  rx, rw, ro;  /* memory access flags for this mapping */
+};
+
 struct _DebugInfoFSM
 {
-   /* --- all targets --- */
-   UChar* filename; /* in mallocville (VG_AR_DINFO) */
-
+   UChar*  filename;  /* in mallocville (VG_AR_DINFO)               */
+   XArray* maps;      /* XArray of _DebugInfoMapping structs        */
    Bool  have_rx_map; /* did we see a r?x mapping yet for the file? */
    Bool  have_rw_map; /* did we see a rw? mapping yet for the file? */
-
-   Addr  rx_map_avma; /* these fields record the file offset, length */
-   SizeT rx_map_size; /* and map address of the r?x mapping we believe */
-   OffT  rx_map_foff; /* is the .text segment mapping */
-
-   Addr  rw_map_avma; /* ditto, for the rw? mapping we believe is the */
-   SizeT rw_map_size; /* .data segment mapping */
-   OffT  rw_map_foff;
-
-   /* --- OSX 10.7, 32-bit only --- */
    Bool  have_ro_map; /* did we see a r-- mapping yet for the file? */
-
-   Addr  ro_map_avma; /* file offset, length, avma for said mapping */
-   SizeT ro_map_size;
-   OffT  ro_map_foff;
 };
 
 
@@ -515,8 +521,7 @@ struct _DebugInfo {
       we have committed to reading the symbols and debug info (that
       is, at the point where .have_dinfo is set to True). */
 
-   /* The file's soname.  FIXME: ensure this is always allocated in
-      VG_AR_DINFO. */
+   /* The file's soname. */
    UChar* soname;
 
    /* Description of some important mapped segments.  The presence or
@@ -530,17 +535,17 @@ struct _DebugInfo {
 
       Comment_on_IMPORTANT_CFSI_REPRESENTATIONAL_INVARIANTS: we require that
  
-      either (rx_map_size == 0 && cfsi == NULL) (the degenerate case)
+      either (size of all rx maps == 0 && cfsi == NULL) (the degenerate case)
 
       or the normal case, which is the AND of the following:
-      (0) rx_map_size > 0
-      (1) no two DebugInfos with rx_map_size > 0 
-          have overlapping [rx_map_avma,+rx_map_size)
-      (2) [cfsi_minavma,cfsi_maxavma] does not extend 
-          beyond [rx_map_avma,+rx_map_size); that is, the former is a 
-          subrange or equal to the latter.
+      (0) size of at least one rx mapping > 0
+      (1) no two DebugInfos with some rx mapping of size > 0 
+          have overlapping rx mappings
+      (2) [cfsi_minavma,cfsi_maxavma] does not extend beyond
+          [avma,+size) of one rx mapping; that is, the former
+          is a subrange or equal to the latter.
       (3) all DiCfSI in the cfsi array all have ranges that fall within
-          [rx_map_avma,+rx_map_size).
+          [avma,+size) of that rx mapping.
       (4) all DiCfSI in the cfsi array are non-overlapping
 
       The cumulative effect of these restrictions is to ensure that
@@ -749,6 +754,7 @@ struct _DebugInfo {
    UWord     fpo_size;
    Addr      fpo_minavma;
    Addr      fpo_maxavma;
+   Addr      fpo_base_avma;
 
    /* Expandable arrays of characters -- the string table.  Pointers
       into this are stable (the arrays are not reallocated). */
@@ -793,6 +799,11 @@ struct _DebugInfo {
 
    /* An array of guarded DWARF3 expressions. */
    XArray* admin_gexprs;
+
+   /* Cached last rx mapping matched and returned by ML_(find_rx_mapping).
+      This helps performance a lot during ML_(addLineInfo) etc., which can
+      easily be invoked hundreds of thousands of times. */
+   struct _DebugInfoMapping* last_rx_map;
 };
 
 /* --------------------- functions --------------------- */
@@ -860,6 +871,13 @@ extern Word ML_(search_one_cfitab) ( struct _DebugInfo* di, Addr ptr );
 /* Find a FPO-table index containing the specified pointer, or -1
    if not found.  Binary search.  */
 extern Word ML_(search_one_fpotab) ( struct _DebugInfo* di, Addr ptr );
+
+/* Helper function for the most often needed searching for an rx
+   mapping containing the specified address range.  The range must
+   fall entirely within the mapping to be considered to be within it.
+   Asserts if lo > hi; caller must ensure this doesn't happen. */
+extern struct _DebugInfoMapping* ML_(find_rx_mapping) ( struct _DebugInfo* di,
+                                                        Addr lo, Addr hi );
 
 /* ------ Misc ------ */
 

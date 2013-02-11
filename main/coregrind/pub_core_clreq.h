@@ -7,7 +7,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2000-2011 Julian Seward
+   Copyright (C) 2000-2012 Julian Seward
       jseward@acm.org
 
    This program is free software; you can redistribute it and/or
@@ -52,13 +52,6 @@ typedef
 
       /* Add a target for an indirect function redirection. */
       VG_USERREQ__ADD_IFUNC_TARGET  = 0x3104,
-
-      /* NaCl mem_start */
-      VG_USERREQ__NACL_MEM_START = 0x3105,
-      /* NaCl nacl_file */
-      VG_USERREQ__NACL_FILE = 0x3106,
-      /* NaCl nacl_file */
-      VG_USERREQ__NACL_MMAP = 0x3107,
 
    } Vg_InternalClientRequest;
 

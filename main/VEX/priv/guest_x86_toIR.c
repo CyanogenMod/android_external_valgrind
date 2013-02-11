@@ -7,7 +7,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2004-2011 OpenWorks LLP
+   Copyright (C) 2004-2012 OpenWorks LLP
       info@open-works.net
 
    This program is free software; you can redistribute it and/or
@@ -768,7 +768,8 @@ static void casLE ( IRExpr* addr, IRExpr* expVal, IRExpr* newVal,
             binop( mkSizedOp(tyE,Iop_CasCmpNE8),
                    mkexpr(oldTmp), mkexpr(expTmp) ),
             Ijk_Boring, /*Ijk_NoRedir*/
-            IRConst_U32( restart_point ) 
+            IRConst_U32( restart_point ),
+            OFFB_EIP
          ));
 }
 
@@ -1340,36 +1341,55 @@ static HChar nameISize ( Int size )
 /*--- JMP helpers                                          ---*/
 /*------------------------------------------------------------*/
 
-static void jmp_lit( IRJumpKind kind, Addr32 d32 )
+static void jmp_lit( /*MOD*/DisResult* dres,
+                     IRJumpKind kind, Addr32 d32 )
 {
-   irsb->next     = mkU32(d32);
-   irsb->jumpkind = kind;
+   vassert(dres->whatNext    == Dis_Continue);
+   vassert(dres->len         == 0);
+   vassert(dres->continueAt  == 0);
+   vassert(dres->jk_StopHere == Ijk_INVALID);
+   dres->whatNext    = Dis_StopHere;
+   dres->jk_StopHere = kind;
+   stmt( IRStmt_Put( OFFB_EIP, mkU32(d32) ) );
 }
 
-static void jmp_treg( IRJumpKind kind, IRTemp t )
+static void jmp_treg( /*MOD*/DisResult* dres,
+                      IRJumpKind kind, IRTemp t )
 {
-   irsb->next = mkexpr(t);
-   irsb->jumpkind = kind;
+   vassert(dres->whatNext    == Dis_Continue);
+   vassert(dres->len         == 0);
+   vassert(dres->continueAt  == 0);
+   vassert(dres->jk_StopHere == Ijk_INVALID);
+   dres->whatNext    = Dis_StopHere;
+   dres->jk_StopHere = kind;
+   stmt( IRStmt_Put( OFFB_EIP, mkexpr(t) ) );
 }
 
 static 
-void jcc_01( X86Condcode cond, Addr32 d32_false, Addr32 d32_true )
+void jcc_01( /*MOD*/DisResult* dres,
+             X86Condcode cond, Addr32 d32_false, Addr32 d32_true )
 {
    Bool        invert;
    X86Condcode condPos;
+   vassert(dres->whatNext    == Dis_Continue);
+   vassert(dres->len         == 0);
+   vassert(dres->continueAt  == 0);
+   vassert(dres->jk_StopHere == Ijk_INVALID);
+   dres->whatNext    = Dis_StopHere;
+   dres->jk_StopHere = Ijk_Boring;
    condPos = positiveIse_X86Condcode ( cond, &invert );
    if (invert) {
       stmt( IRStmt_Exit( mk_x86g_calculate_condition(condPos),
                          Ijk_Boring,
-                         IRConst_U32(d32_false) ) );
-      irsb->next     = mkU32(d32_true);
-      irsb->jumpkind = Ijk_Boring;
+                         IRConst_U32(d32_false),
+                         OFFB_EIP ) );
+      stmt( IRStmt_Put( OFFB_EIP, mkU32(d32_true) ) );
    } else {
       stmt( IRStmt_Exit( mk_x86g_calculate_condition(condPos),
                          Ijk_Boring,
-                         IRConst_U32(d32_true) ) );
-      irsb->next     = mkU32(d32_false);
-      irsb->jumpkind = Ijk_Boring;
+                         IRConst_U32(d32_true),
+                         OFFB_EIP ) );
+      stmt( IRStmt_Put( OFFB_EIP, mkU32(d32_false) ) );
    }
 }
 
@@ -1450,7 +1470,8 @@ IRExpr* handleSegOverride ( UChar sorb, IRExpr* virtual )
       IRStmt_Exit(
          binop(Iop_CmpNE32, unop(Iop_64HIto32, mkexpr(r64)), mkU32(0)),
          Ijk_MapFail,
-         IRConst_U32( guest_EIP_curr_instr )
+         IRConst_U32( guest_EIP_curr_instr ),
+         OFFB_EIP
       )
    );
 
@@ -3009,7 +3030,7 @@ UInt dis_Grp4 ( UChar sorb, Bool locked, Int delta, Bool* decode_OK )
 /* Group 5 extended opcodes. */
 static
 UInt dis_Grp5 ( UChar sorb, Bool locked, Int sz, Int delta, 
-                DisResult* dres, Bool* decode_OK )
+                /*MOD*/DisResult* dres, /*OUT*/Bool* decode_OK )
 {
    Int     len;
    UChar   modrm;
@@ -3054,13 +3075,13 @@ UInt dis_Grp5 ( UChar sorb, Bool locked, Int sz, Int delta,
             assign(t2, binop(Iop_Sub32, getIReg(4,R_ESP), mkU32(4)));
             putIReg(4, R_ESP, mkexpr(t2));
             storeLE( mkexpr(t2), mkU32(guest_EIP_bbstart+delta+1));
-            jmp_treg(Ijk_Call,t1);
-            dres->whatNext = Dis_StopHere;
+            jmp_treg(dres, Ijk_Call, t1);
+            vassert(dres->whatNext == Dis_StopHere);
             break;
          case 4: /* jmp Ev */
             vassert(sz == 4);
-            jmp_treg(Ijk_Boring,t1);
-            dres->whatNext = Dis_StopHere;
+            jmp_treg(dres, Ijk_Boring, t1);
+            vassert(dres->whatNext == Dis_StopHere);
             break;
          case 6: /* PUSH Ev */
             vassert(sz == 4 || sz == 2);
@@ -3110,13 +3131,13 @@ UInt dis_Grp5 ( UChar sorb, Bool locked, Int sz, Int delta,
             assign(t2, binop(Iop_Sub32, getIReg(4,R_ESP), mkU32(4)));
             putIReg(4, R_ESP, mkexpr(t2));
             storeLE( mkexpr(t2), mkU32(guest_EIP_bbstart+delta+len));
-            jmp_treg(Ijk_Call,t1);
-            dres->whatNext = Dis_StopHere;
+            jmp_treg(dres, Ijk_Call, t1);
+            vassert(dres->whatNext == Dis_StopHere);
             break;
          case 4: /* JMP Ev */
             vassert(sz == 4);
-            jmp_treg(Ijk_Boring,t1);
-            dres->whatNext = Dis_StopHere;
+            jmp_treg(dres, Ijk_Boring, t1);
+            vassert(dres->whatNext == Dis_StopHere);
             break;
          case 6: /* PUSH Ev */
             vassert(sz == 4 || sz == 2);
@@ -3253,7 +3274,8 @@ void dis_SCAS ( Int sz, IRTemp t_inc )
    We assume the insn is the last one in the basic block, and so emit a jump
    to the next insn, rather than just falling through. */
 static 
-void dis_REP_op ( X86Condcode cond,
+void dis_REP_op ( /*MOD*/DisResult* dres,
+                  X86Condcode cond,
                   void (*dis_OP)(Int, IRTemp),
                   Int sz, Addr32 eip, Addr32 eip_next, HChar* name )
 {
@@ -3264,7 +3286,7 @@ void dis_REP_op ( X86Condcode cond,
 
    stmt( IRStmt_Exit( binop(Iop_CmpEQ32,mkexpr(tc),mkU32(0)),
                       Ijk_Boring,
-                      IRConst_U32(eip_next) ) );
+                      IRConst_U32(eip_next), OFFB_EIP ) );
 
    putIReg(4, R_ECX, binop(Iop_Sub32, mkexpr(tc), mkU32(1)) );
 
@@ -3272,12 +3294,14 @@ void dis_REP_op ( X86Condcode cond,
    dis_OP (sz, t_inc);
 
    if (cond == X86CondAlways) {
-      jmp_lit(Ijk_Boring,eip);
+      jmp_lit(dres, Ijk_Boring, eip);
+      vassert(dres->whatNext == Dis_StopHere);
    } else {
       stmt( IRStmt_Exit( mk_x86g_calculate_condition(cond),
                          Ijk_Boring,
-                         IRConst_U32(eip) ) );
-      jmp_lit(Ijk_Boring,eip_next);
+                         IRConst_U32(eip), OFFB_EIP ) );
+      jmp_lit(dres, Ijk_Boring, eip_next);
+      vassert(dres->whatNext == Dis_StopHere);
    }
    DIP("%s%c\n", name, nameISize(sz));
 }
@@ -3498,7 +3522,7 @@ static void put_ST_TAG ( Int i, IRExpr* value )
    IRRegArray* descr;
    vassert(typeOfIRExpr(irsb->tyenv, value) == Ity_I8);
    descr = mkIRRegArray( OFFB_FPTAGS, Ity_I8, 8 );
-   stmt( IRStmt_PutI( descr, get_ftop(), i, value ) );
+   stmt( IRStmt_PutI( mkIRPutI(descr, get_ftop(), i, value) ) );
 }
 
 /* Given i, generate an expression yielding 'ST_TAG(i)'.  This will be
@@ -3522,7 +3546,7 @@ static void put_ST_UNCHECKED ( Int i, IRExpr* value )
    IRRegArray* descr;
    vassert(typeOfIRExpr(irsb->tyenv, value) == Ity_F64);
    descr = mkIRRegArray( OFFB_FPREGS, Ity_F64, 8 );
-   stmt( IRStmt_PutI( descr, get_ftop(), i, value ) );
+   stmt( IRStmt_PutI( mkIRPutI(descr, get_ftop(), i, value) ) );
    /* Mark the register as in-use. */
    put_ST_TAG(i, mkU8(1));
 }
@@ -3930,6 +3954,7 @@ UInt dis_FPU ( Bool* decode_ok, UChar sorb, Int delta )
 
                /* declare we're writing guest state */
                d->nFxState = 4;
+               vex_bzero(&d->fxState, sizeof(d->fxState));
 
                d->fxState[0].fx     = Ifx_Write;
                d->fxState[0].offset = OFFB_FTOP;
@@ -3958,7 +3983,8 @@ UInt dis_FPU ( Bool* decode_ok, UChar sorb, Int delta )
                   IRStmt_Exit(
                      binop(Iop_CmpNE32, mkexpr(ew), mkU32(0)),
                      Ijk_EmWarn,
-                     IRConst_U32( ((Addr32)guest_EIP_bbstart)+delta)
+                     IRConst_U32( ((Addr32)guest_EIP_bbstart)+delta),
+                     OFFB_EIP
                   )
                );
 
@@ -4000,7 +4026,8 @@ UInt dis_FPU ( Bool* decode_ok, UChar sorb, Int delta )
                   IRStmt_Exit(
                      binop(Iop_CmpNE32, mkexpr(ew), mkU32(0)),
                      Ijk_EmWarn,
-                     IRConst_U32( ((Addr32)guest_EIP_bbstart)+delta)
+                     IRConst_U32( ((Addr32)guest_EIP_bbstart)+delta),
+                     OFFB_EIP
                   )
                );
                break;
@@ -4023,6 +4050,7 @@ UInt dis_FPU ( Bool* decode_ok, UChar sorb, Int delta )
 
                /* declare we're reading guest state */
                d->nFxState = 4;
+               vex_bzero(&d->fxState, sizeof(d->fxState));
 
                d->fxState[0].fx     = Ifx_Read;
                d->fxState[0].offset = OFFB_FTOP;
@@ -4712,6 +4740,7 @@ UInt dis_FPU ( Bool* decode_ok, UChar sorb, Int delta )
 
                /* declare we're writing guest state */
                d->nFxState = 5;
+               vex_bzero(&d->fxState, sizeof(d->fxState));
 
                d->fxState[0].fx     = Ifx_Write;
                d->fxState[0].offset = OFFB_FTOP;
@@ -4916,6 +4945,7 @@ UInt dis_FPU ( Bool* decode_ok, UChar sorb, Int delta )
 
                /* declare we're writing guest state */
                d->nFxState = 5;
+               vex_bzero(&d->fxState, sizeof(d->fxState));
 
                d->fxState[0].fx     = Ifx_Write;
                d->fxState[0].offset = OFFB_FTOP;
@@ -4948,7 +4978,8 @@ UInt dis_FPU ( Bool* decode_ok, UChar sorb, Int delta )
                   IRStmt_Exit(
                      binop(Iop_CmpNE32, mkexpr(ew), mkU32(0)),
                      Ijk_EmWarn,
-                     IRConst_U32( ((Addr32)guest_EIP_bbstart)+delta)
+                     IRConst_U32( ((Addr32)guest_EIP_bbstart)+delta),
+                     OFFB_EIP
                   )
                );
 
@@ -4973,6 +5004,7 @@ UInt dis_FPU ( Bool* decode_ok, UChar sorb, Int delta )
 
                /* declare we're reading guest state */
                d->nFxState = 5;
+               vex_bzero(&d->fxState, sizeof(d->fxState));
 
                d->fxState[0].fx     = Ifx_Read;
                d->fxState[0].offset = OFFB_FTOP;
@@ -5379,7 +5411,7 @@ static void do_MMX_preamble ( void )
    IRExpr*     tag1  = mkU8(1);
    put_ftop(zero);
    for (i = 0; i < 8; i++)
-      stmt( IRStmt_PutI( descr, zero, i, tag1 ) );
+      stmt( IRStmt_PutI( mkIRPutI(descr, zero, i, tag1) ) );
 }
 
 static void do_EMMS_preamble ( void )
@@ -5390,7 +5422,7 @@ static void do_EMMS_preamble ( void )
    IRExpr*     tag0  = mkU8(0);
    put_ftop(zero);
    for (i = 0; i < 8; i++)
-      stmt( IRStmt_PutI( descr, zero, i, tag0 ) );
+      stmt( IRStmt_PutI( mkIRPutI(descr, zero, i, tag0) ) );
 }
 
 
@@ -6811,13 +6843,15 @@ void dis_pop_segreg ( UInt sreg, Int sz )
 }
 
 static
-void dis_ret ( UInt d32 )
+void dis_ret ( /*MOD*/DisResult* dres, UInt d32 )
 {
-   IRTemp t1 = newTemp(Ity_I32), t2 = newTemp(Ity_I32);
+   IRTemp t1 = newTemp(Ity_I32);
+   IRTemp t2 = newTemp(Ity_I32);
    assign(t1, getIReg(4,R_ESP));
    assign(t2, loadLE(Ity_I32,mkexpr(t1)));
    putIReg(4, R_ESP,binop(Iop_Add32, mkexpr(t1), mkU32(4+d32)));
-   jmp_treg(Ijk_Ret,t2);
+   jmp_treg(dres, Ijk_Ret, t2);
+   vassert(dres->whatNext == Dis_StopHere);
 }
 
 /*------------------------------------------------------------*/
@@ -7523,7 +7557,8 @@ void set_EFLAGS_from_value ( IRTemp t1,
                    binop(Iop_And32, mkexpr(t1), mkU32(1<<18)), 
                    mkU32(0) ),
             Ijk_EmWarn,
-            IRConst_U32( next_insn_EIP )
+            IRConst_U32( next_insn_EIP ),
+            OFFB_EIP
          )
       );
    }
@@ -7692,19 +7727,16 @@ static IRExpr* dis_PALIGNR_XMM_helper ( IRTemp hi64,
    if effective_addr is not 16-aligned.  This is required behaviour
    for some SSE3 instructions and all 128-bit SSSE3 instructions.
    This assumes that guest_RIP_curr_instr is set correctly! */
-/* TODO(glider): we've replaced the 0xF mask with 0x0, effectively disabling
- * the check. Need to enable it once TSan stops generating unaligned
- * accesses in the wrappers.
- * See http://code.google.com/p/data-race-test/issues/detail?id=49 */
 static void gen_SEGV_if_not_16_aligned ( IRTemp effective_addr )
 {
    stmt(
       IRStmt_Exit(
          binop(Iop_CmpNE32,
-               binop(Iop_And32,mkexpr(effective_addr),mkU32(0x0)),
+               binop(Iop_And32,mkexpr(effective_addr),mkU32(0xF)),
                mkU32(0)),
          Ijk_SigSEGV,
-         IRConst_U32(guest_EIP_curr_instr)
+         IRConst_U32(guest_EIP_curr_instr),
+         OFFB_EIP
       )
    );
 }
@@ -7839,6 +7871,38 @@ static Bool can_be_used_with_LOCK_prefix ( UChar* opc )
    return False;
 }
 
+static IRTemp math_BSWAP ( IRTemp t1, IRType ty )
+{
+   IRTemp t2 = newTemp(ty);
+   if (ty == Ity_I32) {
+      assign( t2,
+         binop(
+            Iop_Or32,
+            binop(Iop_Shl32, mkexpr(t1), mkU8(24)),
+            binop(
+               Iop_Or32,
+               binop(Iop_And32, binop(Iop_Shl32, mkexpr(t1), mkU8(8)),
+                                mkU32(0x00FF0000)),
+               binop(Iop_Or32,
+                     binop(Iop_And32, binop(Iop_Shr32, mkexpr(t1), mkU8(8)),
+                                      mkU32(0x0000FF00)),
+                     binop(Iop_And32, binop(Iop_Shr32, mkexpr(t1), mkU8(24)),
+                                      mkU32(0x000000FF) )
+            )))
+      );
+      return t2;
+   }
+   if (ty == Ity_I16) {
+      assign(t2, 
+             binop(Iop_Or16,
+                   binop(Iop_Shl16, mkexpr(t1), mkU8(8)),
+                   binop(Iop_Shr16, mkexpr(t1), mkU8(8)) ));
+      return t2;
+   }
+   vassert(0);
+   /*NOTREACHED*/
+   return IRTemp_INVALID;
+}
 
 /*------------------------------------------------------------*/
 /*--- Disassemble a single instruction                     ---*/
@@ -7858,7 +7922,6 @@ static Bool can_be_used_with_LOCK_prefix ( UChar* opc )
 static
 DisResult disInstr_X86_WRK (
              /*OUT*/Bool* expect_CAS,
-             Bool         put_IP,
              Bool         (*resteerOkFn) ( /*opaque*/void*, Addr64 ),
              Bool         resteerCisOk,
              void*        callback_opaque,
@@ -7897,9 +7960,10 @@ DisResult disInstr_X86_WRK (
    Bool pfx_lock = False;
 
    /* Set result defaults. */
-   dres.whatNext   = Dis_Continue;
-   dres.len        = 0;
-   dres.continueAt = 0;
+   dres.whatNext    = Dis_Continue;
+   dres.len         = 0;
+   dres.continueAt  = 0;
+   dres.jk_StopHere = Ijk_INVALID;
 
    *expect_CAS = False;
 
@@ -7907,10 +7971,6 @@ DisResult disInstr_X86_WRK (
 
    vassert(guest_EIP_bbstart + delta == guest_EIP_curr_instr);
    DIP("\t0x%x:  ", guest_EIP_bbstart+delta);
-
-   /* We may be asked to update the guest EIP before going further. */
-   if (put_IP)
-      stmt( IRStmt_Put( OFFB_EIP, mkU32(guest_EIP_curr_instr)) );
 
    /* Spot "Special" instructions (see comment at top of file). */
    {
@@ -7930,8 +7990,8 @@ DisResult disInstr_X86_WRK (
             /* %EDX = client_request ( %EAX ) */
             DIP("%%edx = client_request ( %%eax )\n");
             delta += 14;
-            jmp_lit(Ijk_ClientReq, guest_EIP_bbstart+delta);
-            dres.whatNext = Dis_StopHere;
+            jmp_lit(&dres, Ijk_ClientReq, guest_EIP_bbstart+delta);
+            vassert(dres.whatNext == Dis_StopHere);
             goto decode_success;
          }
          else
@@ -7953,8 +8013,8 @@ DisResult disInstr_X86_WRK (
             assign(t2, binop(Iop_Sub32, getIReg(4,R_ESP), mkU32(4)));
             putIReg(4, R_ESP, mkexpr(t2));
             storeLE( mkexpr(t2), mkU32(guest_EIP_bbstart+delta));
-            jmp_treg(Ijk_NoRedir,t1);
-            dres.whatNext = Dis_StopHere;
+            jmp_treg(&dres, Ijk_NoRedir, t1);
+            vassert(dres.whatNext == Dis_StopHere);
             goto decode_success;
          }
          /* We don't know what it is. */
@@ -8115,10 +8175,11 @@ DisResult disInstr_X86_WRK (
       /* declare we're writing memory */
       d->mFx   = Ifx_Write;
       d->mAddr = mkexpr(addr);
-      d->mSize = 512;
+      d->mSize = 464; /* according to recent Intel docs */
 
       /* declare we're reading guest state */
       d->nFxState = 7;
+      vex_bzero(&d->fxState, sizeof(d->fxState));
 
       d->fxState[0].fx     = Ifx_Read;
       d->fxState[0].offset = OFFB_FTOP;
@@ -8189,10 +8250,11 @@ DisResult disInstr_X86_WRK (
       /* declare we're reading memory */
       d->mFx   = Ifx_Read;
       d->mAddr = mkexpr(addr);
-      d->mSize = 512;
+      d->mSize = 464; /* according to recent Intel docs */
 
       /* declare we're writing guest state */
       d->nFxState = 7;
+      vex_bzero(&d->fxState, sizeof(d->fxState));
 
       d->fxState[0].fx     = Ifx_Write;
       d->fxState[0].offset = OFFB_FTOP;
@@ -8541,7 +8603,8 @@ DisResult disInstr_X86_WRK (
          IRStmt_Exit(
             binop(Iop_CmpNE32, mkexpr(ew), mkU32(0)),
             Ijk_EmWarn,
-            IRConst_U32( ((Addr32)guest_EIP_bbstart)+delta)
+            IRConst_U32( ((Addr32)guest_EIP_bbstart)+delta),
+            OFFB_EIP
          )
       );
       goto decode_success;
@@ -11525,9 +11588,7 @@ DisResult disInstr_X86_WRK (
 
       stmt( IRStmt_Put(OFFB_TILEN, mkU32(lineszB) ) );
 
-      irsb->jumpkind = Ijk_TInval;
-      irsb->next     = mkU32(guest_EIP_bbstart+delta);
-      dres.whatNext  = Dis_StopHere;
+      jmp_lit(&dres, Ijk_TInval, (Addr32)(guest_EIP_bbstart+delta));
 
       DIP("clflush %s\n", dis_buf);
       goto decode_success;
@@ -12594,6 +12655,33 @@ DisResult disInstr_X86_WRK (
       );
       goto decode_success;
    }
+   
+   /* 0F 38 F0 = MOVBE m16/32(E), r16/32(G) */
+   /* 0F 38 F1 = MOVBE r16/32(G), m16/32(E) */
+   if ((sz == 2 || sz == 4)
+       && insn[0] == 0x0F && insn[1] == 0x38
+       && (insn[2] == 0xF0 || insn[2] == 0xF1)
+       && !epartIsReg(insn[3])) {
+
+      modrm = insn[3];
+      addr = disAMode(&alen, sorb, delta + 3, dis_buf);
+      delta += 3 + alen;
+      ty = szToITy(sz);
+      IRTemp src = newTemp(ty);
+
+      if (insn[2] == 0xF0) { /* LOAD */
+         assign(src, loadLE(ty, mkexpr(addr)));
+         IRTemp dst = math_BSWAP(src, ty);
+         putIReg(sz, gregOfRM(modrm), mkexpr(dst));
+         DIP("movbe %s,%s\n", dis_buf, nameIReg(sz, gregOfRM(modrm)));
+      } else { /* STORE */
+         assign(src, getIReg(sz, gregOfRM(modrm)));
+         IRTemp dst = math_BSWAP(src, ty);
+         storeLE(mkexpr(addr), mkexpr(dst));
+         DIP("movbe %s,%s\n", nameIReg(sz, gregOfRM(modrm)), dis_buf);
+      }
+      goto decode_success;
+   }
 
    /* ---------------------------------------------------- */
    /* --- end of the SSSE3 decoder.                    --- */
@@ -12733,7 +12821,8 @@ DisResult disInstr_X86_WRK (
       stmt( IRStmt_Exit(
                binop(Iop_CmpEQ16, getIReg(2,R_ECX), mkU16(0)),
                Ijk_Boring,
-               IRConst_U32(d32)
+               IRConst_U32(d32),
+               OFFB_EIP
             ));
        DIP("jcxz 0x%x\n", d32);
        goto decode_success;
@@ -12756,13 +12845,11 @@ DisResult disInstr_X86_WRK (
    case 0xC2: /* RET imm16 */
       d32 = getUDisp16(delta); 
       delta += 2;
-      dis_ret(d32);
-      dres.whatNext = Dis_StopHere;
+      dis_ret(&dres, d32);
       DIP("ret %d\n", (Int)d32);
       break;
    case 0xC3: /* RET */
-      dis_ret(0);
-      dres.whatNext = Dis_StopHere;
+      dis_ret(&dres, 0);
       DIP("ret\n");
       break;
 
@@ -12786,8 +12873,8 @@ DisResult disInstr_X86_WRK (
       /* set %EFLAGS */
       set_EFLAGS_from_value( t4, False/*!emit_AC_emwarn*/, 0/*unused*/ );
       /* goto new EIP value */
-      jmp_treg(Ijk_Ret,t2);
-      dres.whatNext = Dis_StopHere;
+      jmp_treg(&dres, Ijk_Ret, t2);
+      vassert(dres.whatNext == Dis_StopHere);
       DIP("iret (very kludgey)\n");
       break;
 
@@ -12819,8 +12906,8 @@ DisResult disInstr_X86_WRK (
             dres.whatNext   = Dis_ResteerU;
             dres.continueAt = (Addr64)(Addr32)d32;
          } else {
-            jmp_lit(Ijk_Call,d32);
-            dres.whatNext = Dis_StopHere;
+            jmp_lit(&dres, Ijk_Call, d32);
+            vassert(dres.whatNext == Dis_StopHere);
          }
          DIP("call 0x%x\n",d32);
       }
@@ -13064,8 +13151,8 @@ DisResult disInstr_X86_WRK (
    /* ------------------------ INT ------------------------ */
 
    case 0xCC: /* INT 3 */
-      jmp_lit(Ijk_SigTRAP,((Addr32)guest_EIP_bbstart)+delta);
-      dres.whatNext = Dis_StopHere;
+      jmp_lit(&dres, Ijk_SigTRAP, ((Addr32)guest_EIP_bbstart)+delta);
+      vassert(dres.whatNext == Dis_StopHere);
       DIP("int $0x3\n");
       break;
 
@@ -13078,14 +13165,16 @@ DisResult disInstr_X86_WRK (
          end-of-block here, which forces any TempRegs caching ArchRegs
          to be flushed. */
 
-      /* Handle int $0x40 .. $0x43 by synthesising a segfault and a
+      /* Handle int $0x3F .. $0x4F by synthesising a segfault and a
          restart of this instruction (hence the "-2" two lines below,
          to get the restart EIP to be this instruction.  This is
          probably Linux-specific and it would be more correct to only
-         do this if the VexAbiInfo says that is what we should do. */
-      if (d32 >= 0x40 && d32 <= 0x43) {
-         jmp_lit(Ijk_SigSEGV,((Addr32)guest_EIP_bbstart)+delta-2);
-         dres.whatNext = Dis_StopHere;
+         do this if the VexAbiInfo says that is what we should do.
+         This used to handle just 0x40-0x43; Jikes RVM uses a larger
+         range (0x3F-0x49), and this allows some slack as well. */
+      if (d32 >= 0x3F && d32 <= 0x4F) {
+         jmp_lit(&dres, Ijk_SigSEGV, ((Addr32)guest_EIP_bbstart)+delta-2);
+         vassert(dres.whatNext == Dis_StopHere);
          DIP("int $0x%x\n", (Int)d32);
          break;
       }
@@ -13097,24 +13186,24 @@ DisResult disInstr_X86_WRK (
       if (d32 == 0x80) {
          stmt( IRStmt_Put( OFFB_IP_AT_SYSCALL,
                            mkU32(guest_EIP_curr_instr) ) );
-         jmp_lit(Ijk_Sys_int128,((Addr32)guest_EIP_bbstart)+delta);
-         dres.whatNext = Dis_StopHere;
+         jmp_lit(&dres, Ijk_Sys_int128, ((Addr32)guest_EIP_bbstart)+delta);
+         vassert(dres.whatNext == Dis_StopHere);
          DIP("int $0x80\n");
          break;
       }
       if (d32 == 0x81) {
          stmt( IRStmt_Put( OFFB_IP_AT_SYSCALL,
                            mkU32(guest_EIP_curr_instr) ) );
-         jmp_lit(Ijk_Sys_int129,((Addr32)guest_EIP_bbstart)+delta);
-         dres.whatNext = Dis_StopHere;
+         jmp_lit(&dres, Ijk_Sys_int129, ((Addr32)guest_EIP_bbstart)+delta);
+         vassert(dres.whatNext == Dis_StopHere);
          DIP("int $0x81\n");
          break;
       }
       if (d32 == 0x82) {
          stmt( IRStmt_Put( OFFB_IP_AT_SYSCALL,
                            mkU32(guest_EIP_curr_instr) ) );
-         jmp_lit(Ijk_Sys_int130,((Addr32)guest_EIP_bbstart)+delta);
-         dres.whatNext = Dis_StopHere;
+         jmp_lit(&dres, Ijk_Sys_int130, ((Addr32)guest_EIP_bbstart)+delta);
+         vassert(dres.whatNext == Dis_StopHere);
          DIP("int $0x82\n");
          break;
       }
@@ -13131,8 +13220,8 @@ DisResult disInstr_X86_WRK (
          dres.whatNext   = Dis_ResteerU;
          dres.continueAt = (Addr64)(Addr32)d32;
       } else {
-         jmp_lit(Ijk_Boring,d32);
-         dres.whatNext = Dis_StopHere;
+         jmp_lit(&dres, Ijk_Boring, d32);
+         vassert(dres.whatNext == Dis_StopHere);
       }
       DIP("jmp-8 0x%x\n", d32);
       break;
@@ -13145,8 +13234,8 @@ DisResult disInstr_X86_WRK (
          dres.whatNext   = Dis_ResteerU;
          dres.continueAt = (Addr64)(Addr32)d32;
       } else {
-         jmp_lit(Ijk_Boring,d32);
-         dres.whatNext = Dis_StopHere;
+         jmp_lit(&dres, Ijk_Boring, d32);
+         vassert(dres.whatNext == Dis_StopHere);
       }
       DIP("jmp 0x%x\n", d32);
       break;
@@ -13187,7 +13276,8 @@ DisResult disInstr_X86_WRK (
          stmt( IRStmt_Exit( 
                   mk_x86g_calculate_condition((X86Condcode)(1 ^ (opc - 0x70))),
                   Ijk_Boring,
-                  IRConst_U32(guest_EIP_bbstart+delta) ) );
+                  IRConst_U32(guest_EIP_bbstart+delta),
+                  OFFB_EIP ) );
          dres.whatNext   = Dis_ResteerC;
          dres.continueAt = (Addr64)(Addr32)d32;
          comment = "(assumed taken)";
@@ -13206,7 +13296,8 @@ DisResult disInstr_X86_WRK (
          stmt( IRStmt_Exit( 
                   mk_x86g_calculate_condition((X86Condcode)(opc - 0x70)),
                   Ijk_Boring,
-                  IRConst_U32(d32) ) );
+                  IRConst_U32(d32),
+                  OFFB_EIP ) );
          dres.whatNext   = Dis_ResteerC;
          dres.continueAt = (Addr64)(Addr32)(guest_EIP_bbstart+delta);
          comment = "(assumed not taken)";
@@ -13214,9 +13305,9 @@ DisResult disInstr_X86_WRK (
       else {
          /* Conservative default translation - end the block at this
             point. */
-         jcc_01( (X86Condcode)(opc - 0x70), 
+         jcc_01( &dres, (X86Condcode)(opc - 0x70), 
                  (Addr32)(guest_EIP_bbstart+delta), d32);
-         dres.whatNext = Dis_StopHere;
+         vassert(dres.whatNext == Dis_StopHere);
       }
       DIP("j%s-8 0x%x %s\n", name_X86Condcode(opc - 0x70), d32, comment);
       break;
@@ -13229,7 +13320,8 @@ DisResult disInstr_X86_WRK (
       stmt( IRStmt_Exit(
                binop(Iop_CmpEQ32, getIReg(4,R_ECX), mkU32(0)),
             Ijk_Boring,
-            IRConst_U32(d32)
+            IRConst_U32(d32),
+            OFFB_EIP
           ));
       DIP("jecxz 0x%x\n", d32);
       break;
@@ -13270,7 +13362,7 @@ DisResult disInstr_X86_WRK (
          default:
 	    vassert(0);
       }
-      stmt( IRStmt_Exit(cond, Ijk_Boring, IRConst_U32(d32)) );
+      stmt( IRStmt_Exit(cond, Ijk_Boring, IRConst_U32(d32), OFFB_EIP) );
 
       DIP("loop%s 0x%x\n", xtra, d32);
       break;
@@ -13950,33 +14042,32 @@ DisResult disInstr_X86_WRK (
       abyte = getIByte(delta); delta++;
 
       if (abyte == 0x66) { sz = 2; abyte = getIByte(delta); delta++; }
-      dres.whatNext = Dis_StopHere;         
 
       switch (abyte) {
       /* According to the Intel manual, "repne movs" should never occur, but
        * in practice it has happened, so allow for it here... */
       case 0xA4: sz = 1;   /* REPNE MOVS<sz> */
       case 0xA5: 
-         dis_REP_op ( X86CondNZ, dis_MOVS, sz, eip_orig,
-                                 guest_EIP_bbstart+delta, "repne movs" );
+         dis_REP_op ( &dres, X86CondNZ, dis_MOVS, sz, eip_orig,
+                             guest_EIP_bbstart+delta, "repne movs" );
          break;
 
       case 0xA6: sz = 1;   /* REPNE CMP<sz> */
       case 0xA7:
-         dis_REP_op ( X86CondNZ, dis_CMPS, sz, eip_orig, 
-                                 guest_EIP_bbstart+delta, "repne cmps" );
+         dis_REP_op ( &dres, X86CondNZ, dis_CMPS, sz, eip_orig, 
+                             guest_EIP_bbstart+delta, "repne cmps" );
          break;
 
       case 0xAA: sz = 1;   /* REPNE STOS<sz> */
       case 0xAB:
-         dis_REP_op ( X86CondNZ, dis_STOS, sz, eip_orig, 
-                                 guest_EIP_bbstart+delta, "repne stos" );
+         dis_REP_op ( &dres, X86CondNZ, dis_STOS, sz, eip_orig, 
+                             guest_EIP_bbstart+delta, "repne stos" );
          break;
 
       case 0xAE: sz = 1;   /* REPNE SCAS<sz> */
       case 0xAF:
-         dis_REP_op ( X86CondNZ, dis_SCAS, sz, eip_orig,
-                                 guest_EIP_bbstart+delta, "repne scas" );
+         dis_REP_op ( &dres, X86CondNZ, dis_SCAS, sz, eip_orig,
+                             guest_EIP_bbstart+delta, "repne scas" );
          break;
 
       default:
@@ -13989,41 +14080,56 @@ DisResult disInstr_X86_WRK (
       for the rest, it means REP) */
    case 0xF3: { 
       Addr32 eip_orig = guest_EIP_bbstart + delta_start;
-      if (sorb != 0) goto decode_failure;
       abyte = getIByte(delta); delta++;
 
       if (abyte == 0x66) { sz = 2; abyte = getIByte(delta); delta++; }
-      dres.whatNext = Dis_StopHere;
+
+      if (sorb != 0 && abyte != 0x0F) goto decode_failure;
 
       switch (abyte) {
+      case 0x0F:
+         switch (getIByte(delta)) {
+         /* On older CPUs, TZCNT behaves the same as BSF.  */
+         case 0xBC: /* REP BSF Gv,Ev */
+            delta = dis_bs_E_G ( sorb, sz, delta + 1, True );
+            break;
+         /* On older CPUs, LZCNT behaves the same as BSR.  */
+         case 0xBD: /* REP BSR Gv,Ev */
+            delta = dis_bs_E_G ( sorb, sz, delta + 1, False );
+            break;
+         default:
+            goto decode_failure;
+         }
+         break;
+
       case 0xA4: sz = 1;   /* REP MOVS<sz> */
       case 0xA5:
-         dis_REP_op ( X86CondAlways, dis_MOVS, sz, eip_orig, 
-                                     guest_EIP_bbstart+delta, "rep movs" );
+         dis_REP_op ( &dres, X86CondAlways, dis_MOVS, sz, eip_orig, 
+                             guest_EIP_bbstart+delta, "rep movs" );
          break;
 
       case 0xA6: sz = 1;   /* REPE CMP<sz> */
       case 0xA7:
-         dis_REP_op ( X86CondZ, dis_CMPS, sz, eip_orig, 
-                                guest_EIP_bbstart+delta, "repe cmps" );
+         dis_REP_op ( &dres, X86CondZ, dis_CMPS, sz, eip_orig, 
+                             guest_EIP_bbstart+delta, "repe cmps" );
          break;
 
       case 0xAA: sz = 1;   /* REP STOS<sz> */
       case 0xAB:
-         dis_REP_op ( X86CondAlways, dis_STOS, sz, eip_orig, 
-                                     guest_EIP_bbstart+delta, "rep stos" );
+         dis_REP_op ( &dres, X86CondAlways, dis_STOS, sz, eip_orig, 
+                             guest_EIP_bbstart+delta, "rep stos" );
          break;
 
       case 0xAC: sz = 1;   /* REP LODS<sz> */
       case 0xAD:
-         dis_REP_op ( X86CondAlways, dis_LODS, sz, eip_orig, 
-                                     guest_EIP_bbstart+delta, "rep lods" );
+         dis_REP_op ( &dres, X86CondAlways, dis_LODS, sz, eip_orig, 
+                             guest_EIP_bbstart+delta, "rep lods" );
          break;
 
       case 0xAE: sz = 1;   /* REPE SCAS<sz> */
       case 0xAF: 
-         dis_REP_op ( X86CondZ, dis_SCAS, sz, eip_orig, 
-                                guest_EIP_bbstart+delta, "repe scas" );
+         dis_REP_op ( &dres, X86CondZ, dis_SCAS, sz, eip_orig, 
+                             guest_EIP_bbstart+delta, "repe scas" );
          break;
       
       case 0x90:           /* REP NOP (PAUSE) */
@@ -14031,13 +14137,12 @@ DisResult disInstr_X86_WRK (
          DIP("rep nop (P4 pause)\n");
          /* "observe" the hint.  The Vex client needs to be careful not
             to cause very long delays as a result, though. */
-         jmp_lit(Ijk_Yield, ((Addr32)guest_EIP_bbstart)+delta);
-         dres.whatNext = Dis_StopHere;
+         jmp_lit(&dres, Ijk_Yield, ((Addr32)guest_EIP_bbstart)+delta);
+         vassert(dres.whatNext == Dis_StopHere);
          break;
 
       case 0xC3:           /* REP RET -- same as normal ret? */
-         dis_ret(0);
-         dres.whatNext = Dis_StopHere;
+         dis_ret(&dres, 0);
          DIP("rep ret\n");
          break;
 
@@ -14391,24 +14496,11 @@ DisResult disInstr_X86_WRK (
       case 0xCE:
       case 0xCF: /* BSWAP %edi */
          /* AFAICS from the Intel docs, this only exists at size 4. */
-         vassert(sz == 4);
+         if (sz != 4) goto decode_failure;
+         
          t1 = newTemp(Ity_I32);
-         t2 = newTemp(Ity_I32);
          assign( t1, getIReg(4, opc-0xC8) );
-
-         assign( t2,
-            binop(Iop_Or32,
-               binop(Iop_Shl32, mkexpr(t1), mkU8(24)),
-            binop(Iop_Or32,
-               binop(Iop_And32, binop(Iop_Shl32, mkexpr(t1), mkU8(8)), 
-                                mkU32(0x00FF0000)),
-            binop(Iop_Or32,
-               binop(Iop_And32, binop(Iop_Shr32, mkexpr(t1), mkU8(8)),
-                                mkU32(0x0000FF00)),
-               binop(Iop_And32, binop(Iop_Shr32, mkexpr(t1), mkU8(24)),
-                                mkU32(0x000000FF) )
-            )))
-         );
+         t2 = math_BSWAP(t1, Ity_I32);
 
          putIReg(4, opc-0xC8, mkexpr(t2));
          DIP("bswapl %s\n", nameIReg(4, opc-0xC8));
@@ -14585,6 +14677,7 @@ DisResult disInstr_X86_WRK (
          /* declare guest state effects */
          d->needsBBP = True;
          d->nFxState = 4;
+         vex_bzero(&d->fxState, sizeof(d->fxState));
          d->fxState[0].fx     = Ifx_Modify;
          d->fxState[0].offset = OFFB_EAX;
          d->fxState[0].size   = 4;
@@ -14743,7 +14836,8 @@ DisResult disInstr_X86_WRK (
                      mk_x86g_calculate_condition((X86Condcode)
                                                  (1 ^ (opc - 0x80))),
                      Ijk_Boring,
-                     IRConst_U32(guest_EIP_bbstart+delta) ) );
+                     IRConst_U32(guest_EIP_bbstart+delta),
+                     OFFB_EIP ) );
             dres.whatNext   = Dis_ResteerC;
             dres.continueAt = (Addr64)(Addr32)d32;
             comment = "(assumed taken)";
@@ -14762,7 +14856,8 @@ DisResult disInstr_X86_WRK (
             stmt( IRStmt_Exit( 
                      mk_x86g_calculate_condition((X86Condcode)(opc - 0x80)),
                      Ijk_Boring,
-                     IRConst_U32(d32) ) );
+                     IRConst_U32(d32),
+                     OFFB_EIP ) );
             dres.whatNext   = Dis_ResteerC;
             dres.continueAt = (Addr64)(Addr32)(guest_EIP_bbstart+delta);
             comment = "(assumed not taken)";
@@ -14770,9 +14865,9 @@ DisResult disInstr_X86_WRK (
          else {
             /* Conservative default translation - end the block at
                this point. */
-            jcc_01( (X86Condcode)(opc - 0x80), 
+            jcc_01( &dres, (X86Condcode)(opc - 0x80), 
                     (Addr32)(guest_EIP_bbstart+delta), d32);
-            dres.whatNext = Dis_StopHere;
+            vassert(dres.whatNext == Dis_StopHere);
          }
          DIP("j%s-32 0x%x %s\n", name_X86Condcode(opc - 0x80), d32, comment);
          break;
@@ -14898,8 +14993,8 @@ DisResult disInstr_X86_WRK (
             point if the syscall needs to be restarted. */
          stmt( IRStmt_Put( OFFB_IP_AT_SYSCALL,
                            mkU32(guest_EIP_curr_instr) ) );
-         jmp_lit(Ijk_Sys_sysenter, 0/*bogus next EIP value*/);
-         dres.whatNext = Dis_StopHere;
+         jmp_lit(&dres, Ijk_Sys_sysenter, 0/*bogus next EIP value*/);
+         vassert(dres.whatNext == Dis_StopHere);
          DIP("sysenter");
          break;
 
@@ -15075,8 +15170,8 @@ DisResult disInstr_X86_WRK (
       insn, but nevertheless be paranoid and update it again right
       now. */
    stmt( IRStmt_Put( OFFB_EIP, mkU32(guest_EIP_curr_instr) ) );
-   jmp_lit(Ijk_NoDecode, guest_EIP_curr_instr);
-   dres.whatNext = Dis_StopHere;
+   jmp_lit(&dres, Ijk_NoDecode, guest_EIP_curr_instr);
+   vassert(dres.whatNext == Dis_StopHere);
    dres.len = 0;
    /* We also need to say that a CAS is not expected now, regardless
       of what it might have been set to at the start of the function,
@@ -15090,6 +15185,20 @@ DisResult disInstr_X86_WRK (
 
   decode_success:
    /* All decode successes end up here. */
+   switch (dres.whatNext) {
+      case Dis_Continue:
+         stmt( IRStmt_Put( OFFB_EIP, mkU32(guest_EIP_bbstart + delta) ) );
+         break;
+      case Dis_ResteerU:
+      case Dis_ResteerC:
+         stmt( IRStmt_Put( OFFB_EIP, mkU32(dres.continueAt) ) );
+         break;
+      case Dis_StopHere:
+         break;
+      default:
+         vassert(0);
+   }
+
    DIP("\n");
    dres.len = delta - delta_start;
    return dres;
@@ -15107,7 +15216,6 @@ DisResult disInstr_X86_WRK (
    is located in host memory at &guest_code[delta]. */
 
 DisResult disInstr_X86 ( IRSB*        irsb_IN,
-                         Bool         put_IP,
                          Bool         (*resteerOkFn) ( void*, Addr64 ),
                          Bool         resteerCisOk,
                          void*        callback_opaque,
@@ -15133,7 +15241,7 @@ DisResult disInstr_X86 ( IRSB*        irsb_IN,
 
    x1 = irsb_IN->stmts_used;
    expect_CAS = False;
-   dres = disInstr_X86_WRK ( &expect_CAS, put_IP, resteerOkFn,
+   dres = disInstr_X86_WRK ( &expect_CAS, resteerOkFn,
                              resteerCisOk,
                              callback_opaque,
                              delta, archinfo, abiinfo );
@@ -15153,7 +15261,7 @@ DisResult disInstr_X86 ( IRSB*        irsb_IN,
       /* inconsistency detected.  re-disassemble the instruction so as
          to generate a useful error message; then assert. */
       vex_traceflags |= VEX_TRACE_FE;
-      dres = disInstr_X86_WRK ( &expect_CAS, put_IP, resteerOkFn,
+      dres = disInstr_X86_WRK ( &expect_CAS, resteerOkFn,
                                 resteerCisOk,
                                 callback_opaque,
                                 delta, archinfo, abiinfo );
