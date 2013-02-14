@@ -45,11 +45,12 @@ tool_ldflags := -static -Wl,--build-id=none,-Ttext=0x38000000 -nodefaultlibs -no
 ifeq ($(TARGET_BOOTLOADER_BOARD_NAME),manta)
 ANDROID_HARDWARE := ANDROID_HARDWARE_nexus_10
 endif
-common_cflags += -D$(ANDROID_HARDWARE)
 
 else
 tool_ldflags := -static -Wl,-Ttext=0x38000000 -nodefaultlibs -nostartfiles -u _start -e_start
 endif
+
+common_cflags += -D$(ANDROID_HARDWARE)
 
 preload_ldflags := -nodefaultlibs -Wl,-z,interpose,-z,initfirst
 # Remove this when the all toolchains are GCC 4.4
