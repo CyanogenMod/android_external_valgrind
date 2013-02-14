@@ -2813,6 +2813,8 @@ struct vki_getcpu_cache {
 
 #define VKI_EVIOCGBIT(ev,len)	_VKI_IOC(_VKI_IOC_READ, 'E', 0x20 + ev, len)	/* get event bits */
 
+#define VKI_EVIOCSSUSPENDBLOCK	_VKI_IOW('E', 0x91, int)	/* set suspend block enable */
+
 /*
  * Event types
  */
