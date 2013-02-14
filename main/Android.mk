@@ -49,11 +49,12 @@ ANDROID_HARDWARE := ANDROID_HARDWARE_nexus_7
 else ifeq ($(TARGET_BOOTLOADER_BOARD_NAME),MAKO)
 ANDROID_HARDWARE := ANDROID_HARDWARE_nexus_4
 endif
-common_cflags += -D$(ANDROID_HARDWARE)
 
 else
 tool_ldflags := -static -Wl,-Ttext=0x38000000 -nodefaultlibs -nostartfiles -u _start -e_start
 endif
+
+common_cflags += -D$(ANDROID_HARDWARE)
 
 preload_ldflags := -nodefaultlibs -Wl,-z,interpose,-z,initfirst
 # Remove this when the all toolchains are GCC 4.4
@@ -257,7 +258,9 @@ LOCAL_C_INCLUDES := $(common_includes)
 
 LOCAL_LDFLAGS := $(vex_ldflags)
 
+# TODO: split asflags out from cflags.
 LOCAL_CFLAGS := $(common_cflags)
+LOCAL_ASFLAGS := $(common_cflags)
 
 include $(BUILD_STATIC_LIBRARY)
 
