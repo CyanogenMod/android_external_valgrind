@@ -44,6 +44,8 @@ tool_ldflags := -static -Wl,--build-id=none,-Ttext=0x38000000 -nodefaultlibs -no
 # ioctl/syscall wrappers are device dependent
 ifeq ($(TARGET_BOOTLOADER_BOARD_NAME),manta)
 ANDROID_HARDWARE := ANDROID_HARDWARE_nexus_10
+else ifeq ($(TARGET_BOOTLOADER_BOARD_NAME),grouper)
+ANDROID_HARDWARE := ANDROID_HARDWARE_nexus_7
 endif
 
 else
