@@ -18802,6 +18802,30 @@ DisResult disInstr_THUMB_WRK (
       }
    }
 
+   /* ------------------- (T1) SMMLA{R} ------------------ */
+   if (INSN0(15,7) == BITS9(1,1,1,1,1,0,1,1,0)
+       && INSN0(6,4) == BITS3(1,0,1)
+       && INSN1(7,5) == BITS3(0,0,0)) {
+      UInt bitR = INSN1(4,4);
+      UInt rA = INSN1(15,12);
+      UInt rD = INSN1(11,8);
+      UInt rM = INSN1(3,0);
+      UInt rN = INSN0(3,0);
+      if (!isBadRegT(rD) && !isBadRegT(rN) && !isBadRegT(rM) && (rA != 13)) {
+         IRExpr* res
+         = unop(Iop_64HIto32,
+                binop(Iop_Add64,
+                      binop(Iop_Add64,
+                            binop(Iop_32HLto64, getIRegT(rA), mkU32(0)),
+                            binop(Iop_MullS32, getIRegT(rN), getIRegT(rM))),
+                      mkU64(bitR ? 0x80000000ULL : 0ULL)));
+         putIRegT(rD, res, condT);
+         DIP("smmla%s r%u, r%u, r%u, r%u\n",
+             bitR ? "r" : "", rD, rN, rM, rA);
+         goto decode_success;
+      }
+   }
+
    /* ----------------------------------------------------------- */
    /* -- VFP (CP 10, CP 11) instructions (in Thumb mode)       -- */
    /* ----------------------------------------------------------- */
