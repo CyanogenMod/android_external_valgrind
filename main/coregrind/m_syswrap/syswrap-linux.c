@@ -4295,6 +4295,21 @@ PRE(sys_ioctl)
                     unsigned int, fd, unsigned int, request);
       return;
 
+#  if defined(ANDROID_HARDWARE_nexus_10)
+   /* undocumented ioctl ids noted on the device */
+   case 0x4d07:
+   case 0x6101:
+   case 0xfa01: /* used by NFC */
+   case 0xfa05: /* used by NFC */
+      return;
+#  elif defined(ANDROID_HARDWARE_nexus_7)
+   /* undocumented ioctl ids noted on the device */
+   case 0x4e04:
+   case 0x7231:
+   case 0x4004e901: /* used by NFC */
+      return;
+#  endif
+
    default:
       PRINT("sys_ioctl ( %ld, 0x%lx, 0x%lx )",ARG1,ARG2,ARG3);
       PRE_REG_READ3(long, "ioctl",
