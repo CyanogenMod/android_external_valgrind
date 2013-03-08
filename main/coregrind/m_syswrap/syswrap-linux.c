@@ -4308,6 +4308,8 @@ PRE(sys_ioctl)
    case 0x7231:
    case 0x4004e901: /* used by NFC */
       return;
+#  elif defined(ANDROID_HARDWARE_nexus_4)
+
 #  endif
 
    default:
@@ -5558,6 +5560,13 @@ PRE(sys_ioctl)
    case VKI_EVIOCSSUSPENDBLOCK:
       break;
 
+   case VKI_MEDIA_IOC_DEVICE_INFO:
+      if (ARG3) {
+         PRE_MEM_WRITE("ioctl(MEDIA_IOC_DEVICE_INFO)", ARG3,
+                       sizeof(struct vki_media_device_info));
+      }
+      break;
+
    default:
       /* EVIOC* are variable length and return size written on success */
       switch (ARG2 & ~(_VKI_IOC_SIZEMASK << _VKI_IOC_SIZESHIFT)) {
@@ -5675,6 +5684,8 @@ POST(sys_ioctl)
 
 #  elif defined(ANDROID_HARDWARE_nexus_7)
 
+#  elif defined(ANDROID_HARDWARE_nexus_4)
+
 #  else /* no ANDROID_HARDWARE_anything defined */
 
 #   warning ""
@@ -5685,6 +5696,7 @@ POST(sys_ioctl)
 #   warning "   ANDROID_HARDWARE_nexus_s       Samsung Nexus S"
 #   warning "   ANDROID_HARDWARE_nexus_10      Samsung Nexus 10"
 #   warning "   ANDROID_HARDWARE_nexus_7       ASUS Nexus 7"
+#   warning "   ANDROID_HARDWARE_nexus_4       LG Nexus 4"
 #   warning "   ANDROID_HARDWARE_generic       Generic device (eg, Pandaboard)"
 #   warning "   ANDROID_HARDWARE_emulator      x86 or arm emulator"
 #   warning ""
@@ -6569,6 +6581,12 @@ POST(sys_ioctl)
 
    case VKI_EVIOCSSUSPENDBLOCK:
       POST_MEM_WRITE( ARG3, sizeof(int) );
+      break;
+
+   case VKI_MEDIA_IOC_DEVICE_INFO:
+      if (ARG3) {
+         POST_MEM_WRITE(ARG3, sizeof(struct vki_media_device_info));
+      }
       break;
 
    default:
