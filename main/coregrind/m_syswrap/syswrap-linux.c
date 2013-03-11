@@ -4317,6 +4317,18 @@ PRE(sys_ioctl)
       break;
    }
 
+
+#  if defined(ANDROID_HARDWARE_nexus_10)
+
+   /* undocumented ioctl ids noted on the device */
+   if (ARG2 >= 0xc0108000 && ARG2 <= 0xc1e8820b && ARG3 != 0) {
+       int size = (ARG2 >> 16) & 0x3fff;
+       PRE_MEM_WRITE("ioctl(GL_UNDOCUMENTED)", (Addr)ARG3,  size);
+       return;
+   }
+
+#  endif
+
    // We now handle those that do look at ARG3 (and unknown ones fall into
    // this category).  Nb: some of these may well belong in the
    // doesn't-use-ARG3 switch above.
@@ -5520,6 +5532,7 @@ PRE(sys_ioctl)
            PRE_FIELD_WRITE("ioctl(BINDER_VERSION)", bv->protocol_version);
        }
        break;
+
 #  endif /* defined(VGPV_*_linux_android) */
 
    case VKI_HCIINQUIRY:
@@ -5540,6 +5553,9 @@ PRE(sys_ioctl)
    case VKI_KVM_CHECK_EXTENSION:
    case VKI_KVM_CREATE_VCPU:
    case VKI_KVM_RUN:
+      break;
+
+   case VKI_EVIOCSSUSPENDBLOCK:
       break;
 
    default:
@@ -5649,6 +5665,15 @@ POST(sys_ioctl)
    /* END generic/emulator specific ioctls */
 
 
+#  elif defined(ANDROID_HARDWARE_nexus_10)
+
+   /* undocumented ioctl ids noted on the device */
+   if (ARG2 >= 0xc0108000 && ARG2 <= 0xc1e8820b && ARG3 != 0) {
+      int size = (ARG2 >> 16) & 0x3fff;
+      POST_MEM_WRITE(ARG3, size);
+   }
+
+
 #  else /* no ANDROID_HARDWARE_anything defined */
 
 #   warning ""
@@ -5657,6 +5682,7 @@ POST(sys_ioctl)
 #   warning "building for.  Currently known values are"
 #   warning ""
 #   warning "   ANDROID_HARDWARE_nexus_s       Samsung Nexus S"
+#   warning "   ANDROID_HARDWARE_nexus_10      Samsung Nexus 10"
 #   warning "   ANDROID_HARDWARE_generic       Generic device (eg, Pandaboard)"
 #   warning "   ANDROID_HARDWARE_emulator      x86 or arm emulator"
 #   warning ""
@@ -6537,6 +6563,10 @@ POST(sys_ioctl)
    case VKI_KVM_CREATE_VCPU:
    case VKI_KVM_RUN:
    case VKI_KVM_S390_INITIAL_RESET:
+      break;
+
+   case VKI_EVIOCSSUSPENDBLOCK:
+      POST_MEM_WRITE( ARG3, sizeof(int) );
       break;
 
    default:
