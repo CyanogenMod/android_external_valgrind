@@ -14602,6 +14602,30 @@ DisResult disInstr_ARM_WRK (
       }
    }
 
+   /* ------------------- smmla ------------------ */
+   if (INSN(27,20) == BITS8(0,1,1,1,0,1,0,1)
+       && INSN(15,12) != BITS4(1,1,1,1)
+       && (INSN(7,4) & BITS4(1,1,0,1)) == BITS4(0,0,0,1)) {
+      UInt bitR = INSN(5,5);
+      UInt rD = INSN(19,16);
+      UInt rA = INSN(15,12);
+      UInt rM = INSN(11,8);
+      UInt rN = INSN(3,0);
+      if (rD != 15 && rM != 15 && rN != 15) {
+         IRExpr* res
+         = unop(Iop_64HIto32,
+                binop(Iop_Add64,
+                      binop(Iop_Add64,
+                            binop(Iop_32HLto64, getIRegA(rA), mkU32(0)),
+                            binop(Iop_MullS32, getIRegA(rN), getIRegA(rM))),
+                      mkU64(bitR ? 0x80000000ULL : 0ULL)));
+         putIRegA(rD, res, condT, Ijk_Boring);
+         DIP("smmla%s%s r%u, r%u, r%u, r%u\n",
+             nCC(INSN_COND), bitR ? "r" : "", rD, rN, rM, rA);
+         goto decode_success;
+      }
+   }
+
    /* ------------------- NOP ------------------ */
    if (0x0320F000 == (insn & 0x0FFFFFFF)) {
       DIP("nop%s\n", nCC(INSN_COND));
