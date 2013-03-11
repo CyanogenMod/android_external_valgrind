@@ -14,6 +14,8 @@
 
 LOCAL_PATH:= $(call my-dir)
 
+ANDROID_HARDWARE := ANDROID_HARDWARE_generic
+
 ifneq ($(filter arm x86,$(TARGET_ARCH)),)
 
 common_cflags := \
@@ -26,8 +28,7 @@ common_cflags := \
 	-DVGPV_$(TARGET_ARCH)_linux_android=1 \
 	-DVG_PLATFORM=\"$(TARGET_ARCH)-linux\" \
 	-DVG_LIBDIR=\"/system/lib/valgrind\" \
-	-DANDROID_SYMBOLS_DIR=\"/data/local/symbols\" \
-	-DANDROID_HARDWARE_nexus_s
+	-DANDROID_SYMBOLS_DIR=\"/data/local/symbols\"
 
 common_includes := \
 	external/valgrind/main \
@@ -39,6 +40,13 @@ vex_ldflags := -nodefaultlibs
 
 ifeq ($(TARGET_ARCH),arm)
 tool_ldflags := -static -Wl,--build-id=none,-Ttext=0x38000000 -nodefaultlibs -nostartfiles -u _start -e_start
+
+# ioctl/syscall wrappers are device dependent
+ifeq ($(TARGET_BOOTLOADER_BOARD_NAME),manta)
+ANDROID_HARDWARE := ANDROID_HARDWARE_nexus_10
+endif
+common_cflags += -D$(ANDROID_HARDWARE)
+
 else
 tool_ldflags := -static -Wl,-Ttext=0x38000000 -nodefaultlibs -nostartfiles -u _start -e_start
 endif
