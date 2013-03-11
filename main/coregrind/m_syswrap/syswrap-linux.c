@@ -4308,6 +4308,11 @@ PRE(sys_ioctl)
    case 0x7231:
    case 0x4004e901: /* used by NFC */
       return;
+#  elif defined(ANDROID_HARDWARE_nexus_7)
+   /* undocumented ioctl ids noted on the device */
+   case 0x4e04:
+   case 0x7231:
+      return;
 #  endif
 
    default:
@@ -5673,6 +5678,7 @@ POST(sys_ioctl)
       POST_MEM_WRITE(ARG3, size);
    }
 
+#  elif defined(ANDROID_HARDWARE_nexus_7)
 
 #  else /* no ANDROID_HARDWARE_anything defined */
 
@@ -5683,6 +5689,7 @@ POST(sys_ioctl)
 #   warning ""
 #   warning "   ANDROID_HARDWARE_nexus_s       Samsung Nexus S"
 #   warning "   ANDROID_HARDWARE_nexus_10      Samsung Nexus 10"
+#   warning "   ANDROID_HARDWARE_nexus_7       ASUS Nexus 7"
 #   warning "   ANDROID_HARDWARE_generic       Generic device (eg, Pandaboard)"
 #   warning "   ANDROID_HARDWARE_emulator      x86 or arm emulator"
 #   warning ""
