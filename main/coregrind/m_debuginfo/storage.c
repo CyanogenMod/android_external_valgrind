@@ -9,7 +9,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2000-2011 Julian Seward 
+   Copyright (C) 2000-2012 Julian Seward 
       jseward@acm.org
 
    This program is free software; you can redistribute it and/or
@@ -189,7 +189,7 @@ void ML_(ppDiCfSI) ( XArray* /* of CfiExpr */ exprs, DiCfSI* si )
    VG_(printf)(" R7=");
    SHOW_HOW(si->r7_how, si->r7_off);
 #  elif defined(VGA_ppc32) || defined(VGA_ppc64)
-#  elif defined(VGA_s390x)
+#  elif defined(VGA_s390x) || defined(VGA_mips32)
    VG_(printf)(" SP=");
    SHOW_HOW(si->sp_how, si->sp_off);
    VG_(printf)(" FP=");
@@ -347,7 +347,7 @@ void ML_(addLineInfo) ( struct _DebugInfo* di,
 {
    static const Bool debug = False;
    DiLoc loc;
-   Int size = next - this;
+   UWord size = next - this;
 
    /* Ignore zero-sized locs */
    if (this == next) return;
@@ -377,23 +377,30 @@ void ML_(addLineInfo) ( struct _DebugInfo* di,
        if (0)
        VG_(message)(Vg_DebugMsg, 
                     "warning: line info address range too large "
-                    "at entry %d: %d\n", entry, size);
+                    "at entry %d: %lu\n", entry, size);
        size = 1;
    }
+
+   /* At this point, we know that the original value for |size|, viz
+      |next - this|, will only still be used in the case where
+      |this| <u |next|, so it can't have underflowed.  Considering
+      that and the three checks that follow it, the following must
+      hold. */
+   vg_assert(size >= 1);
+   vg_assert(size <= MAX_LOC_SIZE);
 
    /* Rule out ones which are completely outside the r-x mapped area.
       See "Comment_Regarding_Text_Range_Checks" elsewhere in this file
       for background and rationale. */
    vg_assert(di->fsm.have_rx_map && di->fsm.have_rw_map);
-   if (next-1 < di->fsm.rx_map_avma
-       || this >= di->fsm.rx_map_avma + di->fsm.rx_map_size ) {
+   if (ML_(find_rx_mapping)(di, this, this + size - 1) == NULL) {
        if (0)
           VG_(message)(Vg_DebugMsg, 
                        "warning: ignoring line info entry falling "
                        "outside current DebugInfo: %#lx %#lx %#lx %#lx\n",
                        di->text_avma, 
                        di->text_avma + di->text_size, 
-                       this, next-1);
+                       this, this + size - 1);
        return;
    }
 
@@ -421,7 +428,7 @@ void ML_(addLineInfo) ( struct _DebugInfo* di,
    loc.dirname   = dirname;
 
    if (0) VG_(message)(Vg_DebugMsg, 
-		       "addLoc: addr %#lx, size %d, line %d, file %s\n",
+		       "addLoc: addr %#lx, size %lu, line %d, file %s\n",
 		       this,size,lineno,filename);
 
    addLoc ( di, &loc );
@@ -436,6 +443,8 @@ void ML_(addDiCfSI) ( struct _DebugInfo* di, DiCfSI* cfsi_orig )
    UInt    new_sz, i;
    DiCfSI* new_tab;
    SSizeT  delta;
+   struct _DebugInfoMapping* map;
+   struct _DebugInfoMapping* map2;
 
    /* copy the original, so we can mess with it */
    DiCfSI cfsi = *cfsi_orig;
@@ -456,27 +465,30 @@ void ML_(addDiCfSI) ( struct _DebugInfo* di, DiCfSI* cfsi_orig )
    vg_assert(cfsi.len < 5000000);
 
    vg_assert(di->fsm.have_rx_map && di->fsm.have_rw_map);
-   /* If we have an empty r-x mapping (is that possible?) then the
-      DiCfSI can't possibly fall inside it.  In which case skip. */
-   if (di->fsm.rx_map_size == 0)
-      return;
+   /* Find mapping where at least one end of the CFSI falls into. */
+   map  = ML_(find_rx_mapping)(di, cfsi.base, cfsi.base);
+   map2 = ML_(find_rx_mapping)(di, cfsi.base + cfsi.len - 1,
+                                   cfsi.base + cfsi.len - 1);
+   if (map == NULL)
+      map = map2;
+   else if (map2 == NULL)
+      map2 = map;
 
-   /* Rule out ones which are completely outside the r-x mapped area.
+   /* Rule out ones which are completely outside the r-x mapped area
+      (or which span across different areas).
       See "Comment_Regarding_Text_Range_Checks" elsewhere in this file
       for background and rationale. */
-   if (cfsi.base + cfsi.len - 1 < di->fsm.rx_map_avma
-       || cfsi.base >= di->fsm.rx_map_avma + di->fsm.rx_map_size) {
+   if (map == NULL || map != map2) {
       static Int complaints = 10;
       if (VG_(clo_trace_cfi) || complaints > 0) {
          complaints--;
          if (VG_(clo_verbosity) > 1) {
             VG_(message)(
                Vg_DebugMsg,
-               "warning: DiCfSI %#lx .. %#lx outside segment %#lx .. %#lx\n",
+               "warning: DiCfSI %#lx .. %#lx outside mapped rw segments (%s)\n",
                cfsi.base, 
                cfsi.base + cfsi.len - 1,
-               di->text_avma,
-               di->text_avma + di->text_size - 1 
+               di->soname
             );
          }
          if (VG_(clo_trace_cfi)) 
@@ -493,27 +505,27 @@ void ML_(addDiCfSI) ( struct _DebugInfo* di, DiCfSI* cfsi_orig )
       will fail.  See
       "Comment_on_IMPORTANT_CFSI_REPRESENTATIONAL_INVARIANTS" in
       priv_storage.h for background. */
-   if (cfsi.base < di->fsm.rx_map_avma) {
+   if (cfsi.base < map->avma) {
       /* Lower end is outside the mapped area.  Hence upper end must
          be inside it. */
       if (0) VG_(printf)("XXX truncate lower\n");
-      vg_assert(cfsi.base + cfsi.len - 1 >= di->fsm.rx_map_avma);
-      delta = (SSizeT)(di->fsm.rx_map_avma - cfsi.base);
+      vg_assert(cfsi.base + cfsi.len - 1 >= map->avma);
+      delta = (SSizeT)(map->avma - cfsi.base);
       vg_assert(delta > 0);
       vg_assert(delta < (SSizeT)cfsi.len);
       cfsi.base += delta;
       cfsi.len -= delta;
    }
    else
-   if (cfsi.base + cfsi.len - 1 > di->fsm.rx_map_avma
-                                  + di->fsm.rx_map_size - 1) {
+   if (cfsi.base + cfsi.len - 1 > map->avma + map->size - 1) {
       /* Upper end is outside the mapped area.  Hence lower end must be
          inside it. */
       if (0) VG_(printf)("XXX truncate upper\n");
-      vg_assert(cfsi.base <= di->fsm.rx_map_avma + di->fsm.rx_map_size - 1);
+      vg_assert(cfsi.base <= map->avma + map->size - 1);
       delta = (SSizeT)( (cfsi.base + cfsi.len - 1) 
-                        - (di->fsm.rx_map_avma + di->fsm.rx_map_size - 1) );
-      vg_assert(delta > 0); vg_assert(delta < (SSizeT)cfsi.len);
+                        - (map->avma + map->size - 1) );
+      vg_assert(delta > 0);
+      vg_assert(delta < (SSizeT)cfsi.len);
       cfsi.len -= delta;
    }
 
@@ -526,9 +538,9 @@ void ML_(addDiCfSI) ( struct _DebugInfo* di, DiCfSI* cfsi_orig )
    vg_assert(cfsi.len > 0);
 
    /* Similar logic applies for the next two assertions. */
-   vg_assert(cfsi.base >= di->fsm.rx_map_avma);
+   vg_assert(cfsi.base >= map->avma);
    vg_assert(cfsi.base + cfsi.len - 1
-             <= di->fsm.rx_map_avma + di->fsm.rx_map_size - 1);
+             <= map->avma + map->size - 1);
 
    if (di->cfsi_used == di->cfsi_size) {
       new_sz = 2 * di->cfsi_size;
@@ -629,6 +641,8 @@ static void ppCfiReg ( CfiReg reg )
       case Creg_ARM_R12: VG_(printf)("R12"); break;
       case Creg_ARM_R15: VG_(printf)("R15"); break;
       case Creg_ARM_R14: VG_(printf)("R14"); break;
+      case Creg_MIPS_RA: VG_(printf)("RA"); break;
+      case Creg_S390_R14: VG_(printf)("R14"); break;
       default: vg_assert(0);
    }
 }
@@ -917,16 +931,12 @@ void ML_(addVar)( struct _DebugInfo* di,
       and it is re-checked at the start of
       ML_(read_elf_debug_info). */
    vg_assert(di->fsm.have_rx_map && di->fsm.have_rw_map);
-   if (level > 0
-       && (aMax < di->fsm.rx_map_avma
-           || aMin >= di->fsm.rx_map_avma + di->fsm.rx_map_size)) {
+   if (level > 0 && ML_(find_rx_mapping)(di, aMin, aMax) == NULL) {
       if (VG_(clo_verbosity) >= 0) {
          VG_(message)(Vg_DebugMsg, 
             "warning: addVar: in range %#lx .. %#lx outside "
-            "segment %#lx .. %#lx (%s)\n",
-            aMin, aMax,
-            di->text_avma, di->text_avma + di->text_size -1,
-            name
+            "all rx mapped areas (%s)\n",
+            aMin, aMax, name
          );
       }
       return;
@@ -1368,11 +1378,18 @@ static void canonicaliseSymtab ( struct _DebugInfo* di )
          vg_assert(w < r);
          if (   di->symtab[w].addr      == di->symtab[r].addr
              && di->symtab[w].size      == di->symtab[r].size
-             && !!di->symtab[w].isText  == !!di->symtab[r].isText
-             && !!di->symtab[w].isIFunc == !!di->symtab[r].isIFunc) {
+             && !!di->symtab[w].isText  == !!di->symtab[r].isText) {
             /* merge the two into one */
             n_merged++;
-            add_DiSym_names_to_from(di, &di->symtab[w], &di->symtab[r]);
+            /* Add r names to w if r has secondary names 
+               or r and w primary names differ. */
+            if (di->symtab[r].sec_names 
+                || (0 != VG_(strcmp)(di->symtab[r].pri_name,
+                                     di->symtab[w].pri_name))) {
+               add_DiSym_names_to_from(di, &di->symtab[w], &di->symtab[r]);
+            }
+            /* mark w as an IFunc if either w or r are */
+            di->symtab[w].isIFunc = di->symtab[w].isIFunc || di->symtab[r].isIFunc;
             /* and use ::pri_names to indicate this slot is no longer in use */
             di->symtab[r].pri_name = NULL;
             if (di->symtab[r].sec_names) {
@@ -1850,7 +1867,7 @@ Word ML_(search_one_cfitab) ( struct _DebugInfo* di, Addr ptr )
 
 Word ML_(search_one_fpotab) ( struct _DebugInfo* di, Addr ptr )
 {
-   Addr const addr = ptr - di->fsm.rx_map_avma;
+   Addr const addr = ptr - di->fpo_base_avma;
    Addr a_mid_lo, a_mid_hi;
    Word mid, size,
         lo = 0,

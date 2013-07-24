@@ -8,7 +8,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright IBM Corp. 2010-2011
+   Copyright IBM Corp. 2010-2012
 
    This program is free software; you can redistribute it and/or
    modify it under the terms of the GNU General Public License as
@@ -35,9 +35,9 @@
 #include "libvex.h"
 #include "libvex_s390x_common.h"
 
-#include "ir_match.h"
 #include "main_util.h"
 #include "main_globals.h"
+#include "guest_s390_defs.h"   /* guest_s390x_state_requires_precise_mem_exns */
 #include "host_generic_regs.h"
 #include "host_s390_defs.h"
 
@@ -68,21 +68,58 @@
 
     - The host subarchitecture we are selecting insns for.
       This is set at the start and does not change.
+
+   - A Bool for indicating whether we may generate chain-me
+     instructions for control flow transfers, or whether we must use
+     XAssisted.
+
+   - The maximum guest address of any guest insn in this block.
+     Actually, the address of the highest-addressed byte from any insn
+     in this block.  Is set at the start and does not change.  This is
+     used for detecting jumps which are definitely forward-edges from
+     this block, and therefore can be made (chained) to the fast entry
+     point of the destination, thereby avoiding the destination's
+     event check.
+
+    - A flag to indicate whether the guest IA has been assigned to.
+
+    - Values of certain guest registers which are often assigned constants.
 */
+
+/* Symbolic names for guest registers whose value we're tracking */
+enum {
+   GUEST_IA,
+   GUEST_CC_OP,
+   GUEST_CC_DEP1,
+   GUEST_CC_DEP2,
+   GUEST_CC_NDEP,
+   GUEST_SYSNO,
+   GUEST_COUNTER,
+   GUEST_UNKNOWN    /* must be the last entry */
+};
+
+/* Number of registers we're tracking. */
+#define NUM_TRACKED_REGS GUEST_UNKNOWN
+
 
 typedef struct {
    IRTypeEnv   *type_env;
 
+   HInstrArray *code;
    HReg        *vregmap;
    HReg        *vregmapHI;
    UInt         n_vregmap;
-
-   HInstrArray *code;
-
    UInt         vreg_ctr;
-
    UInt         hwcaps;
 
+   ULong        old_value[NUM_TRACKED_REGS];
+
+   /* The next two are for translation chaining */
+   Addr64       max_ga;
+   Bool         chaining_allowed;
+
+   Bool         first_IA_assignment;
+   Bool         old_value_valid[NUM_TRACKED_REGS];
 } ISelEnv;
 
 
@@ -95,6 +132,38 @@ static void          s390_isel_int128_expr(HReg *, HReg *, ISelEnv *, IRExpr *);
 static HReg          s390_isel_float_expr(ISelEnv *, IRExpr *);
 static void          s390_isel_float128_expr(HReg *, HReg *, ISelEnv *, IRExpr *);
 
+
+static Int
+get_guest_reg(Int offset)
+{
+   switch (offset) {
+   case S390X_GUEST_OFFSET(guest_IA):        return GUEST_IA;
+   case S390X_GUEST_OFFSET(guest_CC_OP):     return GUEST_CC_OP;
+   case S390X_GUEST_OFFSET(guest_CC_DEP1):   return GUEST_CC_DEP1;
+   case S390X_GUEST_OFFSET(guest_CC_DEP2):   return GUEST_CC_DEP2;
+   case S390X_GUEST_OFFSET(guest_CC_NDEP):   return GUEST_CC_NDEP;
+   case S390X_GUEST_OFFSET(guest_SYSNO):     return GUEST_SYSNO;
+   case S390X_GUEST_OFFSET(guest_counter):   return GUEST_COUNTER;
+
+      /* Also make sure there is never a partial write to one of
+         these registers. That would complicate matters. */
+   case S390X_GUEST_OFFSET(guest_IA)+1      ... S390X_GUEST_OFFSET(guest_IA)+7:
+   case S390X_GUEST_OFFSET(guest_CC_OP)+1   ... S390X_GUEST_OFFSET(guest_CC_OP)+7:
+   case S390X_GUEST_OFFSET(guest_CC_DEP1)+1 ... S390X_GUEST_OFFSET(guest_CC_DEP1)+7:
+   case S390X_GUEST_OFFSET(guest_CC_DEP2)+1 ... S390X_GUEST_OFFSET(guest_CC_DEP2)+7:
+   case S390X_GUEST_OFFSET(guest_CC_NDEP)+1 ... S390X_GUEST_OFFSET(guest_CC_NDEP)+7:
+   case S390X_GUEST_OFFSET(guest_SYSNO)+1   ... S390X_GUEST_OFFSET(guest_SYSNO)+7:
+      /* counter is used both as 4-byte and as 8-byte entity */
+   case S390X_GUEST_OFFSET(guest_counter)+1 ... S390X_GUEST_OFFSET(guest_counter)+3:
+   case S390X_GUEST_OFFSET(guest_counter)+5 ... S390X_GUEST_OFFSET(guest_counter)+7:
+      vpanic("partial update of this guest state register is not allowed");
+      break;
+
+   default: break;
+   }
+
+   return GUEST_UNKNOWN;
+}
 
 /* Add an instruction */
 static void
@@ -167,7 +236,7 @@ newVRegF(ISelEnv *env)
 
 /* Construct a non-virtual general purpose register */
 static __inline__ HReg
-make_gpr(ISelEnv *env, UInt regno)
+make_gpr(UInt regno)
 {
    return mkHReg(regno, HRcInt64, False /* virtual */ );
 }
@@ -202,6 +271,16 @@ ulong_fits_signed_20bit(ULong val)
    return val == (ULong)v;
 }
 
+
+static __inline__ Bool
+ulong_fits_signed_8bit(ULong val)
+{
+   Long v = val & 0xFFu;
+
+   v = (v << 56) >> 56;  /* sign extend */
+
+   return val == (ULong)v;
+}
 
 /* EXPR is an expression that is used as an address. Return an s390_amode
    for it. */
@@ -346,14 +425,32 @@ s390_expr_is_const_zero(IRExpr *expr)
 
 /* Call a helper (clean or dirty)
    Arguments must satisfy the following conditions:
+
    (a) they are expressions yielding an integer result
    (b) there can be no more than S390_NUM_GPRPARMS arguments
-       guard is a Ity_Bit expression indicating whether or not the
-       call happens.  If guard==NULL, the call is unconditional.
+
+   guard is a Ity_Bit expression indicating whether or not the
+   call happens.  If guard == NULL, the call is unconditional.
+
+   Calling the helper function proceeds as follows:
+
+   (1) The helper arguments are evaluated and their value stored in
+       virtual registers.
+   (2) The condition code is evaluated
+   (3) The argument values are copied from the virtual registers to the
+       registers mandated by the ABI.
+   (4) Call the helper function.
+
+   This is not the most efficient way as step 3 generates register-to-register
+   moves. But it is the least fragile way as the only hidden dependency here
+   is that register-to-register moves (step 3) must not clobber the condition
+   code. Other schemes (e.g. VEX r2326) that attempt to avoid the register-
+   to-register add more such dependencies. Not good. Besides, it's the job
+   of the register allocator to throw out those reg-to-reg moves.
 */
 static void
 doHelperCall(ISelEnv *env, Bool passBBP, IRExpr *guard,
-             IRCallee *callee, IRExpr **args)
+             IRCallee *callee, IRExpr **args, HReg dst)
 {
    UInt n_args, i, argreg, size;
    ULong target;
@@ -368,7 +465,25 @@ doHelperCall(ISelEnv *env, Bool passBBP, IRExpr *guard,
       vpanic("doHelperCall: too many arguments");
    }
 
-   /* This is the "slow scheme". fixs390: implement the fast one */
+   /* All arguments must have Ity_I64. For two reasons:
+      (1) We do not handle floating point arguments.
+      (2) The ABI requires that integer values are sign- or zero-extended
+           to 64 bit.
+   */
+   Int arg_errors = 0;
+   for (i = 0; i < n_args; ++i) {
+      IRType type = typeOfIRExpr(env->type_env, args[i]);
+      if (type != Ity_I64) {
+         ++arg_errors;
+         vex_printf("calling %s: argument #%d has type ", callee->name, i);
+         ppIRType(type);
+         vex_printf("; Ity_I64 is required\n");
+      }
+   }
+
+   if (arg_errors)
+      vpanic("cannot continue due to errors in argument passing");
+
    argreg = 0;
 
    /* If we need the guest state pointer put it in a temporary arg reg */
@@ -397,11 +512,12 @@ doHelperCall(ISelEnv *env, Bool passBBP, IRExpr *guard,
       }
    }
 
-   /* Move the args to the final register */
+   /* Move the args to the final register. It is paramount, that the
+      code to move the registers does not clobber the condition code ! */
    for (i = 0; i < argreg; i++) {
       HReg finalreg;
 
-      finalreg = mkHReg(s390_gprno_from_arg_index(i), HRcInt64, False);
+      finalreg = make_gpr(s390_gprno_from_arg_index(i));
       size = sizeofIRType(Ity_I64);
       addInstr(env, s390_insn_move(size, finalreg, tmpregs[i]));
    }
@@ -410,7 +526,7 @@ doHelperCall(ISelEnv *env, Bool passBBP, IRExpr *guard,
 
    /* Finally, the call itself. */
    addInstr(env, s390_insn_helper_call(cc, (Addr64)target, n_args,
-                                       callee->name));
+                                       callee->name, dst));
 }
 
 
@@ -541,8 +657,8 @@ s390_isel_int128_expr_wrk(HReg *dst_hi, HReg *dst_lo, ISelEnv *env,
          op2 = s390_isel_int_expr_RMI(env, arg2);   /* Process 2nd operand */
 
          /* We use non-virtual registers r10 and r11 as pair */
-         r10  = make_gpr(env, 10);
-         r11  = make_gpr(env, 11);
+         r10  = make_gpr(10);
+         r11  = make_gpr(11);
 
          /* Move 1st operand into r11 and */
          addInstr(env, s390_insn_move(8, r11, h1));
@@ -574,8 +690,8 @@ s390_isel_int128_expr_wrk(HReg *dst_hi, HReg *dst_lo, ISelEnv *env,
             op2  = s390_isel_int_expr_RMI(env, arg2);   /* Process 2nd operand */
 
             /* We use non-virtual registers r10 and r11 as pair */
-            r10  = make_gpr(env, 10);
-            r11  = make_gpr(env, 11);
+            r10  = make_gpr(10);
+            r11  = make_gpr(11);
 
             /* Move the first operand to r11 */
             addInstr(env, s390_insn_move(8, r11, h1));
@@ -600,8 +716,8 @@ s390_isel_int128_expr_wrk(HReg *dst_hi, HReg *dst_lo, ISelEnv *env,
          op2  = s390_isel_int_expr_RMI(env, arg2);   /* Process 2nd operand */
 
          /* We use non-virtual registers r10 and r11 as pair */
-         r10  = make_gpr(env, 10);
-         r11  = make_gpr(env, 11);
+         r10  = make_gpr(10);
+         r11  = make_gpr(11);
 
          /* Move high 64 bits of the 1st operand into r10 and
             the low 64 bits into r11. */
@@ -730,8 +846,8 @@ s390_isel_int_expr_wrk(ISelEnv *env, IRExpr *expr)
             op2  = s390_isel_int_expr_RMI(env, arg2);   /* Process 2nd operand */
 
             /* We use non-virtual registers r10 and r11 as pair */
-            r10  = make_gpr(env, 10);
-            r11  = make_gpr(env, 11);
+            r10  = make_gpr(10);
+            r11  = make_gpr(11);
 
             /* Move the first operand to r11 */
             addInstr(env, s390_insn_move(arg_size, r11, h1));
@@ -767,8 +883,8 @@ s390_isel_int_expr_wrk(ISelEnv *env, IRExpr *expr)
             op2  = s390_isel_int_expr_RMI(env, arg2);   /* Process 2nd operand */
 
             /* We use non-virtual registers r10 and r11 as pair */
-            r10  = make_gpr(env, 10);
-            r11  = make_gpr(env, 11);
+            r10  = make_gpr(10);
+            r11  = make_gpr(11);
 
             /* Split the first operand and put the high 32 bits into r10 and
                the low 32 bits into r11. */
@@ -1030,7 +1146,7 @@ s390_isel_int_expr_wrk(ISelEnv *env, IRExpr *expr)
          return dst;
       }
 
-      if (unop == Iop_ReinterpF64asI64) {
+      if (unop == Iop_ReinterpF64asI64 || unop == Iop_ReinterpF32asI32) {
          dst = newVRegI(env);
          h1  = s390_isel_float_expr(env, arg);     /* Process the operand */
          addInstr(env, s390_insn_move(size, dst, h1));
@@ -1047,8 +1163,15 @@ s390_isel_int_expr_wrk(ISelEnv *env, IRExpr *expr)
          switch (unop) {
          case Iop_1Uto8:
          case Iop_1Uto32:
+            /* Zero extend */
+            mask.variant.imm = 1;
+            addInstr(env, s390_insn_alu(4, S390_ALU_AND,  dst, mask));
+            break;
+
          case Iop_1Uto64:
-            /* Nothing to do */
+            /* Zero extend */
+            mask.variant.imm = 1;
+            addInstr(env, s390_insn_alu(8, S390_ALU_AND,  dst, mask));
             break;
 
          case Iop_1Sto8:
@@ -1188,8 +1311,8 @@ s390_isel_int_expr_wrk(ISelEnv *env, IRExpr *expr)
             set aside a pair of non-virtual registers. The result (number of
             left-most zero bits) will be in r10. The value in r11 is unspecified
             and must not be used. */
-         r10  = make_gpr(env, 10);
-         r11  = make_gpr(env, 11);
+         r10  = make_gpr(10);
+         r11  = make_gpr(11);
 
          addInstr(env, s390_insn_clz(8, r10, r11, opnd));
          addInstr(env, s390_insn_move(8, dst, r10));
@@ -1228,12 +1351,7 @@ s390_isel_int_expr_wrk(ISelEnv *env, IRExpr *expr)
       HReg dst = newVRegI(env);
 
       doHelperCall(env, False, NULL, expr->Iex.CCall.cee,
-                   expr->Iex.CCall.args);
-
-      /* Move the returned value into the return register */
-      addInstr(env, s390_insn_move(sizeofIRType(expr->Iex.CCall.retty), dst,
-                                   mkHReg(S390_REGNO_RETURN_VALUE,
-                                          HRcInt64, False)));
+                   expr->Iex.CCall.args, dst);
       return dst;
    }
 
@@ -1425,9 +1543,10 @@ s390_isel_float128_expr_wrk(HReg *dst_hi, HReg *dst_lo, ISelEnv *env,
 
       /* --------- TERNARY OP --------- */
    case Iex_Triop: {
-      IROp    op    = expr->Iex.Triop.op;
-      IRExpr *left  = expr->Iex.Triop.arg2;
-      IRExpr *right = expr->Iex.Triop.arg3;
+      IRTriop *triop = expr->Iex.Triop.details;
+      IROp    op     = triop->op;
+      IRExpr *left   = triop->arg2;
+      IRExpr *right  = triop->arg3;
       s390_bfp_binop_t bfpop;
       s390_round_t rounding_mode;
       HReg op1_hi, op1_lo, op2_hi, op2_lo, f12, f13, f14, f15;
@@ -1458,7 +1577,7 @@ s390_isel_float128_expr_wrk(HReg *dst_hi, HReg *dst_lo, ISelEnv *env,
          goto irreducible;
       }
 
-      rounding_mode = decode_rounding_mode(expr->Iex.Triop.arg1);
+      rounding_mode = decode_rounding_mode(triop->arg1);
       addInstr(env, s390_insn_bfp128_binop(16, bfpop, f12, f14, f13,
                                            f15, rounding_mode));
 
@@ -1516,7 +1635,7 @@ s390_isel_float128_expr_wrk(HReg *dst_hi, HReg *dst_lo, ISelEnv *env,
 
       /* --------- UNARY OP --------- */
    case Iex_Unop: {
-      IRExpr *left = expr->Iex.Binop.arg1;
+      IRExpr *left = expr->Iex.Unop.arg;
       s390_bfp_unop_t bfpop;
       s390_round_t rounding_mode;
       HReg op_hi, op_lo, op, f12, f13, f14, f15;
@@ -1527,7 +1646,7 @@ s390_isel_float128_expr_wrk(HReg *dst_hi, HReg *dst_lo, ISelEnv *env,
       f14 = make_fpr(14);
       f15 = make_fpr(15);
 
-      switch (expr->Iex.Binop.op) {
+      switch (expr->Iex.Unop.op) {
       case Iop_NegF128:       bfpop = S390_BFP_NEG;          goto float128_opnd;
       case Iop_AbsF128:       bfpop = S390_BFP_ABS;          goto float128_opnd;
       case Iop_I32StoF128:    bfpop = S390_BFP_I32_TO_F128;  goto convert_int;
@@ -1668,13 +1787,13 @@ s390_isel_float_expr_wrk(ISelEnv *env, IRExpr *expr)
       s390_bfp_triop_t bfpop;
       s390_round_t rounding_mode;
 
-      op1 = s390_isel_float_expr(env, expr->Iex.Qop.arg2);
-      op2 = s390_isel_float_expr(env, expr->Iex.Qop.arg3);
-      op3 = s390_isel_float_expr(env, expr->Iex.Qop.arg4);
+      op1 = s390_isel_float_expr(env, expr->Iex.Qop.details->arg2);
+      op2 = s390_isel_float_expr(env, expr->Iex.Qop.details->arg3);
+      op3 = s390_isel_float_expr(env, expr->Iex.Qop.details->arg4);
       dst = newVRegF(env);
       addInstr(env, s390_insn_move(size, dst, op1));
 
-      switch (expr->Iex.Qop.op) {
+      switch (expr->Iex.Qop.details->op) {
       case Iop_MAddF32:
       case Iop_MAddF64:  bfpop = S390_BFP_MADD; break;
       case Iop_MSubF32:
@@ -1684,7 +1803,7 @@ s390_isel_float_expr_wrk(ISelEnv *env, IRExpr *expr)
          goto irreducible;
       }
 
-      rounding_mode = decode_rounding_mode(expr->Iex.Qop.arg1);
+      rounding_mode = decode_rounding_mode(expr->Iex.Qop.details->arg1);
       addInstr(env, s390_insn_bfp_triop(size, bfpop, dst, op2, op3,
                                         rounding_mode));
       return dst;
@@ -1692,9 +1811,10 @@ s390_isel_float_expr_wrk(ISelEnv *env, IRExpr *expr)
 
       /* --------- TERNARY OP --------- */
    case Iex_Triop: {
-      IROp    op    = expr->Iex.Triop.op;
-      IRExpr *left  = expr->Iex.Triop.arg2;
-      IRExpr *right = expr->Iex.Triop.arg3;
+      IRTriop *triop = expr->Iex.Triop.details;
+      IROp    op     = triop->op;
+      IRExpr *left   = triop->arg2;
+      IRExpr *right  = triop->arg3;
       s390_bfp_binop_t bfpop;
       s390_round_t rounding_mode;
       HReg h1, op2, dst;
@@ -1717,7 +1837,7 @@ s390_isel_float_expr_wrk(ISelEnv *env, IRExpr *expr)
          goto irreducible;
       }
 
-      rounding_mode = decode_rounding_mode(expr->Iex.Triop.arg1);
+      rounding_mode = decode_rounding_mode(triop->arg1);
       addInstr(env, s390_insn_bfp_binop(size, bfpop, dst, op2, rounding_mode));
       return dst;
    }
@@ -1810,7 +1930,7 @@ s390_isel_float_expr_wrk(ISelEnv *env, IRExpr *expr)
          return op == Iop_F128LOtoF64 ? dst_lo : dst_hi;
       }
 
-      if (op == Iop_ReinterpI64asF64) {
+      if (op == Iop_ReinterpI64asF64 || op == Iop_ReinterpI32asF32) {
          dst = newVRegF(env);
          h1  = s390_isel_int_expr(env, left);     /* Process the operand */
          addInstr(env, s390_insn_move(size, dst, h1));
@@ -1921,10 +2041,12 @@ s390_isel_cc(ISelEnv *env, IRExpr *cond)
          /* Iop_32/64to1  select the LSB from their operand */
       case Iop_32to1:
       case Iop_64to1: {
-         HReg dst = s390_isel_int_expr(env, arg);
+         HReg dst = newVRegI(env);
+         HReg h1  = s390_isel_int_expr(env, arg);
 
          size = sizeofIRType(typeOfIRExpr(env->type_env, arg));
 
+         addInstr(env, s390_insn_move(size, dst, h1));
          addInstr(env, s390_insn_alu(size, S390_ALU_AND, dst, s390_opnd_imm(1)));
          addInstr(env, s390_insn_test(size, s390_opnd_reg(dst)));
          return S390_CC_NE;
@@ -2139,7 +2261,99 @@ s390_isel_stmt(ISelEnv *env, IRStmt *stmt)
       IRType tyd = typeOfIRExpr(env->type_env, stmt->Ist.Put.data);
       HReg src;
       s390_amode *am;
+      ULong new_value, old_value, difference;
 
+      /* Detect updates to certain guest registers. We track the contents
+         of those registers as long as they contain constants. If the new
+         constant is either zero or in the 8-bit neighbourhood of the
+         current value we can use a memory-to-memory insn to do the update. */
+
+      Int offset = stmt->Ist.Put.offset;
+
+      /* Check necessary conditions:
+         (1) must be one of the registers we care about
+         (2) assigned value must be a constant */
+      Int guest_reg = get_guest_reg(offset);
+
+      if (guest_reg == GUEST_UNKNOWN) goto not_special;
+
+      if (guest_reg == GUEST_IA) {
+         /* If this is the first assignment to the IA reg, don't special case
+            it. We need to do a full 8-byte assignment here. The reason is 
+            that in case of a redirected translation the guest IA does not 
+            contain the redirected-to address. Instead it contains the 
+            redirected-from address and those can be far apart. So in order to
+            do incremnetal updates if the IA in the future we need to get the
+            initial address of the super block correct. */
+         if (env->first_IA_assignment) {
+            env->first_IA_assignment = False;
+            goto not_special;
+         }
+      }
+
+      if (stmt->Ist.Put.data->tag != Iex_Const) {
+         /* Invalidate guest register contents */
+         env->old_value_valid[guest_reg] = False;
+         goto not_special;
+      }
+
+      /* We can only handle Ity_I64, but the CC_DEPS field can have floats */
+      if (tyd != Ity_I64)
+         goto not_special;
+
+      /* OK. Necessary conditions are satisfied. */
+
+      old_value = env->old_value[guest_reg];
+      new_value = stmt->Ist.Put.data->Iex.Const.con->Ico.U64;
+      env->old_value[guest_reg] = new_value;
+
+      Bool old_value_is_valid = env->old_value_valid[guest_reg];
+      env->old_value_valid[guest_reg] = True;
+
+      /* If the register already contains the new value, there is nothing
+         to do here. Unless the guest register requires precise memory
+         exceptions. */
+      if (old_value_is_valid && new_value == old_value) {
+         if (! guest_s390x_state_requires_precise_mem_exns(offset, offset + 8)) {
+            return;
+         }
+      }
+
+      /* guest register = 0 */
+      if (new_value == 0) {
+         addInstr(env, s390_insn_gzero(sizeofIRType(tyd), offset));
+         return;
+      }
+
+      if (old_value_is_valid == False) goto not_special;
+
+      /* If the new value is in the neighbourhood of the old value
+         we can use a memory-to-memory insn */
+      difference = new_value - old_value;
+
+      if (s390_host_has_gie && ulong_fits_signed_8bit(difference)) {
+         addInstr(env, s390_insn_gadd(sizeofIRType(tyd), offset,
+                                      (difference & 0xFF), new_value));
+         return;
+      }
+
+      /* If the high word is the same it is sufficient to load the low word.
+         Use R0 as a scratch reg. */
+      if ((old_value >> 32) == (new_value >> 32)) {
+         HReg r0  = make_gpr(0);
+         HReg gsp = make_gpr(S390_REGNO_GUEST_STATE_POINTER);
+         s390_amode *gam;
+
+         gam = s390_amode_b12(offset + 4, gsp);
+         addInstr(env, s390_insn_load_immediate(4, r0,
+                                                new_value & 0xFFFFFFFF));
+         addInstr(env, s390_insn_store(4, gam, r0));
+         return;
+      }
+
+      /* No special case applies... fall through */
+
+   not_special:
       am = s390_amode_for_guest_state(stmt->Ist.Put.offset);
 
       switch (tyd) {
@@ -2230,27 +2444,40 @@ s390_isel_stmt(ISelEnv *env, IRStmt *stmt)
       IRType   retty;
       IRDirty* d = stmt->Ist.Dirty.details;
       Bool     passBBP;
+      HReg dst;
+      Int i;
+
+      /* Invalidate tracked values of those guest state registers that are
+         modified by this helper. */
+      for (i = 0; i < d->nFxState; ++i) {
+         /* JRS 1 June 2012: AFAICS, s390 guest doesn't use 'repeat'
+            descriptors in guest state effect descriptions.  Hence: */
+         vassert(d->fxState[i].nRepeats == 0 && d->fxState[i].repeatLen == 0);
+         if ((d->fxState[i].fx == Ifx_Write || d->fxState[i].fx == Ifx_Modify)) {
+            Int guest_reg = get_guest_reg(d->fxState[i].offset);
+            if (guest_reg != GUEST_UNKNOWN)
+               env->old_value_valid[guest_reg] = False;
+         }
+      }
 
       if (d->nFxState == 0)
          vassert(!d->needsBBP);
 
       passBBP = toBool(d->nFxState > 0 && d->needsBBP);
 
-      doHelperCall(env, passBBP, d->guard, d->cee, d->args);
-
-      /* Now figure out what to do with the returned value, if any. */
-      if (d->tmp == IRTemp_INVALID)
-         /* No return value.  Nothing to do. */
+      if (d->tmp == IRTemp_INVALID) {
+         /* No return value. */
+         dst = INVALID_HREG;
+         doHelperCall(env, passBBP, d->guard, d->cee, d->args, dst);
          return;
+      }
 
       retty = typeOfIRTemp(env->type_env, d->tmp);
       if (retty == Ity_I64 || retty == Ity_I32
           || retty == Ity_I16 || retty == Ity_I8) {
-         /* Move the returned value into the return register */
-         HReg dst = lookupIRTemp(env, d->tmp);
-         addInstr(env, s390_insn_move(sizeofIRType(retty), dst,
-                                      mkHReg(S390_REGNO_RETURN_VALUE,
-                                             HRcInt64, False)));
+         /* Move the returned value to the destination register */
+         dst = lookupIRTemp(env, d->tmp);
+         doHelperCall(env, passBBP, d->guard, d->cee, d->args, dst);
          return;
       }
       break;
@@ -2271,23 +2498,101 @@ s390_isel_stmt(ISelEnv *env, IRStmt *stmt)
          }
          return;
       } else {
-         vpanic("compare double and swap not implemented\n");
+         IRCAS *cas = stmt->Ist.CAS.details;
+         s390_amode *op2 = s390_isel_amode(env,  cas->addr);
+         HReg r8, r9, r10, r11, r1;
+         HReg op3_high = s390_isel_int_expr(env, cas->dataHi);  /* new value */
+         HReg op3_low  = s390_isel_int_expr(env, cas->dataLo);  /* new value */
+         HReg op1_high = s390_isel_int_expr(env, cas->expdHi);  /* expected value */
+         HReg op1_low  = s390_isel_int_expr(env, cas->expdLo);  /* expected value */
+         HReg old_low  = lookupIRTemp(env, cas->oldLo);
+         HReg old_high = lookupIRTemp(env, cas->oldHi);
+
+         /* Use non-virtual registers r8 and r9 as pair for op1
+            and move op1 there */
+         r8 = make_gpr(8);
+         r9 = make_gpr(9);
+         addInstr(env, s390_insn_move(8, r8, op1_high));
+         addInstr(env, s390_insn_move(8, r9, op1_low));
+
+         /* Use non-virtual registers r10 and r11 as pair for op3
+            and move op3 there */
+         r10 = make_gpr(10);
+         r11 = make_gpr(11);
+         addInstr(env, s390_insn_move(8, r10, op3_high));
+         addInstr(env, s390_insn_move(8, r11, op3_low));
+
+         /* Register r1 is used as a scratch register */
+         r1 = make_gpr(1);
+
+         if (typeOfIRTemp(env->type_env, cas->oldLo) == Ity_I32) {
+            addInstr(env, s390_insn_cdas(4, r8, r9, op2, r10, r11,
+                                         old_high, old_low, r1));
+         } else {
+            addInstr(env, s390_insn_cdas(8, r8, r9, op2, r10, r11,
+                                         old_high, old_low, r1));
+         }
+         addInstr(env, s390_insn_move(8, op1_high, r8));
+         addInstr(env, s390_insn_move(8, op1_low,  r9));
+         addInstr(env, s390_insn_move(8, op3_high, r10));
+         addInstr(env, s390_insn_move(8, op3_low,  r11));
+         return;
       }
       break;
 
       /* --------- EXIT --------- */
    case Ist_Exit: {
-      s390_opnd_RMI dst;
       s390_cc_t cond;
       IRConstTag tag = stmt->Ist.Exit.dst->tag;
 
       if (tag != Ico_U64)
          vpanic("s390_isel_stmt: Ist_Exit: dst is not a 64-bit value");
 
-      dst  = s390_isel_int_expr_RMI(env, IRExpr_Const(stmt->Ist.Exit.dst));
+      s390_amode *guest_IA = s390_amode_for_guest_state(stmt->Ist.Exit.offsIP);
       cond = s390_isel_cc(env, stmt->Ist.Exit.guard);
-      addInstr(env, s390_insn_branch(stmt->Ist.Exit.jk, cond, dst));
-      return;
+
+      /* Case: boring transfer to known address */
+      if (stmt->Ist.Exit.jk == Ijk_Boring) {
+         if (env->chaining_allowed) {
+            /* .. almost always true .. */
+            /* Skip the event check at the dst if this is a forwards
+               edge. */
+            Bool to_fast_entry
+               = ((Addr64)stmt->Ist.Exit.dst->Ico.U64) > env->max_ga;
+            if (0) vex_printf("%s", to_fast_entry ? "Y" : ",");
+            addInstr(env, s390_insn_xdirect(cond, stmt->Ist.Exit.dst->Ico.U64,
+                                            guest_IA, to_fast_entry));
+         } else {
+            /* .. very occasionally .. */
+            /* We can't use chaining, so ask for an assisted transfer,
+               as that's the only alternative that is allowable. */
+            HReg dst = s390_isel_int_expr(env,
+                                          IRExpr_Const(stmt->Ist.Exit.dst));
+            addInstr(env, s390_insn_xassisted(cond, dst, guest_IA, Ijk_Boring));
+         }
+         return;
+      }
+
+      /* Case: assisted transfer to arbitrary address */
+      switch (stmt->Ist.Exit.jk) {
+      case Ijk_NoDecode:
+      case Ijk_TInval:
+      case Ijk_Sys_syscall:
+      case Ijk_ClientReq:
+      case Ijk_NoRedir:
+      case Ijk_Yield:
+      case Ijk_SigTRAP: {
+         HReg dst = s390_isel_int_expr(env, IRExpr_Const(stmt->Ist.Exit.dst));
+         addInstr(env, s390_insn_xassisted(cond, dst, guest_IA,
+                                           stmt->Ist.Exit.jk));
+         return;
+      }
+      default:
+         break;
+      }
+
+      /* Do we ever expect to see any other kind? */
+      goto stmt_fail;
    }
 
       /* --------- MEM FENCE --------- */
@@ -2324,20 +2629,81 @@ s390_isel_stmt(ISelEnv *env, IRStmt *stmt)
 /*---------------------------------------------------------*/
 
 static void
-iselNext(ISelEnv *env, IRExpr *next, IRJumpKind jk)
+iselNext(ISelEnv *env, IRExpr *next, IRJumpKind jk, int offsIP)
 {
-   s390_opnd_RMI dst;
-
    if (vex_traceflags & VEX_TRACE_VCODE) {
-      vex_printf("\n-- goto {");
-      ppIRJumpKind(jk);
-      vex_printf("} ");
+      vex_printf("\n-- PUT(%d) = ", offsIP);
       ppIRExpr(next);
+      vex_printf("; exit-");
+      ppIRJumpKind(jk);
       vex_printf("\n");
    }
 
-   dst = s390_isel_int_expr_RMI(env, next);
-   addInstr(env, s390_insn_branch(jk, S390_CC_ALWAYS, dst));
+   s390_amode *guest_IA = s390_amode_for_guest_state(offsIP);
+
+   /* Case: boring transfer to known address */
+   if (next->tag == Iex_Const) {
+      IRConst *cdst = next->Iex.Const.con;
+      vassert(cdst->tag == Ico_U64);
+      if (jk == Ijk_Boring || jk == Ijk_Call) {
+         /* Boring transfer to known address */
+         if (env->chaining_allowed) {
+            /* .. almost always true .. */
+            /* Skip the event check at the dst if this is a forwards
+               edge. */
+            Bool to_fast_entry
+               = ((Addr64)cdst->Ico.U64) > env->max_ga;
+            if (0) vex_printf("%s", to_fast_entry ? "X" : ".");
+            addInstr(env, s390_insn_xdirect(S390_CC_ALWAYS, cdst->Ico.U64,
+                                            guest_IA, to_fast_entry));
+         } else {
+            /* .. very occasionally .. */
+            /* We can't use chaining, so ask for an indirect transfer,
+               as that's the cheapest alternative that is allowable. */
+            HReg dst = s390_isel_int_expr(env, next);
+            addInstr(env, s390_insn_xassisted(S390_CC_ALWAYS, dst, guest_IA,
+                                              Ijk_Boring));
+         }
+         return;
+      }
+   }
+
+   /* Case: call/return (==boring) transfer to any address */
+   switch (jk) {
+   case Ijk_Boring:
+   case Ijk_Ret:
+   case Ijk_Call: {
+      HReg dst = s390_isel_int_expr(env, next);
+      if (env->chaining_allowed) {
+         addInstr(env, s390_insn_xindir(S390_CC_ALWAYS, dst, guest_IA));
+      } else {
+         addInstr(env, s390_insn_xassisted(S390_CC_ALWAYS, dst, guest_IA,
+                                           Ijk_Boring));
+      }
+      return;
+   }
+   default:
+      break;
+   }
+
+   /* Case: some other kind of transfer to any address */
+   switch (jk) {
+   case Ijk_NoDecode:
+   case Ijk_TInval:
+   case Ijk_Sys_syscall:
+   case Ijk_ClientReq:
+   case Ijk_NoRedir:
+   case Ijk_Yield:
+   case Ijk_SigTRAP: {
+      HReg dst = s390_isel_int_expr(env, next);
+      addInstr(env, s390_insn_xassisted(S390_CC_ALWAYS, dst, guest_IA, jk));
+      return;
+   }
+   default:
+      break;
+   }
+
+   vpanic("iselNext");
 }
 
 
@@ -2345,19 +2711,23 @@ iselNext(ISelEnv *env, IRExpr *next, IRJumpKind jk)
 /*--- Insn selector top-level                           ---*/
 /*---------------------------------------------------------*/
 
-/* Translate an entire SB to s390 code. */
+/* Translate an entire SB to s390 code.
+   Note: archinfo_host is a pointer to a stack-allocated variable.
+   Do not assign it to a global variable! */
 
 HInstrArray *
 iselSB_S390(IRSB *bb, VexArch arch_host, VexArchInfo *archinfo_host,
-             VexAbiInfo *vbi)
+            VexAbiInfo *vbi, Int offset_host_evcheck_counter,
+            Int offset_host_evcheck_fail_addr, Bool chaining_allowed,
+            Bool add_profinc, Addr64 max_ga)
 {
    UInt     i, j;
    HReg     hreg, hregHI;
    ISelEnv *env;
    UInt     hwcaps_host = archinfo_host->hwcaps;
 
-   /* KLUDGE: export archinfo_host. */
-   s390_archinfo_host = archinfo_host;
+   /* KLUDGE: export hwcaps. */
+   s390_host_hwcaps = hwcaps_host;
 
    /* Do some sanity checks */
    vassert((VEX_HWCAPS_S390X(hwcaps_host) & ~(VEX_HWCAPS_S390X_ALL)) == 0);
@@ -2372,6 +2742,13 @@ iselSB_S390(IRSB *bb, VexArch arch_host, VexArchInfo *archinfo_host,
    /* Copy BB's type env. */
    env->type_env = bb->tyenv;
 
+   /* Set up data structures for tracking guest register values. */
+   env->first_IA_assignment = True;
+   for (i = 0; i < NUM_TRACKED_REGS; ++i) {
+      env->old_value[i] = 0;  /* just something to have a defined value */
+      env->old_value_valid[i] = False;
+   }
+
    /* Make up an IRTemp -> virtual HReg mapping.  This doesn't
       change as we go along. For some reason types_used has Int type -- but
       it should be unsigned. Internally we use an unsigned type; so we
@@ -2384,6 +2761,9 @@ iselSB_S390(IRSB *bb, VexArch arch_host, VexArchInfo *archinfo_host,
 
    /* and finally ... */
    env->hwcaps    = hwcaps_host;
+
+   env->max_ga = max_ga;
+   env->chaining_allowed = chaining_allowed;
 
    /* For each IR temporary, allocate a suitably-kinded virtual
       register. */
@@ -2428,12 +2808,26 @@ iselSB_S390(IRSB *bb, VexArch arch_host, VexArchInfo *archinfo_host,
    }
    env->vreg_ctr = j;
 
+   /* The very first instruction must be an event check. */
+   s390_amode *counter, *fail_addr;
+   counter   = s390_amode_for_guest_state(offset_host_evcheck_counter);
+   fail_addr = s390_amode_for_guest_state(offset_host_evcheck_fail_addr);
+   addInstr(env, s390_insn_evcheck(counter, fail_addr));
+
+   /* Possibly a block counter increment (for profiling).  At this
+      point we don't know the address of the counter, so just pretend
+      it is zero.  It will have to be patched later, but before this
+      translation is used, by a call to LibVEX_patchProfInc. */
+   if (add_profinc) {
+      addInstr(env, s390_insn_profinc());
+   }
+
    /* Ok, finally we can iterate over the statements. */
    for (i = 0; i < bb->stmts_used; i++)
       if (bb->stmts[i])
          s390_isel_stmt(env, bb->stmts[i]);
 
-   iselNext(env, bb->next, bb->jumpkind);
+   iselNext(env, bb->next, bb->jumpkind, bb->offsIP);
 
    /* Record the number of vregs we used. */
    env->code->n_vregs = env->vreg_ctr;

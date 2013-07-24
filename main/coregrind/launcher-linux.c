@@ -7,7 +7,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2000-2011 Julian Seward 
+   Copyright (C) 2000-2012 Julian Seward 
       jseward@acm.org
 
    This program is free software; you can redistribute it and/or
@@ -60,10 +60,6 @@
 #ifndef EM_X86_64
 #define EM_X86_64 62    // elf.h doesn't define this on some older systems
 #endif
-#ifndef EM_PPC64
-#define EM_PPC64 21     // elf.h doesn't define this on Android
-#endif
-
 
 /* Report fatal errors */
 __attribute__((noreturn))
@@ -183,12 +179,24 @@ static const char *select_platform(const char *clientname)
                  ehdr->e_ident[EI_OSABI] == ELFOSABI_LINUX)) {
                platform = "arm-linux";
             }
+            else
+            if (ehdr->e_machine == EM_MIPS &&
+                (ehdr->e_ident[EI_OSABI] == ELFOSABI_SYSV ||
+                 ehdr->e_ident[EI_OSABI] == ELFOSABI_LINUX)) {
+               platform = "mips32-linux";
+            }
          }
          else if (header[EI_DATA] == ELFDATA2MSB) {
             if (ehdr->e_machine == EM_PPC &&
                 (ehdr->e_ident[EI_OSABI] == ELFOSABI_SYSV ||
                  ehdr->e_ident[EI_OSABI] == ELFOSABI_LINUX)) {
                platform = "ppc32-linux";
+            }
+            else 
+            if (ehdr->e_machine == EM_MIPS &&
+                (ehdr->e_ident[EI_OSABI] == ELFOSABI_SYSV ||
+                 ehdr->e_ident[EI_OSABI] == ELFOSABI_LINUX)) {
+               platform = "mips32-linux";
             }
          }
 
@@ -288,7 +296,8 @@ int main(int argc, char** argv, char** envp)
        (0==strcmp(VG_PLATFORM,"ppc32-linux")) ||
        (0==strcmp(VG_PLATFORM,"ppc64-linux")) ||
        (0==strcmp(VG_PLATFORM,"arm-linux"))   ||
-       (0==strcmp(VG_PLATFORM,"s390x-linux")))
+       (0==strcmp(VG_PLATFORM,"s390x-linux")) ||
+       (0==strcmp(VG_PLATFORM,"mips32-linux")))
       default_platform = VG_PLATFORM;
    else
       barf("Unknown VG_PLATFORM '%s'", VG_PLATFORM);

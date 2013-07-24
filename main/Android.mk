@@ -14,6 +14,8 @@
 
 LOCAL_PATH:= $(call my-dir)
 
+ANDROID_HARDWARE := ANDROID_HARDWARE_generic
+
 ifneq ($(filter arm x86,$(TARGET_ARCH)),)
 
 common_cflags := \
@@ -26,8 +28,7 @@ common_cflags := \
 	-DVGPV_$(TARGET_ARCH)_linux_android=1 \
 	-DVG_PLATFORM=\"$(TARGET_ARCH)-linux\" \
 	-DVG_LIBDIR=\"/system/lib/valgrind\" \
-	-DANDROID_SYMBOLS_DIR=\"/data/local/symbols\" \
-	-DANDROID_HARDWARE_nexus_s
+	-DANDROID_SYMBOLS_DIR=\"/data/local/symbols\"
 
 common_includes := \
 	external/valgrind/main \
@@ -39,9 +40,21 @@ vex_ldflags := -nodefaultlibs
 
 ifeq ($(TARGET_ARCH),arm)
 tool_ldflags := -static -Wl,--build-id=none,-Ttext=0x38000000 -nodefaultlibs -nostartfiles -u _start -e_start
+
+# ioctl/syscall wrappers are device dependent
+ifeq ($(TARGET_BOOTLOADER_BOARD_NAME),manta)
+ANDROID_HARDWARE := ANDROID_HARDWARE_nexus_10
+else ifeq ($(TARGET_BOOTLOADER_BOARD_NAME),grouper)
+ANDROID_HARDWARE := ANDROID_HARDWARE_nexus_7
+else ifeq ($(TARGET_BOOTLOADER_BOARD_NAME),MAKO)
+ANDROID_HARDWARE := ANDROID_HARDWARE_nexus_4
+endif
+
 else
 tool_ldflags := -static -Wl,-Ttext=0x38000000 -nodefaultlibs -nostartfiles -u _start -e_start
 endif
+
+common_cflags += -D$(ANDROID_HARDWARE)
 
 preload_ldflags := -nodefaultlibs -Wl,-z,interpose,-z,initfirst
 # Remove this when the all toolchains are GCC 4.4
@@ -65,6 +78,8 @@ LOCAL_SRC_FILES := \
 	VEX/priv/ir_opt.c \
 	VEX/priv/guest_generic_bb_to_IR.c \
 	VEX/priv/guest_generic_x87.c \
+	VEX/priv/guest_mips_helpers.c \
+	VEX/priv/guest_mips_toIR.c \
 	VEX/priv/guest_x86_helpers.c \
 	VEX/priv/guest_x86_toIR.c \
 	VEX/priv/guest_amd64_helpers.c \
@@ -83,6 +98,8 @@ LOCAL_SRC_FILES := \
 	VEX/priv/host_x86_isel.c \
 	VEX/priv/host_amd64_defs.c \
 	VEX/priv/host_amd64_isel.c \
+	VEX/priv/host_mips_defs.c \
+	VEX/priv/host_mips_isel.c \
 	VEX/priv/host_ppc_defs.c \
 	VEX/priv/host_ppc_isel.c \
 	VEX/priv/host_arm_defs.c \
@@ -110,7 +127,6 @@ LOCAL_MODULE_TAGS := optional
 LOCAL_ARM_MODE := arm
 
 LOCAL_SRC_FILES := \
-	coregrind/link_tool_exe.c \
 	coregrind/m_commandline.c \
 	coregrind/m_clientstate.c \
 	coregrind/m_cpuid.S \
@@ -131,6 +147,7 @@ LOCAL_SRC_FILES := \
 	coregrind/m_mallocfree.c \
 	coregrind/m_options.c \
 	coregrind/m_oset.c \
+	coregrind/m_poolalloc.c \
 	coregrind/m_redir.c \
 	coregrind/m_seqmatch.c \
 	coregrind/m_signals.c \
@@ -148,8 +165,6 @@ LOCAL_SRC_FILES := \
 	coregrind/m_wordfm.c \
 	coregrind/m_xarray.c \
 	coregrind/m_aspacehl.c \
-	coregrind/m_start-amd64-darwin.S \
-	coregrind/m_start-x86-darwin.S \
 	coregrind/m_aspacemgr/aspacemgr-common.c \
 	coregrind/m_aspacemgr/aspacemgr-linux.c \
 	coregrind/m_coredump/coredump-elf.c \
@@ -184,8 +199,11 @@ LOCAL_SRC_FILES := \
 	coregrind/m_mach/mach_traps-x86-darwin.S \
 	coregrind/m_mach/mach_traps-amd64-darwin.S \
 	coregrind/m_replacemalloc/replacemalloc_core.c \
+	coregrind/m_scheduler/sched-lock.c \
+	coregrind/m_scheduler/sched-lock-generic.c \
 	coregrind/m_scheduler/scheduler.c \
 	coregrind/m_scheduler/sema.c \
+	coregrind/m_scheduler/ticket-lock-linux.c \
 	coregrind/m_sigframe/sigframe-x86-linux.c \
 	coregrind/m_sigframe/sigframe-amd64-linux.c \
 	coregrind/m_sigframe/sigframe-ppc32-linux.c \
@@ -219,7 +237,7 @@ LOCAL_SRC_FILES := \
 	coregrind/m_ume/macho.c \
 	coregrind/m_ume/main.c \
 	coregrind/m_ume/script.c \
-  coregrind/vgdb.c \
+	coregrind/vgdb.c \
 	coregrind/m_gdbserver/inferiors.c \
 	coregrind/m_gdbserver/m_gdbserver.c \
 	coregrind/m_gdbserver/regcache.c \
@@ -230,7 +248,6 @@ LOCAL_SRC_FILES := \
 	coregrind/m_gdbserver/utils.c \
 	coregrind/m_gdbserver/valgrind-low-amd64.c \
 	coregrind/m_gdbserver/valgrind-low-arm.c \
-	coregrind/m_gdbserver/valgrind-low.c \
 	coregrind/m_gdbserver/valgrind-low-ppc32.c \
 	coregrind/m_gdbserver/valgrind-low-ppc64.c \
 	coregrind/m_gdbserver/valgrind-low-s390x.c \
@@ -241,7 +258,9 @@ LOCAL_C_INCLUDES := $(common_includes)
 
 LOCAL_LDFLAGS := $(vex_ldflags)
 
+# TODO: split asflags out from cflags.
 LOCAL_CFLAGS := $(common_cflags)
+LOCAL_ASFLAGS := $(common_cflags)
 
 include $(BUILD_STATIC_LIBRARY)
 
@@ -389,7 +408,6 @@ LOCAL_SRC_FILES := \
 	callgrind/bbcc.c \
 	callgrind/callstack.c \
 	callgrind/clo.c \
-	callgrind/command.c \
 	callgrind/context.c \
 	callgrind/costs.c \
 	callgrind/debug.c \
@@ -487,7 +505,6 @@ LOCAL_SYSTEM_SHARED_LIBRARIES :=
 
 LOCAL_SRC_FILES := \
 	drd/drd_barrier.c \
-	drd/drd_bitmap2_node.c \
 	drd/drd_clientobj.c \
 	drd/drd_clientreq.c \
 	drd/drd_cond.c \

@@ -35,7 +35,6 @@ CALLGRIND_SOURCES_COMMON = \
 	bbcc.c \
 	callstack.c \
 	clo.c \
-	command.c \
 	context.c \
 	costs.c \
 	debug.c \
@@ -51,7 +50,8 @@ CALLGRIND_SOURCES_COMMON = \
 	../cachegrind/cg-ppc32.c \
 	../cachegrind/cg-ppc64.c \
 	../cachegrind/cg-arm.c   \
-	../cachegrind/cg-s390x.c
+	../cachegrind/cg-s390x.c \
+	../cachegrind/cg-mips32.c
 
 CALLGRIND_CFLAGS_COMMON = -I$(top_srcdir)/cachegrind
 

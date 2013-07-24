@@ -58,9 +58,11 @@ EXTRA_DIST =                                        \
 	annotate_ignore_write.vgtest		    \
 	annotate_ignore_write2.stderr.exp	    \
 	annotate_ignore_write2.vgtest		    \
-	annotate_trace_memory.stderr.exp	    \
+	annotate_trace_memory.stderr.exp-32bit	    \
+	annotate_trace_memory.stderr.exp-64bit	    \
 	annotate_trace_memory.vgtest		    \
-	annotate_trace_memory_xml.stderr.exp	    \
+	annotate_trace_memory_xml.stderr.exp-32bit  \
+	annotate_trace_memory_xml.stderr.exp-64bit  \
 	annotate_trace_memory_xml.vgtest	    \
 	annotate_static.stderr.exp	            \
 	annotate_static.vgtest		            \
@@ -219,13 +221,17 @@ EXTRA_DIST =                                        \
 	sigalrm.vgtest                              \
 	sigaltstack.stderr.exp                      \
 	sigaltstack.vgtest                          \
+	std_thread.stderr.exp		  	    \
+	std_thread.vgtest			    \
 	tc01_simple_race.stderr.exp                 \
 	tc01_simple_race.vgtest                     \
 	tc02_simple_tls.stderr.exp                  \
 	tc02_simple_tls.vgtest                      \
 	tc03_re_excl.stderr.exp                     \
 	tc03_re_excl.vgtest                         \
-	tc04_free_lock.stderr.exp                   \
+	tc04_free_lock.stderr.exp-x86               \
+	tc04_free_lock.stderr.exp-ppc               \
+	tc04_free_lock.stderr.exp-s390              \
 	tc04_free_lock.vgtest                       \
 	tc05_simple_race.stderr.exp                 \
 	tc05_simple_race.vgtest                     \
@@ -237,8 +243,10 @@ EXTRA_DIST =                                        \
 	tc08_hbl2.stderr.exp                        \
 	tc08_hbl2.stdout.exp                        \
 	tc08_hbl2.vgtest                            \
-	tc09_bad_unlock.stderr.exp                  \
+	tc09_bad_unlock.stderr.exp-x86              \
+	tc09_bad_unlock.stderr.exp-ppc              \
 	tc09_bad_unlock.stderr.exp-glibc2.8         \
+	tc09_bad_unlock.stderr.exp-s390             \
 	tc09_bad_unlock.vgtest                      \
 	tc10_rec_lock.stderr.exp                    \
 	tc10_rec_lock.vgtest                        \
@@ -339,10 +347,20 @@ check_PROGRAMS +=        \
   circular_buffer
 endif
 
+if HAVE_BUILTIN_ATOMIC64
+check_PROGRAMS +=        \
+  annotate_trace_memory
+endif
+
 if HAVE_BUILTIN_ATOMIC_CXX
 check_PROGRAMS +=        \
   annotate_smart_pointer \
   tsan_unittest
+endif
+
+if HAVE_SHARED_POINTER_ANNOTATION
+check_PROGRAMS += \
+  std_thread
 endif
 
 if HAVE_OPENMP
@@ -415,3 +433,6 @@ endif
 if HAVE_PTHREAD_BARRIER
 matinv_LDADD                = $(LDADD) -lm
 endif
+
+std_thread_SOURCES          = std_thread.cpp
+std_thread_CXXFLAGS         = $(AM_CXXFLAGS) -std=c++0x

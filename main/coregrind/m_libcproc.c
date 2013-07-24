@@ -7,7 +7,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2000-2011 Julian Seward 
+   Copyright (C) 2000-2012 Julian Seward 
       jseward@acm.org
 
    This program is free software; you can redistribute it and/or
@@ -29,16 +29,14 @@
 */
 
 #include "pub_core_basics.h"
+#include "pub_core_machine.h"    // For VG_(machine_get_VexArchInfo)
 #include "pub_core_vki.h"
 #include "pub_core_vkiscnums.h"
 #include "pub_core_libcbase.h"
 #include "pub_core_libcassert.h"
-#include "pub_core_libcfile.h"
 #include "pub_core_libcprint.h"
 #include "pub_core_libcproc.h"
 #include "pub_core_libcsignal.h"
-#include "pub_core_tooliface.h"
-#include "pub_core_options.h"
 #include "pub_core_seqmatch.h"
 #include "pub_core_mallocfree.h"
 #include "pub_core_syscall.h"
@@ -243,12 +241,18 @@ void VG_(env_remove_valgrind_env_stuff)(Char** envp)
    // - LD_PRELOAD is on Linux, not on Darwin, not sure about AIX
    // - DYLD_INSERT_LIBRARIES and DYLD_SHARED_REGION are Darwin-only
    for (i = 0; envp[i] != NULL; i++) {
-      if (VG_(strncmp)(envp[i], "LD_PRELOAD=", 11) == 0)
-         ld_preload_str = VG_(arena_strdup)(VG_AR_CORE, "libcproc.erves.1", &envp[i][11]);
-      if (VG_(strncmp)(envp[i], "LD_LIBRARY_PATH=", 16) == 0)
-         ld_library_path_str = VG_(arena_strdup)(VG_AR_CORE, "libcproc.erves.2", &envp[i][16]);
-      if (VG_(strncmp)(envp[i], "DYLD_INSERT_LIBRARIES=", 22) == 0)
-         dyld_insert_libraries_str = VG_(arena_strdup)(VG_AR_CORE, "libcproc.erves.3", &envp[i][22]);
+      if (VG_(strncmp)(envp[i], "LD_PRELOAD=", 11) == 0) {
+         envp[i] = VG_(arena_strdup)(VG_AR_CORE, "libcproc.erves.1", envp[i]);
+         ld_preload_str = &envp[i][11];
+      }
+      if (VG_(strncmp)(envp[i], "LD_LIBRARY_PATH=", 16) == 0) {
+         envp[i] = VG_(arena_strdup)(VG_AR_CORE, "libcproc.erves.2", envp[i]);
+         ld_library_path_str = &envp[i][16];
+      }
+      if (VG_(strncmp)(envp[i], "DYLD_INSERT_LIBRARIES=", 22) == 0) {
+         envp[i] = VG_(arena_strdup)(VG_AR_CORE, "libcproc.erves.3", envp[i]);
+         dyld_insert_libraries_str = &envp[i][22];
+      }
    }
 
    buf = VG_(arena_malloc)(VG_AR_CORE, "libcproc.erves.4",
@@ -545,7 +549,8 @@ Int VG_(getgroups)( Int size, UInt* list )
 
 #  elif defined(VGP_amd64_linux) || defined(VGP_ppc64_linux)  \
         || defined(VGP_arm_linux)                             \
-        || defined(VGO_darwin) || defined(VGP_s390x_linux)
+        || defined(VGO_darwin) || defined(VGP_s390x_linux)    \
+        || defined(VGP_mips32_linux)
    SysRes sres;
    sres = VG_(do_syscall2)(__NR_getgroups, size, (Addr)list);
    if (sr_isError(sres))
@@ -703,42 +708,71 @@ void VG_(do_atfork_parent)(ThreadId tid)
          (*atforks[i].parent)(tid);
 }
 
-// Defined in m_main.c
-void print_preamble(Bool logging_to_fd, const char* toolname);
-
-Char* VG_(clo_log_fname_unexpanded) = NULL;
-Char* VG_(clo_xml_fname_unexpanded) = NULL;
-
-// If --log-file=ABC%pXYZ is specified, we'd like to have separate log files
-// for each forked child.
-// If %p is present in the --log-file option, this function creates
-// a new log file and redirects the child's output to it.
-static void open_new_logfile_for_forked_child(void)
-{
-   Int tmp_fd = -1;
-
-   if (VG_(log_output_sink).is_socket == False && VG_(clo_log_fname_unexpanded) != NULL) {
-     tmp_fd = reopen_output_fd(False);
-     VG_(log_output_sink).fd = VG_(safe_fd)(tmp_fd);
-   }
-
-   if (VG_(xml_output_sink).is_socket == False && VG_(clo_xml_fname_unexpanded) != NULL) {
-     tmp_fd = reopen_output_fd(True);
-     VG_(xml_output_sink).fd = VG_(safe_fd)(tmp_fd);
-   }
-
-   print_preamble(False, NULL);
-}
-
 void VG_(do_atfork_child)(ThreadId tid)
 {
    Int i;
 
-   open_new_logfile_for_forked_child();
-
    for (i = 0; i < n_atfork; i++)
       if (atforks[i].child != NULL)
          (*atforks[i].child)(tid);
+}
+
+
+/* ---------------------------------------------------------------------
+   icache invalidation
+   ------------------------------------------------------------------ */
+
+void VG_(invalidate_icache) ( void *ptr, SizeT nbytes )
+{
+#  if defined(VGA_ppc32) || defined(VGA_ppc64)
+   Addr startaddr = (Addr) ptr;
+   Addr endaddr   = startaddr + nbytes;
+   Addr cls;
+   Addr addr;
+   VexArchInfo vai;
+
+   if (nbytes == 0) return;
+   vg_assert(nbytes > 0);
+
+   VG_(machine_get_VexArchInfo)( NULL, &vai );
+   cls = vai.ppc_cache_line_szB;
+
+   /* Stay sane .. */
+   vg_assert(cls == 32 || cls == 64 || cls == 128);
+
+   startaddr &= ~(cls - 1);
+   for (addr = startaddr; addr < endaddr; addr += cls) {
+      __asm__ __volatile__("dcbst 0,%0" : : "r" (addr));
+   }
+   __asm__ __volatile__("sync");
+   for (addr = startaddr; addr < endaddr; addr += cls) {
+      __asm__ __volatile__("icbi 0,%0" : : "r" (addr));
+   }
+   __asm__ __volatile__("sync; isync");
+
+#  elif defined(VGA_x86)
+   /* no need to do anything, hardware provides coherence */
+
+#  elif defined(VGA_amd64)
+   /* no need to do anything, hardware provides coherence */
+
+#  elif defined(VGA_s390x)
+   /* no need to do anything, hardware provides coherence */
+
+#  elif defined(VGP_arm_linux)
+   /* ARM cache flushes are privileged, so we must defer to the kernel. */
+   Addr startaddr = (Addr) ptr;
+   Addr endaddr   = startaddr + nbytes;
+   VG_(do_syscall2)(__NR_ARM_cacheflush, startaddr, endaddr);
+
+#  elif defined(VGA_mips32)
+   SysRes sres = VG_(do_syscall3)(__NR_cacheflush, (UWord) ptr,
+                                 (UWord) nbytes, (UWord) 3);
+   vg_assert( sres._isError == 0 );
+
+#  else
+#    error "Unknown ARCH"
+#  endif
 }
 
 

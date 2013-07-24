@@ -1,4 +1,2 @@
 prog: v6intThumb
 vgopts: -q
-prog: v6intThumb
-vgopts: -q

@@ -7,7 +7,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2000-2011 Nicholas Nethercote
+   Copyright (C) 2000-2012 Nicholas Nethercote
       njn@valgrind.org
 
    This program is free software; you can redistribute it and/or
@@ -47,6 +47,7 @@
 #include "pub_core_libcprint.h"
 #include "pub_core_libcproc.h"
 #include "pub_core_libcsignal.h"
+#include "pub_core_machine.h"      // VG_(get_SP)
 #include "pub_core_mallocfree.h"
 #include "pub_core_tooliface.h"
 #include "pub_core_options.h"
@@ -54,6 +55,10 @@
 #include "pub_core_signals.h"
 #include "pub_core_syscall.h"
 #include "pub_core_syswrap.h"
+#include "pub_tool_inner.h"
+#if defined(ENABLE_INNER_CLIENT_REQUEST)
+#include "valgrind.h"
+#endif
 
 #include "priv_types_n_macros.h"
 #include "priv_syswrap-generic.h"
@@ -123,6 +128,9 @@ static void run_a_thread_NORETURN ( Word tidW )
    VgSchedReturnCode src;
    Int               c;
    ThreadState*      tst;
+#ifdef ENABLE_INNER_CLIENT_REQUEST
+   Int               registered_vgstack_id;
+#endif
 
    VG_(debugLog)(1, "syswrap-linux", 
                     "run_a_thread_NORETURN(tid=%lld): pre-thread_wrapper\n",
@@ -131,6 +139,19 @@ static void run_a_thread_NORETURN ( Word tidW )
    tst = VG_(get_ThreadState)(tid);
    vg_assert(tst);
 
+   /* An thread has two stacks:
+      * the simulated stack (used by the synthetic cpu. Guest process
+        is using this stack).
+      * the valgrind stack (used by the real cpu. Valgrind code is running
+        on this stack).
+      When Valgrind runs as an inner, it must signals that its (real) stack
+      is the stack to use by the outer to e.g. do stacktraces.
+   */
+   INNER_REQUEST
+      (registered_vgstack_id 
+       = VALGRIND_STACK_REGISTER (tst->os_state.valgrind_stack_base,
+                                  tst->os_state.valgrind_stack_init_SP));
+   
    /* Run the thread all the way through. */
    src = thread_wrapper(tid);  
 
@@ -190,6 +211,8 @@ static void run_a_thread_NORETURN ( Word tidW )
       VG_(exit_thread)(tid);
       vg_assert(tst->status == VgTs_Zombie);
 
+      INNER_REQUEST (VALGRIND_STACK_DEREGISTER (registered_vgstack_id));
+
       /* We have to use this sequence to terminate the thread to
          prevent a subtle race.  If VG_(exit_thread)() had left the
          ThreadState as Empty, then it could have been reallocated,
@@ -200,13 +223,15 @@ static void run_a_thread_NORETURN ( Word tidW )
          assembler. */
 #if defined(VGP_x86_linux)
       asm volatile (
+         "pushl %%ebx\n"
          "movl	%1, %0\n"	/* set tst->status = VgTs_Empty */
          "movl	%2, %%eax\n"    /* set %eax = __NR_exit */
          "movl	%3, %%ebx\n"    /* set %ebx = tst->os_state.exitcode */
          "int	$0x80\n"	/* exit(tst->os_state.exitcode) */
+	 "popl %%ebx\n"
          : "=m" (tst->status)
          : "n" (VgTs_Empty), "n" (__NR_exit), "m" (tst->os_state.exitcode)
-         : "eax"/*, "ebx"*/ // EBX is a PIC register.
+         : "eax"
       );
 #elif defined(VGP_amd64_linux)
       asm volatile (
@@ -248,6 +273,17 @@ static void run_a_thread_NORETURN ( Word tidW )
          : "=m" (tst->status)
          : "d" (VgTs_Empty), "n" (__NR_exit), "m" (tst->os_state.exitcode)
          : "2"
+      );
+#elif defined(VGP_mips32_linux)
+      asm volatile (
+         "sw   %1, %0\n\t"     /* set tst->status = VgTs_Empty */
+         "li  	$2, %2\n\t"     /* set v0 = __NR_exit */
+         "lw   $4, %3\n\t"     /* set a0 = tst->os_state.exitcode */
+         "syscall\n\t"         /* exit(tst->os_state.exitcode) */
+         "nop"
+         : "=m" (tst->status)
+         : "r" (VgTs_Empty), "n" (__NR_exit), "m" (tst->os_state.exitcode)
+         : "cc", "memory" , "v0", "a0"
       );
 #else
 # error Unknown platform
@@ -320,6 +356,18 @@ void VG_(main_thread_wrapper_NORETURN)(ThreadId tid)
                     "entering VG_(main_thread_wrapper_NORETURN)\n");
 
    sp = ML_(allocstack)(tid);
+#if defined(ENABLE_INNER_CLIENT_REQUEST)
+   {
+      // we must register the main thread stack before the call
+      // to ML_(call_on_new_stack_0_1), otherwise the outer valgrind
+      // reports 'write error' on the non registered stack.
+      ThreadState* tst = VG_(get_ThreadState)(tid);
+      INNER_REQUEST
+         ((void) 
+          VALGRIND_STACK_REGISTER (tst->os_state.valgrind_stack_base,
+                                   tst->os_state.valgrind_stack_init_SP));
+   }
+#endif
 
 #if defined(VGP_ppc32_linux)
    /* make a stack frame */
@@ -380,7 +428,7 @@ SysRes ML_(do_fork_clone) ( ThreadId tid, UInt flags,
       VG_(clone) stuff */
 #if defined(VGP_x86_linux) \
     || defined(VGP_ppc32_linux) || defined(VGP_ppc64_linux) \
-    || defined(VGP_arm_linux)
+    || defined(VGP_arm_linux) || defined(VGP_mips32_linux)
    res = VG_(do_syscall5)( __NR_clone, flags, 
                            (UWord)NULL, (UWord)parent_tidptr, 
                            (UWord)NULL, (UWord)child_tidptr );
@@ -962,9 +1010,20 @@ PRE(sys_futex)
                     struct timespec *, utime, vki_u32 *, uaddr2);
       break;
    case VKI_FUTEX_WAIT_BITSET:
-      PRE_REG_READ6(long, "futex", 
-                    vki_u32 *, futex, int, op, int, val,
-                    struct timespec *, utime, int, dummy, int, val3);
+      /* Check that the address at least begins in client-accessible area. */
+      if (!VG_(am_is_valid_for_client)( ARG1, 1, VKI_PROT_READ )) {
+            SET_STATUS_Failure( VKI_EFAULT );
+            return;
+      }
+      if (*(vki_u32 *)ARG1 != ARG3) {
+         PRE_REG_READ5(long, "futex",
+                       vki_u32 *, futex, int, op, int, val,
+                       struct timespec *, utime, int, dummy);
+      } else {
+         PRE_REG_READ6(long, "futex",
+                       vki_u32 *, futex, int, op, int, val,
+                       struct timespec *, utime, int, dummy, int, val3);
+      }
       break;
    case VKI_FUTEX_WAKE_BITSET:
       PRE_REG_READ6(long, "futex", 
@@ -1285,30 +1344,74 @@ PRE(sys_prlimit64)
       PRE_MEM_READ( "rlimit64(new_rlim)", ARG3, sizeof(struct vki_rlimit64) );
    if (ARG4)
       PRE_MEM_WRITE( "rlimit64(old_rlim)", ARG4, sizeof(struct vki_rlimit64) );
+
+   if (ARG3 &&
+       ((struct vki_rlimit64 *)ARG3)->rlim_cur > ((struct vki_rlimit64 *)ARG3)->rlim_max) {
+      SET_STATUS_Failure( VKI_EINVAL );
+   }
+   else if (ARG1 == 0 || ARG1 == VG_(getpid)()) {
+      switch (ARG2) {
+      case VKI_RLIMIT_NOFILE:
+         SET_STATUS_Success( 0 );
+         if (ARG4) {
+            ((struct vki_rlimit64 *)ARG4)->rlim_cur = VG_(fd_soft_limit);
+            ((struct vki_rlimit64 *)ARG4)->rlim_max = VG_(fd_hard_limit);
+         }
+         if (ARG3) {
+            if (((struct vki_rlimit64 *)ARG3)->rlim_cur > VG_(fd_hard_limit) ||
+                ((struct vki_rlimit64 *)ARG3)->rlim_max != VG_(fd_hard_limit)) {
+               SET_STATUS_Failure( VKI_EPERM );
+            }
+            else {
+               VG_(fd_soft_limit) = ((struct vki_rlimit64 *)ARG3)->rlim_cur;
+            }
+         }
+         break;
+
+      case VKI_RLIMIT_DATA:
+         SET_STATUS_Success( 0 );
+         if (ARG4) {
+            ((struct vki_rlimit64 *)ARG4)->rlim_cur = VG_(client_rlimit_data).rlim_cur;
+            ((struct vki_rlimit64 *)ARG4)->rlim_max = VG_(client_rlimit_data).rlim_max;
+         }
+         if (ARG3) {
+            if (((struct vki_rlimit64 *)ARG3)->rlim_cur > VG_(client_rlimit_data).rlim_max ||
+                ((struct vki_rlimit64 *)ARG3)->rlim_max > VG_(client_rlimit_data).rlim_max) {
+               SET_STATUS_Failure( VKI_EPERM );
+            }
+            else {
+               VG_(client_rlimit_data).rlim_cur = ((struct vki_rlimit64 *)ARG3)->rlim_cur;
+               VG_(client_rlimit_data).rlim_max = ((struct vki_rlimit64 *)ARG3)->rlim_max;
+            }
+         }
+         break;
+
+      case VKI_RLIMIT_STACK:
+         SET_STATUS_Success( 0 );
+         if (ARG4) {
+            ((struct vki_rlimit64 *)ARG4)->rlim_cur = VG_(client_rlimit_stack).rlim_cur;
+            ((struct vki_rlimit64 *)ARG4)->rlim_max = VG_(client_rlimit_stack).rlim_max;
+         }
+         if (ARG3) {
+            if (((struct vki_rlimit64 *)ARG3)->rlim_cur > VG_(client_rlimit_stack).rlim_max ||
+                ((struct vki_rlimit64 *)ARG3)->rlim_max > VG_(client_rlimit_stack).rlim_max) {
+               SET_STATUS_Failure( VKI_EPERM );
+            }
+            else {
+               VG_(threads)[tid].client_stack_szB = ((struct vki_rlimit64 *)ARG3)->rlim_cur;
+               VG_(client_rlimit_stack).rlim_cur = ((struct vki_rlimit64 *)ARG3)->rlim_cur;
+               VG_(client_rlimit_stack).rlim_max = ((struct vki_rlimit64 *)ARG3)->rlim_max;
+           }
+         }
+         break;
+      }
+   }
 }
 
 POST(sys_prlimit64)
 {
-   if (ARG4) {
+   if (ARG4)
       POST_MEM_WRITE( ARG4, sizeof(struct vki_rlimit64) );
-
-      switch (ARG2) {
-      case VKI_RLIMIT_NOFILE:
-         ((struct vki_rlimit64 *)ARG4)->rlim_cur = VG_(fd_soft_limit);
-         ((struct vki_rlimit64 *)ARG4)->rlim_max = VG_(fd_hard_limit);
-         break;
-
-      case VKI_RLIMIT_DATA:
-         ((struct vki_rlimit64 *)ARG4)->rlim_cur = VG_(client_rlimit_data).rlim_cur;
-         ((struct vki_rlimit64 *)ARG4)->rlim_max = VG_(client_rlimit_data).rlim_max;
-         break;
-
-      case VKI_RLIMIT_STACK:
-         ((struct vki_rlimit64 *)ARG4)->rlim_cur = VG_(client_rlimit_stack).rlim_cur;
-         ((struct vki_rlimit64 *)ARG4)->rlim_max = VG_(client_rlimit_stack).rlim_max;
-         break;
-      }
-   }
 }
 
 /* ---------------------------------------------------------------------
@@ -2705,6 +2808,24 @@ POST(sys_getcpu)
       POST_MEM_WRITE( ARG3, sizeof(struct vki_getcpu_cache) );
 }
 
+PRE(sys_move_pages)
+{
+   PRINT("sys_move_pages ( %ld, %ld, %#lx, %#lx, %#lx, %lx )",
+         ARG1,ARG2,ARG3,ARG4,ARG5,ARG6);
+   PRE_REG_READ6(int, "move_pages",
+                 vki_pid_t, pid, unsigned long, nr_pages, const void **, pages,
+                 const int *, nodes, int *, status, int, flags);
+   PRE_MEM_READ("move_pages(pages)", ARG3, ARG2 * sizeof(void *));
+   if (ARG4)
+      PRE_MEM_READ("move_pages(nodes)", ARG4, ARG2 * sizeof(int));
+   PRE_MEM_WRITE("move_pages(status)", ARG5, ARG2 * sizeof(int));
+}
+
+POST(sys_move_pages)
+{
+   POST_MEM_WRITE(ARG5, ARG2 * sizeof(int));
+}
+
 /* ---------------------------------------------------------------------
    utime wrapper
    ------------------------------------------------------------------ */
@@ -2773,7 +2894,8 @@ POST(sys_sigpending)
 // This wrapper is only suitable for 32-bit architectures.
 // (XXX: so how is it that PRE(sys_sigpending) above doesn't need
 // conditional compilation like this?)
-#if defined(VGP_x86_linux) || defined(VGP_ppc32_linux) || defined(VGP_arm_linux)
+#if defined(VGP_x86_linux) || defined(VGP_ppc32_linux) \
+    || defined(VGP_arm_linux) || defined(VGP_mips32_linux)
 PRE(sys_sigprocmask)
 {
    vki_old_sigset_t* set;
@@ -3472,6 +3594,139 @@ PRE(sys_pwritev)
 }
 
 /* ---------------------------------------------------------------------
+   process_vm_{read,write}v wrappers
+   ------------------------------------------------------------------ */
+
+PRE(sys_process_vm_readv)
+{
+   PRINT("sys_process_vm_readv ( %lu, %#lx, %lu, %#lx, %lu, %lu )",
+         ARG1, ARG2, ARG3, ARG4, ARG5, ARG6);
+   PRE_REG_READ6(ssize_t, "process_vm_readv",
+                 vki_pid_t, pid,
+                 const struct iovec *, lvec,
+                 unsigned long, liovcnt,
+                 const struct iovec *, rvec,
+                 unsigned long, riovcnt,
+                 unsigned long, flags);
+   PRE_MEM_READ( "process_vm_readv(lvec)",
+                 ARG2, ARG3 * sizeof(struct vki_iovec) );
+   PRE_MEM_READ( "process_vm_readv(rvec)",
+                 ARG4, ARG5 * sizeof(struct vki_iovec) );
+   if (ARG2 != 0) {
+      /* TODO: Don't do any of the following if lvec is invalid */
+      const struct vki_iovec *vec = (const struct vki_iovec *)ARG2;
+      UInt i;
+      for (i = 0; i < ARG3; i++)
+         PRE_MEM_WRITE( "process_vm_readv(lvec[...])",
+                        (Addr)vec[i].iov_base, vec[i].iov_len );
+   }
+}
+
+POST(sys_process_vm_readv)
+{
+   const struct vki_iovec *vec = (const struct vki_iovec *)ARG2;
+   UInt remains = RES;
+   UInt i;
+   for (i = 0; i < ARG3; i++) {
+      UInt nReadThisBuf = vec[i].iov_len <= remains ?
+                          vec[i].iov_len : remains;
+      POST_MEM_WRITE( (Addr)vec[i].iov_base, nReadThisBuf );
+      remains -= nReadThisBuf;
+   }
+}
+
+PRE(sys_process_vm_writev)
+{
+   PRINT("sys_process_vm_writev ( %lu, %#lx, %lu, %#lx, %lu, %lu )",
+         ARG1, ARG2, ARG3, ARG4, ARG5, ARG6);
+   PRE_REG_READ6(ssize_t, "process_vm_writev",
+                 vki_pid_t, pid,
+                 const struct iovec *, lvec,
+                 unsigned long, liovcnt,
+                 const struct iovec *, rvec,
+                 unsigned long, riovcnt,
+                 unsigned long, flags);
+   PRE_MEM_READ( "process_vm_writev(lvec)",
+                 ARG2, ARG3 * sizeof(struct vki_iovec) );
+   PRE_MEM_READ( "process_vm_writev(rvec)",
+                 ARG4, ARG5 * sizeof(struct vki_iovec) );
+   if (ARG2 != 0) {
+      /* TODO: Don't do any of the following if lvec is invalid */
+      const struct vki_iovec *vec = (const struct vki_iovec *)ARG2;
+      UInt i;
+      for (i = 0; i < ARG3; i++)
+         PRE_MEM_READ( "process_vm_writev(lvec[...])",
+                       (Addr)vec[i].iov_base, vec[i].iov_len );
+   }
+}
+
+/* ---------------------------------------------------------------------
+   {send,recv}mmsg wrappers
+   ------------------------------------------------------------------ */
+
+PRE(sys_sendmmsg)
+{
+   struct vki_mmsghdr *mmsg = (struct vki_mmsghdr *)ARG2;
+   Char name[32];
+   UInt i;
+   *flags |= SfMayBlock;
+   PRINT("sys_sendmmsg ( %ld, %#lx, %ld, %ld )",ARG1,ARG2,ARG3,ARG4);
+   PRE_REG_READ4(long, "sendmmsg",
+                 int, s, const struct mmsghdr *, mmsg, int, vlen, int, flags);
+   for (i = 0; i < ARG3; i++) {
+      VG_(sprintf)(name, "mmsg[%u].msg_hdr", i);
+      ML_(generic_PRE_sys_sendmsg)(tid, name, &mmsg[i].msg_hdr);
+      VG_(sprintf)(name, "sendmmsg(mmsg[%u].msg_len)", i);
+      PRE_MEM_WRITE( name, (Addr)&mmsg[i].msg_len, sizeof(mmsg[i].msg_len) );
+   }
+}
+
+POST(sys_sendmmsg)
+{
+   if (RES > 0) {
+      struct vki_mmsghdr *mmsg = (struct vki_mmsghdr *)ARG2;
+      UInt i;
+      for (i = 0; i < RES; i++) {
+         POST_MEM_WRITE( (Addr)&mmsg[i].msg_len, sizeof(mmsg[i].msg_len) );
+      }
+   }
+}
+
+PRE(sys_recvmmsg)
+{
+   struct vki_mmsghdr *mmsg = (struct vki_mmsghdr *)ARG2;
+   Char name[32];
+   UInt i;
+   *flags |= SfMayBlock;
+   PRINT("sys_recvmmsg ( %ld, %#lx, %ld, %ld, %#lx )",ARG1,ARG2,ARG3,ARG4,ARG5);
+   PRE_REG_READ5(long, "recvmmsg",
+                 int, s, struct mmsghdr *, mmsg, int, vlen,
+                 int, flags, struct timespec *, timeout);
+   for (i = 0; i < ARG3; i++) {
+      VG_(sprintf)(name, "mmsg[%u].msg_hdr", i);
+      ML_(generic_PRE_sys_recvmsg)(tid, name, &mmsg[i].msg_hdr);
+      VG_(sprintf)(name, "recvmmsg(mmsg[%u].msg_len)", i);
+      PRE_MEM_WRITE( name, (Addr)&mmsg[i].msg_len, sizeof(mmsg[i].msg_len) );
+   }
+   if (ARG5)
+      PRE_MEM_READ( "recvmmsg(timeout)", ARG5, sizeof(struct vki_timespec) );
+}
+
+POST(sys_recvmmsg)
+{
+   if (RES > 0) {
+      struct vki_mmsghdr *mmsg = (struct vki_mmsghdr *)ARG2;
+      Char name[32];
+      UInt i;
+      for (i = 0; i < RES; i++) {
+         VG_(sprintf)(name, "mmsg[%u].msg_hdr", i);
+         ML_(generic_POST_sys_recvmsg)(tid, name, &mmsg[i].msg_hdr, mmsg[i].msg_len);
+         POST_MEM_WRITE( (Addr)&mmsg[i].msg_len, sizeof(mmsg[i].msg_len) );
+      }
+   }
+}
+
+/* ---------------------------------------------------------------------
    key retention service wrappers
    ------------------------------------------------------------------ */
 
@@ -3685,7 +3940,7 @@ PRE(sys_splice)
    *flags |= SfMayBlock;
    PRINT("sys_splice ( %ld, %#lx, %ld, %#lx, %ld, %ld )",
          ARG1,ARG2,ARG3,ARG4,ARG5,ARG6);
-   PRE_REG_READ6(int32_t, "splice",
+   PRE_REG_READ6(vki_ssize_t, "splice",
                  int, fd_in, vki_loff_t *, off_in,
                  int, fd_out, vki_loff_t *, off_out,
                  vki_size_t, len, unsigned int, flags);
@@ -3697,6 +3952,64 @@ PRE(sys_splice)
          PRE_MEM_READ( "splice(off_in)", ARG2, sizeof(vki_loff_t));
       if (ARG4 != 0)
          PRE_MEM_READ( "splice(off_out)", ARG4, sizeof(vki_loff_t));
+   }
+}
+
+PRE(sys_tee)
+{
+   *flags |= SfMayBlock;
+   PRINT("sys_tree ( %ld, %ld, %ld, %ld )", ARG1,ARG2,ARG3,ARG4);
+   PRE_REG_READ4(vki_ssize_t, "tee",
+                 int, fd_in, int, fd_out,
+                 vki_size_t, len, unsigned int, flags);
+   if (!ML_(fd_allowed)(ARG1, "tee(fd_in)", tid, False) ||
+       !ML_(fd_allowed)(ARG2, "tee(fd_out)", tid, False)) {
+      SET_STATUS_Failure( VKI_EBADF );
+   }
+}
+
+PRE(sys_vmsplice)
+{
+   Int fdfl;
+   *flags |= SfMayBlock;
+   PRINT("sys_vmsplice ( %ld, %#lx, %ld, %ld )",
+         ARG1,ARG2,ARG3,ARG4);
+   PRE_REG_READ4(vki_ssize_t, "splice",
+                 int, fd, struct vki_iovec *, iov,
+                 unsigned long, nr_segs, unsigned int, flags);
+   if (!ML_(fd_allowed)(ARG1, "vmsplice(fd)", tid, False)) {
+      SET_STATUS_Failure( VKI_EBADF );
+   } else if ((fdfl = VG_(fcntl)(ARG1, VKI_F_GETFL, 0)) < 0) {
+      SET_STATUS_Failure( VKI_EBADF );
+   } else {
+      const struct vki_iovec *iov;
+      PRE_MEM_READ( "vmsplice(iov)", ARG2, sizeof(struct vki_iovec) * ARG3 );
+      for (iov = (struct vki_iovec *)ARG2;
+           iov < (struct vki_iovec *)ARG2 + ARG3; iov++) 
+      {
+         if ((fdfl & (VKI_O_WRONLY|VKI_O_RDWR)) != 0)
+            PRE_MEM_READ( "vmsplice(iov[...])", (Addr)iov->iov_base, iov->iov_len );
+         else if ((fdfl & VKI_O_RDONLY) != 0)
+            PRE_MEM_WRITE( "vmsplice(iov[...])", (Addr)iov->iov_base, iov->iov_len );
+      }
+   }
+}
+
+POST(sys_vmsplice)
+{
+   vg_assert(SUCCESS);
+   if (RES > 0) {
+      Int fdfl = VG_(fcntl)(ARG1, VKI_F_GETFL, 0);
+      vg_assert(fdfl >= 0);
+      if ((fdfl & VKI_O_RDONLY) != 0)
+      {
+         const struct vki_iovec *iov;
+         for (iov = (struct vki_iovec *)ARG2;
+              iov < (struct vki_iovec *)ARG2 + ARG3; iov++) 
+         {
+            POST_MEM_WRITE( (Addr)iov->iov_base, iov->iov_len );
+         }
+      }
    }
 }
 
@@ -3790,6 +4103,22 @@ PRE(sys_fcntl)
                     struct flock64 *, lock);
       break;
 
+   case VKI_F_SETOWN_EX:
+      PRINT("sys_fcntl[F_SETOWN_EX] ( %ld, %ld, %ld )", ARG1,ARG2,ARG3);
+      PRE_REG_READ3(long, "fcntl",
+                    unsigned int, fd, unsigned int, cmd,
+                    struct vki_f_owner_ex *, arg);
+      PRE_MEM_READ("fcntl(F_SETOWN_EX)", ARG3, sizeof(struct vki_f_owner_ex));
+      break;
+
+   case VKI_F_GETOWN_EX:
+      PRINT("sys_fcntl[F_GETOWN_EX] ( %ld, %ld, %ld )", ARG1,ARG2,ARG3);
+      PRE_REG_READ3(long, "fcntl",
+                    unsigned int, fd, unsigned int, cmd,
+                    struct vki_f_owner_ex *, arg);
+      PRE_MEM_WRITE("fcntl(F_GETOWN_EX)", ARG3, sizeof(struct vki_f_owner_ex));
+      break;
+
    default:
       PRINT("sys_fcntl[UNKNOWN] ( %ld, %ld, %ld )", ARG1,ARG2,ARG3);
       I_die_here;
@@ -3824,6 +4153,8 @@ POST(sys_fcntl)
          if (VG_(clo_track_fds))
             ML_(record_fd_open_named)(tid, RES);
       }
+   } else if (ARG2 == VKI_F_GETOWN_EX) {
+      POST_MEM_WRITE(ARG3, sizeof(struct vki_f_owner_ex));
    }
 }
 
@@ -3869,6 +4200,22 @@ PRE(sys_fcntl64)
                     unsigned int, fd, unsigned int, cmd,
                     struct flock64 *, lock);
       break;
+
+   case VKI_F_SETOWN_EX:
+      PRINT("sys_fcntl[F_SETOWN_EX] ( %ld, %ld, %ld )", ARG1,ARG2,ARG3);
+      PRE_REG_READ3(long, "fcntl",
+                    unsigned int, fd, unsigned int, cmd,
+                    struct vki_f_owner_ex *, arg);
+      PRE_MEM_READ("fcntl(F_SETOWN_EX)", ARG3, sizeof(struct vki_f_owner_ex));
+      break;
+
+   case VKI_F_GETOWN_EX:
+      PRINT("sys_fcntl[F_GETOWN_EX] ( %ld, %ld, %ld )", ARG1,ARG2,ARG3);
+      PRE_REG_READ3(long, "fcntl",
+                    unsigned int, fd, unsigned int, cmd,
+                    struct vki_f_owner_ex *, arg);
+      PRE_MEM_WRITE("fcntl(F_GETOWN_EX)", ARG3, sizeof(struct vki_f_owner_ex));
+      break;
    }
    
 #  if defined(VGP_x86_linux)
@@ -3899,6 +4246,8 @@ POST(sys_fcntl64)
          if (VG_(clo_track_fds))
             ML_(record_fd_open_named)(tid, RES);
       }
+   } else if (ARG2 == VKI_F_GETOWN_EX) {
+      POST_MEM_WRITE(ARG3, sizeof(struct vki_f_owner_ex));
    }
 }
 
@@ -3929,10 +4278,39 @@ PRE(sys_ioctl)
    case VKI_SNDRV_TIMER_IOCTL_STOP:
    case VKI_SNDRV_TIMER_IOCTL_CONTINUE:
    case VKI_SNDRV_TIMER_IOCTL_PAUSE:
+
+      /* SCSI no operand */
+   case VKI_SCSI_IOCTL_DOORLOCK:
+   case VKI_SCSI_IOCTL_DOORUNLOCK:
+      
+   /* KVM ioctls that dont check for a numeric value as parameter */
+   case VKI_KVM_S390_ENABLE_SIE:
+   case VKI_KVM_S390_INITIAL_RESET:
+
+   /* User input device creation */
+   case VKI_UI_DEV_CREATE:
+   case VKI_UI_DEV_DESTROY:
       PRINT("sys_ioctl ( %ld, 0x%lx )",ARG1,ARG2);
       PRE_REG_READ2(long, "ioctl",
                     unsigned int, fd, unsigned int, request);
       return;
+
+#  if defined(ANDROID_HARDWARE_nexus_10)
+   /* undocumented ioctl ids noted on the device */
+   case 0x4d07:
+   case 0x6101:
+   case 0xfa01: /* used by NFC */
+   case 0xfa05: /* used by NFC */
+      return;
+#  elif defined(ANDROID_HARDWARE_nexus_7)
+   /* undocumented ioctl ids noted on the device */
+   case 0x4e04:
+   case 0x7231:
+   case 0x4004e901: /* used by NFC */
+      return;
+#  elif defined(ANDROID_HARDWARE_nexus_4)
+
+#  endif
 
    default:
       PRINT("sys_ioctl ( %ld, 0x%lx, 0x%lx )",ARG1,ARG2,ARG3);
@@ -3940,6 +4318,18 @@ PRE(sys_ioctl)
                     unsigned int, fd, unsigned int, request, unsigned long, arg);
       break;
    }
+
+
+#  if defined(ANDROID_HARDWARE_nexus_10)
+
+   /* undocumented ioctl ids noted on the device */
+   if (ARG2 >= 0xc0108000 && ARG2 <= 0xc1e8820b && ARG3 != 0) {
+       int size = (ARG2 >> 16) & 0x3fff;
+       PRE_MEM_WRITE("ioctl(GL_UNDOCUMENTED)", (Addr)ARG3,  size);
+       return;
+   }
+
+#  endif
 
    // We now handle those that do look at ARG3 (and unknown ones fall into
    // this category).  Nb: some of these may well belong in the
@@ -4203,6 +4593,13 @@ PRE(sys_ioctl)
                      (Addr)&((struct vki_ifreq *)ARG3)->ifr_map,
                      sizeof(((struct vki_ifreq *)ARG3)->ifr_map) );
       break;
+   case VKI_SIOCSHWTSTAMP:       /* Set hardware time stamping   */
+      PRE_MEM_RASCIIZ( "ioctl(SIOCSHWTSTAMP)",
+                     (Addr)((struct vki_ifreq *)ARG3)->vki_ifr_name );
+      PRE_MEM_READ( "ioctl(SIOCSHWTSTAMP)",
+                     (Addr)((struct vki_ifreq *)ARG3)->vki_ifr_data,
+                     sizeof(struct vki_hwtstamp_config) );
+      break;
    case VKI_SIOCSIFTXQLEN:       /* Set the tx queue length      */
       PRE_MEM_RASCIIZ( "ioctl(SIOCSIFTXQLEN)",
                      (Addr)((struct vki_ifreq *)ARG3)->vki_ifr_name );
@@ -4414,6 +4811,14 @@ PRE(sys_ioctl)
                      VKI_SIZEOF_STRUCT_HD_DRIVEID );
       break;
 
+      /* SCSI */
+   case VKI_SCSI_IOCTL_GET_IDLUN: /* 0x5382 */
+      PRE_MEM_WRITE( "ioctl(SCSI_IOCTL_GET_IDLUN)", ARG3, sizeof(struct vki_scsi_idlun));
+      break;
+   case VKI_SCSI_IOCTL_GET_BUS_NUMBER: /* 0x5386 */
+      PRE_MEM_WRITE( "ioctl(SCSI_IOCTL_GET_BUS_NUMBER)", ARG3, sizeof(int));
+      break;
+
       /* CD ROM stuff (??)  */
    case VKI_CDROM_GET_MCN:
       PRE_MEM_READ( "ioctl(CDROM_GET_MCN)", ARG3,
@@ -4476,6 +4881,8 @@ PRE(sys_ioctl)
 	 for readability).  JRS 20021117 */
    case VKI_CDROM_DRIVE_STATUS: /* 0x5326 */
    case VKI_CDROM_CLEAR_OPTIONS: /* 0x5321 */
+      break;
+   case VKI_CDROM_GET_CAPABILITY: /* 0x5331 */
       break;
 
    case VKI_FIGETBSZ:
@@ -4938,6 +5345,21 @@ PRE(sys_ioctl)
    case VKI_I2C_FUNCS:
       PRE_MEM_WRITE( "ioctl(I2C_FUNCS)", ARG3, sizeof(unsigned long) );
       break;
+   case VKI_I2C_RDWR:
+      if ( ARG3 ) {
+          struct vki_i2c_rdwr_ioctl_data *vkui = (struct vki_i2c_rdwr_ioctl_data *)ARG3;
+          UInt i;
+          PRE_MEM_READ("ioctl(I2C_RDWR)", (Addr)vkui, sizeof(struct vki_i2c_rdwr_ioctl_data));
+          for (i=0; i < vkui->nmsgs; i++) {
+              struct vki_i2c_msg *msg = vkui->msgs + i;
+              PRE_MEM_READ("ioctl(I2C_RDWR).msgs", (Addr)msg, sizeof(struct vki_i2c_msg));
+              if (msg->flags & VKI_I2C_M_RD) 
+                  PRE_MEM_WRITE("ioctl(I2C_RDWR).msgs.buf", (Addr)msg->buf, msg->len);
+              else
+                  PRE_MEM_READ("ioctl(I2C_RDWR).msgs.buf", (Addr)msg->buf, msg->len);
+          }
+      }
+      break;
 
       /* Wireless extensions ioctls */
    case VKI_SIOCSIWCOMMIT:
@@ -5032,7 +5454,21 @@ PRE(sys_ioctl)
       }
       break;
 
-#  if defined(VGPV_arm_linux_android)
+  /* User input device creation */
+  case VKI_UI_SET_EVBIT:
+  case VKI_UI_SET_KEYBIT:
+  case VKI_UI_SET_RELBIT:
+  case VKI_UI_SET_ABSBIT:
+  case VKI_UI_SET_MSCBIT:
+  case VKI_UI_SET_LEDBIT:
+  case VKI_UI_SET_SNDBIT:
+  case VKI_UI_SET_FFBIT:
+  case VKI_UI_SET_SWBIT:
+  case VKI_UI_SET_PROPBIT:
+      /* These just take an int by value */
+      break;
+
+#  if defined(VGPV_arm_linux_android) || defined(VGPV_x86_linux_android)
    /* ashmem */
    case VKI_ASHMEM_GET_SIZE:
    case VKI_ASHMEM_SET_SIZE:
@@ -5098,7 +5534,38 @@ PRE(sys_ioctl)
            PRE_FIELD_WRITE("ioctl(BINDER_VERSION)", bv->protocol_version);
        }
        break;
-#  endif /* defined(VGPV_arm_linux_android) */
+
+#  endif /* defined(VGPV_*_linux_android) */
+
+   case VKI_HCIINQUIRY:
+      if (ARG3) {
+         struct vki_hci_inquiry_req* ir = (struct vki_hci_inquiry_req*)ARG3;
+         PRE_MEM_READ("ioctl(HCIINQUIRY)",
+                      (Addr)ARG3, sizeof(struct vki_hci_inquiry_req));
+         PRE_MEM_WRITE("ioctl(HCIINQUIRY)",
+                       (Addr)ARG3 + sizeof(struct vki_hci_inquiry_req),
+                       ir->num_rsp * sizeof(struct vki_inquiry_info));
+      }
+      break;
+      
+   /* KVM ioctls that check for a numeric value as parameter */
+   case VKI_KVM_GET_API_VERSION:
+   case VKI_KVM_CREATE_VM:
+   case VKI_KVM_GET_VCPU_MMAP_SIZE:
+   case VKI_KVM_CHECK_EXTENSION:
+   case VKI_KVM_CREATE_VCPU:
+   case VKI_KVM_RUN:
+      break;
+
+   case VKI_EVIOCSSUSPENDBLOCK:
+      break;
+
+   case VKI_MEDIA_IOC_DEVICE_INFO:
+      if (ARG3) {
+         PRE_MEM_WRITE("ioctl(MEDIA_IOC_DEVICE_INFO)", ARG3,
+                       sizeof(struct vki_media_device_info));
+      }
+      break;
 
    default:
       /* EVIOC* are variable length and return size written on success */
@@ -5138,7 +5605,7 @@ POST(sys_ioctl)
 
    /* --- BEGIN special IOCTL handlers for specific Android hardware --- */
 
-#  if defined(VGPV_arm_linux_android)
+#  if defined(VGPV_arm_linux_android) || defined(VGPV_x86_linux_android)
 
 #  if defined(ANDROID_HARDWARE_nexus_s)
 
@@ -5173,11 +5640,13 @@ POST(sys_ioctl)
       */
       if (1) {
          /* blunt-instrument approach */
-         if (0) VG_(printf)("QQQQQQQQQQ c01c quick hack actioned (%08lx, %08lx)\n", ARG2, ARG3);
+         if (0) VG_(printf)("QQQQQQQQQQ c01c quick hack actioned"
+                            " (%08lx, %08lx)\n", ARG2, ARG3);
          POST_MEM_WRITE(ARG3, 256);
       } else {
          /* be a bit more sophisticated */
-         if (0) VG_(printf)("QQQQQQQQQQ c01c quick hack actioned (%08lx, %08lx) (fancy)\n", ARG2, ARG3);
+         if (0) VG_(printf)("QQQQQQQQQQ c01c quick hack actioned"
+                            " (%08lx, %08lx) (fancy)\n", ARG2, ARG3);
          POST_MEM_WRITE(ARG3, 28);
          UInt* word = (UInt*)ARG3;
          if (word && word[2] && word[3] < 0x200/*stay sane*/)
@@ -5197,6 +5666,26 @@ POST(sys_ioctl)
    }
    /* END Nexus S specific ioctls */
 
+
+#  elif defined(ANDROID_HARDWARE_generic) || defined(ANDROID_HARDWARE_emulator)
+
+   /* BEGIN generic/emulator specific ioctls */
+   /* currently none are known */
+   /* END generic/emulator specific ioctls */
+
+
+#  elif defined(ANDROID_HARDWARE_nexus_10)
+
+   /* undocumented ioctl ids noted on the device */
+   if (ARG2 >= 0xc0108000 && ARG2 <= 0xc1e8820b && ARG3 != 0) {
+      int size = (ARG2 >> 16) & 0x3fff;
+      POST_MEM_WRITE(ARG3, size);
+   }
+
+#  elif defined(ANDROID_HARDWARE_nexus_7)
+
+#  elif defined(ANDROID_HARDWARE_nexus_4)
+
 #  else /* no ANDROID_HARDWARE_anything defined */
 
 #   warning ""
@@ -5205,6 +5694,11 @@ POST(sys_ioctl)
 #   warning "building for.  Currently known values are"
 #   warning ""
 #   warning "   ANDROID_HARDWARE_nexus_s       Samsung Nexus S"
+#   warning "   ANDROID_HARDWARE_nexus_10      Samsung Nexus 10"
+#   warning "   ANDROID_HARDWARE_nexus_7       ASUS Nexus 7"
+#   warning "   ANDROID_HARDWARE_nexus_4       LG Nexus 4"
+#   warning "   ANDROID_HARDWARE_generic       Generic device (eg, Pandaboard)"
+#   warning "   ANDROID_HARDWARE_emulator      x86 or arm emulator"
 #   warning ""
 #   warning "Make sure you exactly follow the steps in README.android."
 #   warning ""
@@ -5212,7 +5706,7 @@ POST(sys_ioctl)
 
 #  endif /* cases for ANDROID_HARDWARE_blah */
 
-#  endif /* defined(VGPV_arm_linux_android) */
+#  endif /* defined(VGPV_*_linux_android) */
 
    /* --- END special IOCTL handlers for specific Android hardware --- */
 
@@ -5407,6 +5901,7 @@ POST(sys_ioctl)
                     
    case VKI_SIOCSIFFLAGS:        /* set flags                    */
    case VKI_SIOCSIFMAP:          /* Set device parameters        */
+   case VKI_SIOCSHWTSTAMP:       /* Set hardware time stamping   */
    case VKI_SIOCSIFTXQLEN:       /* Set the tx queue length      */
    case VKI_SIOCSIFDSTADDR:      /* set remote PA address        */
    case VKI_SIOCSIFBRDADDR:      /* set broadcast PA address     */
@@ -5504,6 +5999,10 @@ POST(sys_ioctl)
    case VKI_SNDRV_TIMER_IOCTL_STOP:
    case VKI_SNDRV_TIMER_IOCTL_CONTINUE:
    case VKI_SNDRV_TIMER_IOCTL_PAUSE:
+
+      /* SCSI no operand */
+   case VKI_SCSI_IOCTL_DOORLOCK:
+   case VKI_SCSI_IOCTL_DOORUNLOCK:
       break;
 
       /* Real Time Clock (/dev/rtc) ioctls */
@@ -5570,6 +6069,14 @@ POST(sys_ioctl)
       POST_MEM_WRITE(ARG3, VKI_SIZEOF_STRUCT_HD_DRIVEID );
       break;
 
+      /* SCSI */
+   case VKI_SCSI_IOCTL_GET_IDLUN: /* 0x5382 */
+      POST_MEM_WRITE(ARG3, sizeof(struct vki_scsi_idlun));
+      break;
+   case VKI_SCSI_IOCTL_GET_BUS_NUMBER: /* 0x5386 */
+      POST_MEM_WRITE(ARG3, sizeof(int));
+      break;
+
       /* CD ROM stuff (??)  */
    case VKI_CDROMSUBCHNL:
       POST_MEM_WRITE(ARG3, sizeof(struct vki_cdrom_subchnl));
@@ -5602,6 +6109,8 @@ POST(sys_ioctl)
 	 for readability).  JRS 20021117 */
    case VKI_CDROM_DRIVE_STATUS: /* 0x5326 */
    case VKI_CDROM_CLEAR_OPTIONS: /* 0x5321 */
+      break;
+   case VKI_CDROM_GET_CAPABILITY: /* 0x5331 */
       break;
 
    case VKI_FIGETBSZ:
@@ -5911,6 +6420,17 @@ POST(sys_ioctl)
    case VKI_I2C_FUNCS:
       POST_MEM_WRITE( ARG3, sizeof(unsigned long) );
       break;
+   case VKI_I2C_RDWR:
+      if ( ARG3 ) {
+          struct vki_i2c_rdwr_ioctl_data *vkui = (struct vki_i2c_rdwr_ioctl_data *)ARG3;
+          UInt i;
+          for (i=0; i < vkui->nmsgs; i++) {
+              struct vki_i2c_msg *msg = vkui->msgs + i;
+              if (msg->flags & VKI_I2C_M_RD) 
+                  POST_MEM_WRITE((Addr)msg->buf, msg->len);
+          }
+      }
+      break;
 
       /* Wireless extensions ioctls */
    case VKI_SIOCSIWCOMMIT:
@@ -5997,7 +6517,7 @@ POST(sys_ioctl)
       }
       break;
 
-#  if defined(VGPV_arm_linux_android)
+#  if defined(VGPV_arm_linux_android) || defined(VGPV_x86_linux_android)
    /* ashmem */
    case VKI_ASHMEM_GET_SIZE:
    case VKI_ASHMEM_SET_SIZE:
@@ -6038,7 +6558,36 @@ POST(sys_ioctl)
            POST_FIELD_WRITE(bv->protocol_version);
        }
        break;
-#  endif /* defined(VGPV_arm_linux_android) */
+#  endif /* defined(VGPV_*_linux_android) */
+
+   case VKI_HCIINQUIRY:
+      if (ARG3) {
+        struct vki_hci_inquiry_req* ir = (struct vki_hci_inquiry_req*)ARG3;
+        POST_MEM_WRITE((Addr)ARG3 + sizeof(struct vki_hci_inquiry_req),
+                       ir->num_rsp * sizeof(struct vki_inquiry_info));
+      }
+      break;
+
+   /* KVM ioctls that only write the system call return value */
+   case VKI_KVM_GET_API_VERSION:
+   case VKI_KVM_CREATE_VM:
+   case VKI_KVM_CHECK_EXTENSION:
+   case VKI_KVM_GET_VCPU_MMAP_SIZE:
+   case VKI_KVM_S390_ENABLE_SIE:
+   case VKI_KVM_CREATE_VCPU:
+   case VKI_KVM_RUN:
+   case VKI_KVM_S390_INITIAL_RESET:
+      break;
+
+   case VKI_EVIOCSSUSPENDBLOCK:
+      POST_MEM_WRITE( ARG3, sizeof(int) );
+      break;
+
+   case VKI_MEDIA_IOC_DEVICE_INFO:
+      if (ARG3) {
+         POST_MEM_WRITE(ARG3, sizeof(struct vki_media_device_info));
+      }
+      break;
 
    default:
       /* EVIOC* are variable length and return size written on success */

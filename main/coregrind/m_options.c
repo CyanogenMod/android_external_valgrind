@@ -7,7 +7,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2000-2011 Nicholas Nethercote
+   Copyright (C) 2000-2012 Nicholas Nethercote
       njn@valgrind.org
 
    This program is free software; you can redistribute it and/or
@@ -47,7 +47,11 @@ VexControl VG_(clo_vex_control);
 Bool   VG_(clo_error_limit)    = True;
 Int    VG_(clo_error_exitcode) = 0;
 
+#if defined(VGPV_arm_linux_android) || defined(VGPV_x86_linux_android)
+VgVgdb VG_(clo_vgdb)           = Vg_VgdbNo; // currently disabled on Android
+#else
 VgVgdb VG_(clo_vgdb)           = Vg_VgdbYes;
+#endif
 Int    VG_(clo_vgdb_poll)      = 5000; 
 Int    VG_(clo_vgdb_error)     = 999999999;
 HChar* VG_(clo_vgdb_prefix)    = NULL;
@@ -62,6 +66,7 @@ Bool   VG_(clo_stats)          = False;
 Bool   VG_(clo_xml)            = False;
 HChar* VG_(clo_xml_user_comment) = NULL;
 Bool   VG_(clo_demangle)       = True;
+HChar* VG_(clo_soname_synonyms)    = NULL;
 Bool   VG_(clo_trace_children) = False;
 HChar* VG_(clo_trace_children_skip) = NULL;
 HChar* VG_(clo_trace_children_skip_by_arg) = NULL;
@@ -76,7 +81,8 @@ Int    VG_(clo_n_fullpath_after) = 0;
 Char*  VG_(clo_fullpath_after)[VG_CLO_MAX_FULLPATH_AFTER];
 UChar  VG_(clo_trace_flags)    = 0; // 00000000b
 UChar  VG_(clo_profile_flags)  = 0; // 00000000b
-Int    VG_(clo_trace_notbelow) = 999999999;
+Int    VG_(clo_trace_notbelow) = -1;  // unspecified
+Int    VG_(clo_trace_notabove) = -1;  // unspecified
 Bool   VG_(clo_trace_syscalls) = False;
 Bool   VG_(clo_trace_signals)  = False;
 Bool   VG_(clo_trace_symtab)   = False;
@@ -86,8 +92,14 @@ Bool   VG_(clo_debug_dump_syms) = False;
 Bool   VG_(clo_debug_dump_line) = False;
 Bool   VG_(clo_debug_dump_frames) = False;
 Bool   VG_(clo_trace_redir)    = False;
+enum FairSchedType
+       VG_(clo_fair_sched)     = disable_fair_sched;
 Bool   VG_(clo_trace_sched)    = False;
 Bool   VG_(clo_profile_heap)   = False;
+Int    VG_(clo_core_redzone_size) = CORE_REDZONE_DEFAULT_SZB;
+// A value != -1 overrides the tool-specific value
+// VG_(needs_malloc_replacement).tool_client_redzone_szB
+Int    VG_(clo_redzone_size)   = -1;
 Int    VG_(clo_dump_error)     = 0;
 Int    VG_(clo_backtrace_size) = 12;
 Char*  VG_(clo_sim_hints)      = NULL;
@@ -106,9 +118,6 @@ Bool   VG_(clo_wait_for_gdb)   = False;
 VgSmc  VG_(clo_smc_check)      = Vg_SmcStack;
 HChar* VG_(clo_kernel_variant) = NULL;
 Bool   VG_(clo_dsymutil)       = False;
-Char*  VG_(clo_nacl_file)       = NULL;
-Char*  VG_(clo_memfs_malloc_path) = NULL;
-Int    VG_(clo_memfs_page_size)  = 2048;  /* 2M */
 
 
 /*====================================================================*/

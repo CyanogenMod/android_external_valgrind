@@ -7,7 +7,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2000-2011 Julian Seward
+   Copyright (C) 2000-2012 Julian Seward
       jseward@acm.org
 
    This program is free software; you can redistribute it and/or
@@ -985,7 +985,8 @@ static
 void read_unitinfo_dwarf2( /*OUT*/UnitInfo* ui,
                                   UChar*    unitblock_img,
                                   UChar*    debugabbrev_img,
-                                  UChar*    debugstr_img )
+                                  UChar*    debugstr_img,
+                                  UChar*    debugstr_alt_img )
 {
    UInt   acode, abcode;
    ULong  atoffs, blklen;
@@ -1114,7 +1115,9 @@ void read_unitinfo_dwarf2( /*OUT*/UnitInfo* ui,
             case 0x01: /* FORM_addr */      p += addr_size; break;
             case 0x03: /* FORM_block2 */    p += ML_(read_UShort)(p) + 2; break;
             case 0x04: /* FORM_block4 */    p += ML_(read_UInt)(p) + 4; break;
-            case 0x09: /* FORM_block */     p += read_leb128U( &p ); break;
+            case 0x09: /* FORM_block */     /* fallthrough */
+            case 0x18: /* FORM_exprloc */   { ULong block_len = read_leb128U( &p );
+                                              p += block_len; break; }
             case 0x0a: /* FORM_block1 */    p += *p + 1; break;
             case 0x0c: /* FORM_flag */      p++; break;
             case 0x0d: /* FORM_sdata */     read_leb128S( &p ); break;
@@ -1125,9 +1128,16 @@ void read_unitinfo_dwarf2( /*OUT*/UnitInfo* ui,
             case 0x13: /* FORM_ref4 */      p += 4; break;
             case 0x14: /* FORM_ref8 */      p += 8; break;
             case 0x15: /* FORM_ref_udata */ read_leb128U( &p ); break;
-            case 0x18: /* FORM_exprloc */   p += read_leb128U( &p ); break;
             case 0x19: /* FORM_flag_present */break;
             case 0x20: /* FORM_ref_sig8 */  p += 8; break;
+            case 0x1f20: /* FORM_GNU_ref_alt */ p += ui->dw64 ? 8 : 4; break;
+            case 0x1f21: /* FORM_GNU_strp_alt */
+                                            if (debugstr_alt_img && !ui->dw64)
+                                               sval = debugstr_alt_img + ML_(read_UInt)(p);
+                                            if (debugstr_alt_img && ui->dw64)
+                                               sval = debugstr_alt_img + ML_(read_ULong)(p);
+                                            p += ui->dw64 ? 8 : 4; 
+                                            break;
 
             default:
                VG_(printf)( "### unhandled dwarf2 abbrev form code 0x%x\n", form );
@@ -1166,9 +1176,11 @@ void read_unitinfo_dwarf2( /*OUT*/UnitInfo* ui,
 void ML_(read_debuginfo_dwarf3)
         ( struct _DebugInfo* di,
           UChar* debug_info_img, Word debug_info_sz, /* .debug_info */
+          UChar* debug_types_img, Word debug_types_sz, /* .debug_types */
           UChar* debug_abbv_img, Word debug_abbv_sz, /* .debug_abbrev */
           UChar* debug_line_img, Word debug_line_sz, /* .debug_line */
-          UChar* debug_str_img,  Word debug_str_sz ) /* .debug_str */
+          UChar* debug_str_img,  Word debug_str_sz, /* .debug_str */
+          UChar* debug_str_alt_img, Word debug_str_alt_sz ) /* .debug_str */
 {
    UnitInfo ui;
    UShort   ver;
@@ -1217,7 +1229,8 @@ void ML_(read_debuginfo_dwarf3)
          VG_(printf)( "Reading UnitInfo at 0x%lx.....\n",
                       block_img - debug_info_img + 0UL );
       read_unitinfo_dwarf2( &ui, block_img, 
-                                 debug_abbv_img, debug_str_img );
+                                 debug_abbv_img, debug_str_img,
+                                 debug_str_alt_img );
       if (0)
          VG_(printf)( "   => LINES=0x%llx    NAME=%s     DIR=%s\n", 
                       ui.stmt_list, ui.name, ui.compdir );
@@ -1842,18 +1855,23 @@ void ML_(read_debuginfo_dwarf1) (
 #  define FP_REG         11    // sometimes s390 has a frame pointer in r11
 #  define SP_REG         15    // stack is always r15
 #  define RA_REG_DEFAULT 14    // the return address is in r14
+#elif defined(VGP_mips32_linux)
+#  define FP_REG         30
+#  define SP_REG         29
+#  define RA_REG_DEFAULT 31
 #else
 #  error "Unknown platform"
 #endif
 
-/* the number of regs we are prepared to unwind */
-#if defined(VGP_ppc32_linux) || defined(VGP_ppc64_linux)
+/* The number of regs we are prepared to unwind.  The number for
+   arm-linux (320) seems ludicrously high, but the ARM IHI 0040A page
+   7 (DWARF for the ARM Architecture) specifies that values up to 320
+   might exist, for Neon/VFP-v3. */
+#if defined(VGP_ppc32_linux) || defined(VGP_ppc64_linux) \
+    || defined(VGP_mips32_linux)
 # define N_CFI_REGS 72
-#elif defined (VGP_arm_linux)
-/* 287 is the highest allocated DWARF register name as of 27.07.2011
-  http://infocenter.arm.com/help/topic/com.arm.doc.ihi0040a/IHI0040A_aadwarf.pdf
-*/
-# define N_CFI_REGS 287
+#elif defined(VGP_arm_linux)
+# define N_CFI_REGS 320
 #else
 # define N_CFI_REGS 20
 #endif
@@ -2154,7 +2172,8 @@ static Bool summarise_context( /*OUT*/DiCfSI* si,
    else
    if (ctxs->cfa_is_regoff && ctxs->cfa_reg == SP_REG) {
       si->cfa_off = ctxs->cfa_off;
-#     if defined(VGA_x86) || defined(VGA_amd64) || defined(VGA_s390x)
+#     if defined(VGA_x86) || defined(VGA_amd64) || defined(VGA_s390x) \
+         || defined(VGA_mips32)
       si->cfa_how = CFIC_IA_SPREL;
 #     elif defined(VGA_arm)
       si->cfa_how = CFIC_ARM_R13REL;
@@ -2165,7 +2184,8 @@ static Bool summarise_context( /*OUT*/DiCfSI* si,
    else
    if (ctxs->cfa_is_regoff && ctxs->cfa_reg == FP_REG) {
       si->cfa_off = ctxs->cfa_off;
-#     if defined(VGA_x86) || defined(VGA_amd64) || defined(VGA_s390x)
+#     if defined(VGA_x86) || defined(VGA_amd64) || defined(VGA_s390x) \
+         || defined(VGA_mips32)
       si->cfa_how = CFIC_IA_BPREL;
 #     elif defined(VGA_arm)
       si->cfa_how = CFIC_ARM_R12REL;
@@ -2366,6 +2386,50 @@ static Bool summarise_context( /*OUT*/DiCfSI* si,
    return True;
 
 
+#  elif defined(VGA_mips32)
+ 
+   /* --- entire tail of this fn specialised for mips --- */
+ 
+   SUMMARISE_HOW(si->ra_how, si->ra_off,
+                             ctxs->reg[ctx->ra_reg] );
+   SUMMARISE_HOW(si->fp_how, si->fp_off,
+                             ctxs->reg[FP_REG] );
+   SUMMARISE_HOW(si->sp_how, si->sp_off,
+                             ctxs->reg[SP_REG] );
+      si->sp_how = CFIR_CFAREL;
+   si->sp_off = 0;
+
+   if (si->fp_how == CFIR_UNKNOWN)
+       si->fp_how = CFIR_SAME;
+   if (si->cfa_how == CFIR_UNKNOWN) {
+      si->cfa_how = CFIC_IA_SPREL;
+      si->cfa_off = 160;
+   }
+   if (si->ra_how == CFIR_UNKNOWN) {
+      if (!debuginfo->cfsi_exprs)
+         debuginfo->cfsi_exprs = VG_(newXA)( ML_(dinfo_zalloc),
+                                             "di.ccCt.2a",
+                                             ML_(dinfo_free),
+                                             sizeof(CfiExpr) );
+      si->ra_how = CFIR_EXPR;
+      si->ra_off = ML_(CfiExpr_CfiReg)( debuginfo->cfsi_exprs,
+                                        Creg_MIPS_RA);
+   }
+
+   if (si->ra_how == CFIR_SAME)
+      { why = 3; goto failed; }
+
+   if (loc_start >= ctx->loc) 
+      { why = 4; goto failed; }
+   if (ctx->loc - loc_start > 10000000 /* let's say */)
+      { why = 5; goto failed; }
+
+   si->base = loc_start + ctx->initloc;
+   si->len  = (UInt)(ctx->loc - loc_start);
+
+   return True;
+
+
 
 #  elif defined(VGA_ppc32) || defined(VGA_ppc64)
 #  else
@@ -2448,6 +2512,13 @@ static Int copy_convert_CfiExpr_tree ( XArray*        dstxa,
             return ML_(CfiExpr_CfiReg)( dstxa, Creg_IA_BP );
          if (dwreg == srcuc->ra_reg)
             return ML_(CfiExpr_CfiReg)( dstxa, Creg_IA_IP ); /* correct? */
+#        elif defined(VGA_mips32)
+         if (dwreg == SP_REG)
+            return ML_(CfiExpr_CfiReg)( dstxa, Creg_IA_SP );
+         if (dwreg == FP_REG)
+            return ML_(CfiExpr_CfiReg)( dstxa, Creg_IA_BP );
+         if (dwreg == srcuc->ra_reg)
+            return ML_(CfiExpr_CfiReg)( dstxa, Creg_IA_IP );
 #        elif defined(VGA_ppc32) || defined(VGA_ppc64)
 #        else
 #           error "Unknown arch"
@@ -3603,11 +3674,7 @@ static void init_CIE ( CIE* cie )
    cie->saw_z_augmentation = False;
 }
 
-#ifdef VGP_arm_linux_android
-#define N_CIEs 8000
-#else
 #define N_CIEs 4000
-#endif
 static CIE the_CIEs[N_CIEs];
 
 

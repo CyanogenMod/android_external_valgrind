@@ -8,7 +8,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright IBM Corp. 2010-2011
+   Copyright IBM Corp. 2010-2012
 
    This program is free software; you can redistribute it and/or
    modify it under the terms of the GNU General Public License as
@@ -144,12 +144,16 @@ typedef struct {
    /* Emulation warnings; see comments in libvex_emwarn.h */
    /*  416 */  UInt guest_EMWARN;
 
-/*------------------------------------------------------------*/
-/*--- Force alignment to 16 bytes                          ---*/
-/*------------------------------------------------------------*/
-   /*  420 */  UChar padding[12];
+   /* For translation chaining */
+   /*  420 */  UInt  host_EvC_COUNTER;
+   /*  424 */  ULong host_EvC_FAILADDR;
 
-   /*  432 */  /* This is the size of the guest state */
+/*------------------------------------------------------------*/
+/*--- Force alignment to 32 bytes                          ---*/
+/*------------------------------------------------------------*/
+   /*  432 */  UChar padding[16];
+
+   /*  448 */  /* This is the size of the guest state */
 } VexGuestS390XState;
 
 

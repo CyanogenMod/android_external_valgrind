@@ -1,4 +1,2 @@
 prog: neon128
 vgopts: -q
-prog: neon128
-vgopts: -q

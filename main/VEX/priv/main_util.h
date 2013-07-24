@@ -7,7 +7,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2004-2011 OpenWorks LLP
+   Copyright (C) 2004-2012 OpenWorks LLP
       info@open-works.net
 
    This program is free software; you can redistribute it and/or
@@ -75,7 +75,8 @@ extern UInt vex_sprintf ( HChar* buf, HChar *format, ... );
 /* String ops */
 
 extern Bool vex_streq ( const HChar* s1, const HChar* s2 );
-extern Int vex_strlen ( const HChar* str );
+extern Int  vex_strlen ( const HChar* str );
+extern void vex_bzero ( void* s, UInt n );
 
 
 /* Storage management: clear the area, and allocate from it. */

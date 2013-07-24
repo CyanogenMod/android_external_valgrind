@@ -7,7 +7,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2005-2011 Apple Inc.
+   Copyright (C) 2005-2012 Apple Inc.
       Greg Parker  gparker@apple.com
 
    This program is free software; you can redistribute it and/or
@@ -401,6 +401,7 @@ void wqthread_hijack(Addr self, Addr kport, Addr stackaddr, Addr workitem,
       set the mask correctly when we finally get there. */
    VG_(sigfillset)(&blockall);
    VG_(sigprocmask)(VKI_SIG_SETMASK, &blockall, NULL);
+
    if (reuse) {
 
       /* For whatever reason, tst->os_state.pthread appear to have a
@@ -408,7 +409,7 @@ void wqthread_hijack(Addr self, Addr kport, Addr stackaddr, Addr workitem,
          idea why. */
 #     if DARWIN_VERS <= DARWIN_10_6
       UWord magic_delta = 0;
-#     elif DARWIN_VERS == DARWIN_10_7
+#     elif DARWIN_VERS >= DARWIN_10_7
       UWord magic_delta = 0x48;
 #     endif
 
@@ -436,16 +437,6 @@ void wqthread_hijack(Addr self, Addr kport, Addr stackaddr, Addr workitem,
       vex = &tst->arch.vex;
       allocstack(tst->tid);
       LibVEX_GuestX86_initialise(vex);
-      /* Tell threading tools the new thread exists.  FIXME: we need
-         to know the identity (tid) of the parent thread, in order
-         that threading tools can make a dependency edge from it to
-         this thread.  But we don't know what the parent thread is.
-         Hence pass 1 (the root thread).  This is completely wrong in
-         general, and could cause large numbers of false races to be
-         reported.  In fact, it's positively dangerous; we don't even
-         know if thread 1 is still alive, and the thread checkers are
-         likely to assert if it isn't. */
-      VG_TRACK(pre_thread_ll_create, 1/*BOGUS*/, tst->tid);
    }
         
    // Set thread's registers
@@ -463,7 +454,6 @@ void wqthread_hijack(Addr self, Addr kport, Addr stackaddr, Addr workitem,
    stacksize = 512*1024;  // wq stacks are always DEFAULT_STACK_SIZE
    stack = VG_PGROUNDUP(sp) - stacksize;
 
-   VG_TRACK(workq_task_start, tst->tid, workitem);
    if (reuse) {
        // Continue V's thread back in the scheduler. 
        // The client thread is of course in another location entirely.
@@ -488,11 +478,7 @@ void wqthread_hijack(Addr self, Addr kport, Addr stackaddr, Addr workitem,
       tst->client_stack_highest_word = stack+stacksize;
       tst->client_stack_szB = stacksize;
 
-      // tell the tool that we are at a point after the new thread
-      // has its registers set up (so we can take a stack snapshot),
-      // but before it has executed any instructions (or, really,
-      // before it has done any memory references).
-      VG_TRACK(pre_thread_first_insn, tst->tid);
+      // GrP fixme scheduler lock?!
       
       // pthread structure
       ML_(notify_core_and_tool_of_mmap)(

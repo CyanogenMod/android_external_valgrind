@@ -186,6 +186,38 @@ UWord do_acasW(UWord* addr, UWord expected, UWord nyu )
    return cc == 0;
 }
 
+#elif defined(VGA_mips32)
+
+// mips
+/* return 1 if success, 0 if failure */
+UWord do_acasW ( UWord* addr, UWord expected, UWord nyu )
+{
+  UWord old, success;
+  UWord block[3] = { (UWord)addr, nyu, expected};
+
+   __asm__ __volatile__(
+      ".set noreorder"           "\n\t"
+      "lw     $t0, 0(%1)"        "\n\t"
+      "lw     $t2, 8(%1)"        "\n\t"
+      "lw     $t3, 4(%1)"        "\n\t"
+      "ll     $t1, 0($t0)"       "\n\t"
+      "bne    $t1, $t2, exit_0"  "\n\t"
+      "sc     $t3, 0($t0)"       "\n\t"
+      "move   %0, $t3"           "\n\t"
+      "b exit"                   "\n\t"
+      "nop"                      "\n\t"
+      "exit_0:"                  "\n\t"
+      "move   %0, $0"            "\n\t"
+      "exit:"                     "\n\t"
+      : /*out*/ "=r"(success)
+      : /*in*/ "r"(&block[0])
+      : /*trash*/ "t0", "t1", "t2", "t3", "memory"
+   );
+
+   assert(success == 0 || success == 1);
+   return success;
+}
+
 #endif
 
 void atomic_incW ( UWord* w )
@@ -235,10 +267,18 @@ int main ( void )
 int shared_var = 0;  // is not raced upon
 
 
-void delay500ms ( void )
+void delayXms ( int i )
 {
-   struct timespec ts = { 0, 500 * 1000 * 1000 };
-   nanosleep(&ts, NULL);
+   struct timespec ts = { 0, 1 * 1000 * 1000 };
+   // We do the sleep in small pieces to have scheduling
+   // events ensuring a fair switch between threads, even
+   // without --fair-sched=yes. This is a.o. needed for
+   // running this test under an outer helgrind or an outer
+   // sgcheck.
+   while (i > 0) {
+      nanosleep(&ts, NULL);
+      i--;
+   }
 }
 
 void do_wait ( UWord* w )
@@ -246,7 +286,7 @@ void do_wait ( UWord* w )
   UWord w0 = *w;
   UWord volatile * wV = w;
   while (*wV == w0)
-    ;
+    delayXms(1); // small sleeps, ensuring context switches
   ANNOTATE_HAPPENS_AFTER(w);
 }
 
@@ -261,11 +301,11 @@ void do_signal ( UWord* w )
 void* thread_fn1 ( void* arg )
 {
   UWord* w = (UWord*)arg;
-  delay500ms();    // ensure t2 gets to its wait first
+  delayXms(500);    // ensure t2 gets to its wait first
   shared_var = 1;  // first access
   do_signal(w);    // cause h-b edge to second thread
 
-  delay500ms();
+  delayXms(500);
   return NULL;
 }
 
@@ -275,7 +315,7 @@ void* thread_fn2 ( void* arg )
   do_wait(w);      // wait for h-b edge from first thread
   shared_var = 2;  // second access
 
-  delay500ms();
+  delayXms(500);
   return NULL;
 }
 

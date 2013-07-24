@@ -52,12 +52,20 @@ valgrind_LDFLAGS   = $(AM_CFLAGS_PRI)
 if VGCONF_PLATFORMS_INCLUDE_X86_DARWIN
 valgrind_LDFLAGS   += -Wl,-read_only_relocs -Wl,suppress
 endif
+# On Android we must ask for non-executable stack, not sure why.
+if VGCONF_PLATVARIANT_IS_ANDROID
+valgrind_CFLAGS += -static
+valgrind_LDFLAGS   += -Wl,-z,noexecstack
+endif
 
 vgdb_SOURCES = vgdb.c
 vgdb_CPPFLAGS  = $(AM_CPPFLAGS_PRI)
 vgdb_CFLAGS    = $(AM_CFLAGS_PRI)
 vgdb_CCASFLAGS = $(AM_CCASFLAGS_PRI)
 vgdb_LDFLAGS   = $(AM_CFLAGS_PRI)
+if VGCONF_PLATVARIANT_IS_ANDROID
+vgdb_CFLAGS    += -static
+endif
 if !VGCONF_PLATVARIANT_IS_ANDROID
 vgdb_LDADD     = -lpthread
 endif
@@ -208,6 +216,8 @@ noinst_HEADERS = \
 	m_initimg/priv_initimg_pathscan.h \
 	m_initimg/simple_huffman.c \
 	m_scheduler/priv_sema.h \
+	m_scheduler/priv_sched-lock.h \
+	m_scheduler/priv_sched-lock-impl.h \
 	m_syswrap/priv_types_n_macros.h \
 	m_syswrap/priv_syswrap-generic.h \
 	m_syswrap/priv_syswrap-linux.h \
@@ -236,6 +246,7 @@ COREGRIND_SOURCES_COMMON = \
 	m_debuglog.c \
 	m_errormgr.c \
 	m_execontext.c \
+	m_poolalloc.c \
 	m_hashtable.c \
 	m_libcbase.c \
 	m_libcassert.c \
@@ -292,9 +303,9 @@ COREGRIND_SOURCES_COMMON = \
 	m_dispatch/dispatch-ppc64-linux.S \
 	m_dispatch/dispatch-arm-linux.S \
 	m_dispatch/dispatch-s390x-linux.S \
+	m_dispatch/dispatch-mips32-linux.S \
 	m_dispatch/dispatch-x86-darwin.S \
 	m_dispatch/dispatch-amd64-darwin.S \
-	m_gdbserver/m_gdbserver.c \
 	m_gdbserver/inferiors.c \
 	m_gdbserver/m_gdbserver.c \
 	m_gdbserver/regcache.c \
@@ -303,13 +314,13 @@ COREGRIND_SOURCES_COMMON = \
 	m_gdbserver/signals.c \
 	m_gdbserver/target.c \
 	m_gdbserver/utils.c \
-	m_gdbserver/valgrind-low.c \
 	m_gdbserver/valgrind-low-x86.c \
 	m_gdbserver/valgrind-low-amd64.c \
 	m_gdbserver/valgrind-low-arm.c \
 	m_gdbserver/valgrind-low-ppc32.c \
 	m_gdbserver/valgrind-low-ppc64.c \
 	m_gdbserver/valgrind-low-s390x.c \
+	m_gdbserver/valgrind-low-mips32.c \
 	m_gdbserver/version.c \
 	m_initimg/initimg-linux.c \
 	m_initimg/initimg-darwin.c \
@@ -321,12 +332,15 @@ COREGRIND_SOURCES_COMMON = \
 	m_replacemalloc/replacemalloc_core.c \
 	m_scheduler/scheduler.c \
 	m_scheduler/sema.c \
+	m_scheduler/sched-lock.c \
+	m_scheduler/sched-lock-generic.c \
 	m_sigframe/sigframe-x86-linux.c \
 	m_sigframe/sigframe-amd64-linux.c \
 	m_sigframe/sigframe-ppc32-linux.c \
 	m_sigframe/sigframe-ppc64-linux.c \
 	m_sigframe/sigframe-arm-linux.c \
 	m_sigframe/sigframe-s390x-linux.c \
+	m_sigframe/sigframe-mips32-linux.c \
 	m_sigframe/sigframe-x86-darwin.c \
 	m_sigframe/sigframe-amd64-darwin.c \
 	m_syswrap/syscall-x86-linux.S \
@@ -335,6 +349,7 @@ COREGRIND_SOURCES_COMMON = \
 	m_syswrap/syscall-ppc64-linux.S \
 	m_syswrap/syscall-arm-linux.S \
 	m_syswrap/syscall-s390x-linux.S \
+	m_syswrap/syscall-mips32-linux.S \
 	m_syswrap/syscall-x86-darwin.S \
 	m_syswrap/syscall-amd64-darwin.S \
 	m_syswrap/syswrap-main.c \
@@ -348,6 +363,7 @@ COREGRIND_SOURCES_COMMON = \
 	m_syswrap/syswrap-ppc64-linux.c \
 	m_syswrap/syswrap-arm-linux.c \
 	m_syswrap/syswrap-s390x-linux.c \
+	m_syswrap/syswrap-mips32-linux.c \
 	m_syswrap/syswrap-x86-darwin.c \
 	m_syswrap/syswrap-amd64-darwin.c \
 	m_ume/elf.c \
@@ -365,6 +381,13 @@ libcoregrind_@VGCONF_ARCH_PRI@_@VGCONF_OS@_a_CFLAGS = \
     $(AM_CFLAGS_@VGCONF_PLATFORM_PRI_CAPS@)
 libcoregrind_@VGCONF_ARCH_PRI@_@VGCONF_OS@_a_CCASFLAGS = \
     $(AM_CCASFLAGS_@VGCONF_PLATFORM_PRI_CAPS@)
+if ENABLE_LINUX_TICKET_LOCK_PRIMARY
+libcoregrind_@VGCONF_ARCH_PRI@_@VGCONF_OS@_a_SOURCES += \
+    m_scheduler/ticket-lock-linux.c
+libcoregrind_@VGCONF_ARCH_PRI@_@VGCONF_OS@_a_CFLAGS += \
+    -DENABLE_LINUX_TICKET_LOCK
+endif
+
 if VGCONF_HAVE_PLATFORM_SEC
 libcoregrind_@VGCONF_ARCH_SEC@_@VGCONF_OS@_a_SOURCES = \
     $(COREGRIND_SOURCES_COMMON)
@@ -376,6 +399,12 @@ libcoregrind_@VGCONF_ARCH_SEC@_@VGCONF_OS@_a_CFLAGS = \
     $(AM_CFLAGS_@VGCONF_PLATFORM_SEC_CAPS@)
 libcoregrind_@VGCONF_ARCH_SEC@_@VGCONF_OS@_a_CCASFLAGS = \
     $(AM_CCASFLAGS_@VGCONF_PLATFORM_SEC_CAPS@)
+if ENABLE_LINUX_TICKET_LOCK_SECONDARY
+libcoregrind_@VGCONF_ARCH_SEC@_@VGCONF_OS@_a_SOURCES += \
+    m_scheduler/ticket-lock-linux.c
+libcoregrind_@VGCONF_ARCH_SEC@_@VGCONF_OS@_a_CFLAGS += \
+    -DENABLE_LINUX_TICKET_LOCK
+endif
 endif
 
 #----------------------------------------------------------------------------
@@ -446,6 +475,9 @@ GDBSERVER_XML_FILES = \
 	m_gdbserver/32bit-sse-valgrind-s1.xml \
 	m_gdbserver/32bit-sse-valgrind-s2.xml \
 	m_gdbserver/32bit-sse.xml \
+	m_gdbserver/64bit-avx-valgrind-s2.xml \
+	m_gdbserver/64bit-avx-valgrind-s1.xml \
+	m_gdbserver/64bit-avx.xml \
 	m_gdbserver/64bit-core-valgrind-s1.xml \
 	m_gdbserver/64bit-core-valgrind-s2.xml \
 	m_gdbserver/64bit-core.xml \
@@ -455,6 +487,10 @@ GDBSERVER_XML_FILES = \
 	m_gdbserver/64bit-sse-valgrind-s1.xml \
 	m_gdbserver/64bit-sse-valgrind-s2.xml \
 	m_gdbserver/64bit-sse.xml \
+	m_gdbserver/amd64-avx-coresse-valgrind.xml \
+	m_gdbserver/amd64-avx-coresse.xml \
+	m_gdbserver/amd64-avx-linux-valgrind.xml \
+	m_gdbserver/amd64-avx-linux.xml \
 	m_gdbserver/amd64-coresse-valgrind.xml \
 	m_gdbserver/amd64-linux-valgrind.xml \
 	m_gdbserver/arm-core-valgrind-s1.xml \
@@ -476,6 +512,8 @@ GDBSERVER_XML_FILES = \
 	m_gdbserver/power-altivec-valgrind-s1.xml \
 	m_gdbserver/power-altivec-valgrind-s2.xml \
 	m_gdbserver/power-altivec.xml \
+	m_gdbserver/power-core-valgrind-s1.xml \
+	m_gdbserver/power-core-valgrind-s2.xml \
 	m_gdbserver/power-core.xml \
 	m_gdbserver/power-fpu-valgrind-s1.xml \
 	m_gdbserver/power-fpu-valgrind-s2.xml \
@@ -486,10 +524,36 @@ GDBSERVER_XML_FILES = \
 	m_gdbserver/powerpc-altivec32l-valgrind.xml \
 	m_gdbserver/powerpc-altivec32l.xml \
 	m_gdbserver/powerpc-altivec64l-valgrind.xml \
-	m_gdbserver/powerpc-altivec64l.xml
+	m_gdbserver/powerpc-altivec64l.xml \
+	m_gdbserver/s390-acr-valgrind-s1.xml \
+	m_gdbserver/s390-acr-valgrind-s2.xml \
+	m_gdbserver/s390-acr.xml \
+	m_gdbserver/s390-fpr-valgrind-s1.xml \
+	m_gdbserver/s390-fpr-valgrind-s2.xml \
+	m_gdbserver/s390-fpr.xml \
+	m_gdbserver/s390x-core64-valgrind-s1.xml \
+	m_gdbserver/s390x-core64-valgrind-s2.xml \
+	m_gdbserver/s390x-core64.xml \
+	m_gdbserver/s390x-generic-valgrind.xml \
+	m_gdbserver/s390x-generic.xml \
+	m_gdbserver/s390x-linux64-valgrind-s1.xml \
+	m_gdbserver/s390x-linux64-valgrind-s2.xml \
+	m_gdbserver/s390x-linux64.xml \
+	m_gdbserver/mips-cp0-valgrind-s1.xml \
+	m_gdbserver/mips-cp0-valgrind-s2.xml \
+	m_gdbserver/mips-cp0.xml \
+	m_gdbserver/mips-cpu-valgrind-s1.xml \
+	m_gdbserver/mips-cpu-valgrind-s2.xml \
+	m_gdbserver/mips-cpu.xml \
+	m_gdbserver/mips-linux.xml \
+	m_gdbserver/mips-linux-valgrind.xml \
+	m_gdbserver/mips-fpu-valgrind-s1.xml \
+	m_gdbserver/mips-fpu-valgrind-s2.xml \
+	m_gdbserver/mips-fpu.xml
 
 # so as to make sure these get copied into the install tree
-pkglib_DATA  = $(GDBSERVER_XML_FILES)
+vglibdir = $(pkglibdir)
+vglib_DATA  = $(GDBSERVER_XML_FILES)
 
 # so as to make sure these get copied into the tarball
 EXTRA_DIST  += $(GDBSERVER_XML_FILES)
@@ -500,7 +564,7 @@ EXTRA_DIST  += $(GDBSERVER_XML_FILES)
 
 all-local: inplace-noinst_PROGRAMS inplace-noinst_DSYMS
 	mkdir -p $(inplacedir); \
-	for f in $(pkglib_DATA); do \
+	for f in $(vglib_DATA); do \
 	  rm -f $(inplacedir)/$$f; \
 	  ln -f -s ../$(subdir)/$$f $(inplacedir); \
 	done
