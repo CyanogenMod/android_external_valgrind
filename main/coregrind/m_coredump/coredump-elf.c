@@ -7,7 +7,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2000-2012 Julian Seward 
+   Copyright (C) 2000-2013 Julian Seward 
       jseward@acm.org
 
    This program is free software; you can redistribute it and/or
@@ -136,10 +136,22 @@ static void fill_phdr(ESZ(Phdr) *phdr, const NSegment *seg, UInt off, Bool write
    phdr->p_align = VKI_PAGE_SIZE;
 }
 
+#if defined(VGPV_arm_linux_android) || defined(VGPV_x86_linux_android) \
+    || defined(VGPV_mips32_linux_android)
+/* Android's libc doesn't provide a definition for this.  Hence: */
+typedef
+   struct {
+      Elf32_Word n_namesz;
+      Elf32_Word n_descsz;
+      Elf32_Word n_type;
+   }
+   Elf32_Nhdr;
+#endif
+
 struct note {
    struct note *next;
    ESZ(Nhdr) note;
-   Char name[0];
+   HChar name[0];
 };
 
 static UInt note_size(const struct note *n)
@@ -148,8 +160,9 @@ static UInt note_size(const struct note *n)
                             + VG_ROUNDUP(n->note.n_descsz, 4);
 }
 
-#if !defined(VGPV_arm_linux_android) && !defined(VGPV_x86_linux_android)
-static void add_note(struct note **list, const Char *name, UInt type,
+#if !defined(VGPV_arm_linux_android) && !defined(VGPV_x86_linux_android) \
+    && !defined(VGPV_mips32_linux_android)
+static void add_note(struct note **list, const HChar *name, UInt type,
                      const void *data, UInt datasz)
 {
    Int namelen = VG_(strlen)(name)+1;
@@ -180,7 +193,7 @@ static void write_note(Int fd, const struct note *n)
 static void fill_prpsinfo(const ThreadState *tst,
                           struct vki_elf_prpsinfo *prpsinfo)
 {
-   static Char name[VKI_PATH_MAX];
+   static HChar name[VKI_PATH_MAX];
 
    VG_(memset)(prpsinfo, 0, sizeof(*prpsinfo));
 
@@ -208,7 +221,7 @@ static void fill_prpsinfo(const ThreadState *tst,
    prpsinfo->pr_gid = 0;
    
    if (VG_(resolve_filename)(VG_(cl_exec_fd), name, VKI_PATH_MAX)) {
-      Char *n = name+VG_(strlen)(name)-1;
+      HChar *n = name+VG_(strlen)(name)-1;
 
       while (n > name && *n != '/')
 	 n--;
@@ -220,11 +233,11 @@ static void fill_prpsinfo(const ThreadState *tst,
 }
 
 static void fill_prstatus(const ThreadState *tst, 
-			  struct vki_elf_prstatus *prs, 
+			  /*OUT*/struct vki_elf_prstatus *prs, 
 			  const vki_siginfo_t *si)
 {
    struct vki_user_regs_struct *regs;
-   ThreadArchState* arch = (ThreadArchState*)&tst->arch;
+   const ThreadArchState* arch = &tst->arch;
 
    VG_(memset)(prs, 0, sizeof(*prs));
 
@@ -239,12 +252,11 @@ static void fill_prstatus(const ThreadState *tst,
    prs->pr_pgrp = VG_(getpgrp)();
    prs->pr_sid = VG_(getpgrp)();
    
-#ifdef VGP_s390x_linux
+#if defined(VGP_s390x_linux)
    /* prs->pr_reg has struct type. Need to take address. */
    regs = (struct vki_user_regs_struct *)&(prs->pr_reg);
 #else
    regs = (struct vki_user_regs_struct *)prs->pr_reg;
-
    vg_assert(sizeof(*regs) == sizeof(prs->pr_reg));
 #endif
 
@@ -269,7 +281,7 @@ static void fill_prstatus(const ThreadState *tst,
    regs->gs     = arch->vex.guest_GS;
 
 #elif defined(VGP_amd64_linux)
-   regs->eflags = LibVEX_GuestAMD64_get_rflags( &((ThreadArchState*)arch)->vex );
+   regs->eflags = LibVEX_GuestAMD64_get_rflags( &arch->vex );
    regs->rsp    = arch->vex.guest_RSP;
    regs->rip    = arch->vex.guest_RIP;
 
@@ -289,10 +301,6 @@ static void fill_prstatus(const ThreadState *tst,
    regs->r14    = arch->vex.guest_R14;
    regs->r15    = arch->vex.guest_R15;
 
-//::    regs->cs     = arch->vex.guest_CS;
-//::    regs->fs     = arch->vex.guest_FS;
-//::    regs->gs     = arch->vex.guest_GS;
-
 #elif defined(VGP_ppc32_linux)
 #  define DO(n)  regs->gpr[n] = arch->vex.guest_GPR##n
    DO(0);  DO(1);  DO(2);  DO(3);  DO(4);  DO(5);  DO(6);  DO(7);
@@ -306,8 +314,8 @@ static void fill_prstatus(const ThreadState *tst,
    regs->orig_gpr3 = arch->vex.guest_GPR3;
    regs->ctr = arch->vex.guest_CTR;
    regs->link = arch->vex.guest_LR;
-   regs->xer = LibVEX_GuestPPC32_get_XER( &((ThreadArchState*)arch)->vex );
-   regs->ccr = LibVEX_GuestPPC32_get_CR( &((ThreadArchState*)arch)->vex );
+   regs->xer = LibVEX_GuestPPC32_get_XER( &arch->vex );
+   regs->ccr = LibVEX_GuestPPC32_get_CR( &arch->vex );
    regs->mq = 0;
    regs->trap = 0;
    regs->dar = 0; /* should be fault address? */
@@ -327,8 +335,8 @@ static void fill_prstatus(const ThreadState *tst,
    regs->orig_gpr3 = arch->vex.guest_GPR3;
    regs->ctr = arch->vex.guest_CTR;
    regs->link = arch->vex.guest_LR;
-   regs->xer = LibVEX_GuestPPC64_get_XER( &((ThreadArchState*)arch)->vex );
-   regs->ccr = LibVEX_GuestPPC64_get_CR( &((ThreadArchState*)arch)->vex );
+   regs->xer = LibVEX_GuestPPC64_get_XER( &arch->vex );
+   regs->ccr = LibVEX_GuestPPC64_get_CR( &arch->vex );
    /* regs->mq = 0; */
    regs->trap = 0;
    regs->dar = 0; /* should be fault address? */
@@ -352,7 +360,11 @@ static void fill_prstatus(const ThreadState *tst,
    regs->ARM_sp   = arch->vex.guest_R13;
    regs->ARM_lr   = arch->vex.guest_R14;
    regs->ARM_pc   = arch->vex.guest_R15T;
-   regs->ARM_cpsr = LibVEX_GuestARM_get_cpsr( &((ThreadArchState*)arch)->vex );
+   regs->ARM_cpsr = LibVEX_GuestARM_get_cpsr( &arch->vex );
+
+#elif defined(VGP_arm64_linux)
+   (void)arch;
+   I_die_here;
 
 #elif defined(VGP_s390x_linux)
 #  define DO(n)  regs->gprs[n] = arch->vex.guest_r##n
@@ -364,6 +376,7 @@ static void fill_prstatus(const ThreadState *tst,
    DO(8);  DO(9);  DO(10); DO(11); DO(12); DO(13); DO(14); DO(15);
 #  undef DO
    regs->orig_gpr2 = arch->vex.guest_r2;
+
 #elif defined(VGP_mips32_linux)
 #  define DO(n)  regs->MIPS_r##n = arch->vex.guest_r##n
    DO(0);  DO(1);  DO(2);  DO(3);  DO(4);  DO(5);  DO(6);  DO(7);
@@ -373,6 +386,17 @@ static void fill_prstatus(const ThreadState *tst,
 #  undef DO
    regs->MIPS_hi   = arch->vex.guest_HI;
    regs->MIPS_lo   = arch->vex.guest_LO;
+
+#elif defined(VGP_mips64_linux)
+#  define DO(n)  regs->MIPS_r##n = arch->vex.guest_r##n
+   DO(0);  DO(1);  DO(2);  DO(3);  DO(4);  DO(5);  DO(6);  DO(7);
+   DO(8);  DO(9);  DO(10); DO(11); DO(12); DO(13); DO(14); DO(15);
+   DO(16); DO(17); DO(18); DO(19); DO(20); DO(21); DO(22); DO(23);
+   DO(24); DO(25); DO(26); DO(27); DO(28); DO(29); DO(30); DO(31);
+#  undef DO
+   regs->MIPS_hi   = arch->vex.guest_HI;
+   regs->MIPS_lo   = arch->vex.guest_LO;
+
 #else
 #  error Unknown ELF platform
 #endif
@@ -381,10 +405,10 @@ static void fill_prstatus(const ThreadState *tst,
 static void fill_fpu(const ThreadState *tst, vki_elf_fpregset_t *fpu)
 {
    __attribute__((unused))
-   ThreadArchState* arch = (ThreadArchState*)&tst->arch;
+   const ThreadArchState* arch = &tst->arch;
 
 #if defined(VGP_x86_linux)
-//:: static void fill_fpu(vki_elf_fpregset_t *fpu, const Char *from)
+//:: static void fill_fpu(vki_elf_fpregset_t *fpu, const HChar *from)
 //:: {
 //::    if (VG_(have_ssestate)) {
 //::       UShort *to;
@@ -402,7 +426,7 @@ static void fill_fpu(const ThreadState *tst, vki_elf_fpregset_t *fpu)
 //::       VG_(memcpy)(fpu, from, sizeof(*fpu));
 //:: }
 
-//::    fill_fpu(fpu, (const Char *)&arch->m_sse);
+//::    fill_fpu(fpu, (const HChar *)&arch->m_sse);
 
 #elif defined(VGP_amd64_linux)
 //::    fpu->cwd = ?;
@@ -448,12 +472,22 @@ static void fill_fpu(const ThreadState *tst, vki_elf_fpregset_t *fpu)
 #elif defined(VGP_arm_linux)
    // umm ...
 
+#elif defined(VGP_arm64_linux)
+   I_die_here;
+
 #elif defined(VGP_s390x_linux)
 #  define DO(n)  fpu->fprs[n].ui = arch->vex.guest_f##n
    DO(0);  DO(1);  DO(2);  DO(3);  DO(4);  DO(5);  DO(6);  DO(7);
    DO(8);  DO(9);  DO(10); DO(11); DO(12); DO(13); DO(14); DO(15);
 # undef DO
 #elif defined(VGP_mips32_linux)
+#  define DO(n)  (*fpu)[n] = *(double*)(&arch->vex.guest_f##n)
+   DO(0);  DO(1);  DO(2);  DO(3);  DO(4);  DO(5);  DO(6);  DO(7);
+   DO(8);  DO(9);  DO(10); DO(11); DO(12); DO(13); DO(14); DO(15);
+   DO(16); DO(17); DO(18); DO(19); DO(20); DO(21); DO(22); DO(23);
+   DO(24); DO(25); DO(26); DO(27); DO(28); DO(29); DO(30); DO(31);
+#  undef DO
+#elif defined(VGP_mips32_linux) || defined(VGP_mips64_linux)
 #  define DO(n)  (*fpu)[n] = *(double*)(&arch->vex.guest_f##n)
    DO(0);  DO(1);  DO(2);  DO(3);  DO(4);  DO(5);  DO(6);  DO(7);
    DO(8);  DO(9);  DO(10); DO(11); DO(12); DO(13); DO(14); DO(15);
@@ -468,7 +502,7 @@ static void fill_fpu(const ThreadState *tst, vki_elf_fpregset_t *fpu)
 #if defined(VGP_x86_linux) && !defined(VGPV_x86_linux_android)
 static void fill_xfpu(const ThreadState *tst, vki_elf_fpxregset_t *xfpu)
 {
-   ThreadArchState* arch = (ThreadArchState*)&tst->arch;
+   const ThreadArchState* arch = &tst->arch;
 
 //::    xfpu->cwd = ?;
 //::    xfpu->swd = ?;
@@ -491,11 +525,11 @@ static void fill_xfpu(const ThreadState *tst, vki_elf_fpxregset_t *xfpu)
 #endif
 
 static
-void make_elf_coredump(ThreadId tid, const vki_siginfo_t *si, UInt max_size)
+void make_elf_coredump(ThreadId tid, const vki_siginfo_t *si, ULong max_size)
 {
-   Char* buf = NULL;
-   Char *basename = "vgcore";
-   Char *coreext = "";
+   HChar* buf = NULL;
+   const HChar *basename = "vgcore";
+   const HChar *coreext = "";
    Int seq = 0;
    Int core_fd;
    NSegment const * seg;
@@ -577,29 +611,30 @@ void make_elf_coredump(ThreadId tid, const vki_siginfo_t *si, UInt max_size)
       if (VG_(threads)[i].status == VgTs_Empty)
 	 continue;
 
-#     if defined(VGP_x86_linux)
-#     if !defined(VGPV_arm_linux_android) && !defined(VGPV_x86_linux_android)
+#     if defined(VGP_x86_linux) && !defined(VGPV_x86_linux_android)
       {
          vki_elf_fpxregset_t xfpu;
          fill_xfpu(&VG_(threads)[i], &xfpu);
          add_note(&notelist, "LINUX", NT_PRXFPREG, &xfpu, sizeof(xfpu));
       }
 #     endif
-#     endif
 
       fill_fpu(&VG_(threads)[i], &fpu);
-#     if !defined(VGPV_arm_linux_android) && !defined(VGPV_x86_linux_android)
+#     if !defined(VGPV_arm_linux_android) && !defined(VGPV_x86_linux_android) \
+         && !defined(VGPV_mips32_linux_android)
       add_note(&notelist, "CORE", NT_FPREGSET, &fpu, sizeof(fpu));
 #     endif
 
       fill_prstatus(&VG_(threads)[i], &prstatus, si);
-#     if !defined(VGPV_arm_linux_android) && !defined(VGPV_x86_linux_android)
+#     if !defined(VGPV_arm_linux_android) && !defined(VGPV_x86_linux_android) \
+         && !defined(VGPV_mips32_linux_android)
       add_note(&notelist, "CORE", NT_PRSTATUS, &prstatus, sizeof(prstatus));
 #     endif
    }
 
    fill_prpsinfo(&VG_(threads)[tid], &prpsinfo);
-#  if !defined(VGPV_arm_linux_android) && !defined(VGPV_x86_linux_android)
+#  if !defined(VGPV_arm_linux_android) && !defined(VGPV_x86_linux_android) \
+      && !defined(VGPV_mips32_linux_android)
    add_note(&notelist, "CORE", NT_PRPSINFO, &prpsinfo, sizeof(prpsinfo));
 #  endif
 
@@ -665,7 +700,7 @@ void make_elf_coredump(ThreadId tid, const vki_siginfo_t *si, UInt max_size)
    VG_(close)(core_fd);
 }
 
-void VG_(make_coredump)(ThreadId tid, const vki_siginfo_t *si, UInt max_size)
+void VG_(make_coredump)(ThreadId tid, const vki_siginfo_t *si, ULong max_size)
 {
    make_elf_coredump(tid, si, max_size);
 }

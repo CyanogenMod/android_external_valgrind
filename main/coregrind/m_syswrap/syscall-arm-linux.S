@@ -7,7 +7,7 @@
   This file is part of Valgrind, a dynamic binary instrumentation
   framework.
 
-  Copyright (C) 2008-2012 Evan Geller (gaze@bea.ms)
+  Copyright (C) 2008-2013 Evan Geller (gaze@bea.ms)
 
   This program is free software; you can redistribute it and/or
   modify it under the terms of the GNU General Public License as
@@ -112,7 +112,7 @@ ML_(do_syscall_for_client_WRK):
    ldr r3, [sp, #32] /* nsigwords */
    svc 0x00000000
 
-  cmp r0, #0
+   cmp r0, #0
    blt 7f
    add sp, sp, #4 /* r0 contains return value */
 

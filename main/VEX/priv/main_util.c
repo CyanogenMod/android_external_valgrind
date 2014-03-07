@@ -7,7 +7,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2004-2012 OpenWorks LLP
+   Copyright (C) 2004-2013 OpenWorks LLP
       info@open-works.net
 
    This program is free software; you can redistribute it and/or
@@ -158,7 +158,7 @@ HChar* private_LibVEX_alloc_last  = &temporary[N_TEMPORARY_BYTES-1];
 __attribute__((noreturn))
 void private_LibVEX_alloc_OOM(void)
 {
-   HChar* pool = "???";
+   const HChar* pool = "???";
    if (private_LibVEX_alloc_first == &temporary[0]) pool = "TEMP";
    if (private_LibVEX_alloc_first == &permanent[0]) pool = "PERM";
    vex_printf("VEX temporary storage exhausted.\n");
@@ -220,7 +220,7 @@ void vex_assert_fail ( const HChar* expr,
 }
 
 __attribute__ ((noreturn))
-void vpanic ( HChar* str )
+void vpanic ( const HChar* str )
 {
    vex_printf("\nvex: the `impossible' happened:\n   %s\n", str);
    (*vex_failure_exit)();
@@ -316,7 +316,7 @@ void convert_int ( /*OUT*/HChar* buf, Long n0,
    printf. */
 static
 UInt vprintf_wrk ( void(*sink)(HChar),
-                   HChar* format,
+                   const HChar* format,
                    va_list ap )
 {
 #  define PUT(_ch)  \
@@ -328,10 +328,10 @@ UInt vprintf_wrk ( void(*sink)(HChar),
       while (0)
 
 #  define PUTSTR(_str) \
-      do { HChar* _qq = _str; for (; *_qq; _qq++) PUT(*_qq); } \
+      do { const HChar* _qq = _str; for (; *_qq; _qq++) PUT(*_qq); } \
       while (0)
 
-   HChar* saved_format;
+   const HChar* saved_format;
    Bool   longlong, ljustify;
    HChar  padchar;
    Int    fwidth, nout, len1, len2, len3;
@@ -366,9 +366,14 @@ UInt vprintf_wrk ( void(*sink)(HChar),
          format++;
          padchar = '0';
       }
-      while (*format >= '0' && *format <= '9') {
-         fwidth = fwidth * 10 + (*format - '0');
+      if (*format == '*') {
+         fwidth = va_arg(ap, Int);
          format++;
+      } else {
+         while (*format >= '0' && *format <= '9') {
+            fwidth = fwidth * 10 + (*format - '0');
+            format++;
+         }
       }
       if (*format == 'l') {
          format++;
@@ -380,7 +385,7 @@ UInt vprintf_wrk ( void(*sink)(HChar),
 
       switch (*format) {
          case 's': {
-            HChar* str = va_arg(ap, HChar*);
+            const HChar* str = va_arg(ap, HChar*);
             if (str == NULL)
                str = "(null)";
             len1 = len3 = 0;
@@ -494,7 +499,7 @@ static void add_to_myprintf_buf ( HChar c )
    }
 }
 
-UInt vex_printf ( HChar* format, ... )
+UInt vex_printf ( const HChar* format, ... )
 {
    UInt ret;
    va_list vargs;
@@ -523,7 +528,7 @@ static void add_to_vg_sprintf_buf ( HChar c )
    *vg_sprintf_ptr++ = c;
 }
 
-UInt vex_sprintf ( HChar* buf, HChar *format, ... )
+UInt vex_sprintf ( HChar* buf, const HChar *format, ... )
 {
    Int ret;
    va_list vargs;

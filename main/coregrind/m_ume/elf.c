@@ -7,7 +7,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2000-2012 Julian Seward 
+   Copyright (C) 2000-2013 Julian Seward 
       jseward@acm.org
 
    This program is free software; you can redistribute it and/or
@@ -89,7 +89,7 @@ static void check_mmap(SysRes res, Addr base, SizeT len)
 /*------------------------------------------------------------*/
 
 static 
-struct elfinfo *readelf(Int fd, const char *filename)
+struct elfinfo *readelf(Int fd, const HChar *filename)
 {
    SysRes sres;
    struct elfinfo *e = VG_(malloc)("ume.re.1", sizeof(*e));
@@ -238,7 +238,7 @@ ESZ(Addr) mapelf(struct elfinfo *e, ESZ(Addr) base)
          // The 'prot' condition allows for a read-only bss
          if ((prot & VKI_PROT_WRITE) && (bytes > 0)) {
             bytes = VKI_PAGE_SIZE - bytes;
-            VG_(memset)((char *)bss, 0, bytes);
+            VG_(memset)((void *)bss, 0, bytes);
          }
       }
    }
@@ -246,9 +246,9 @@ ESZ(Addr) mapelf(struct elfinfo *e, ESZ(Addr) base)
    return elfbrk;
 }
 
-Bool VG_(match_ELF)(Char *hdr, Int len)
+Bool VG_(match_ELF)(const void *hdr, Int len)
 {
-   ESZ(Ehdr) *e = (ESZ(Ehdr) *)hdr;
+   const ESZ(Ehdr) *e = hdr;
    return (len > sizeof(*e)) && VG_(memcmp)(&e->e_ident[0], ELFMAG, SELFMAG) == 0;
 }
 
@@ -310,14 +310,9 @@ Int VG_(load_ELF)(Int fd, const HChar* name, /*MOD*/ExeInfo* info)
    void *entry;
    ESZ(Addr) ebase = 0;
 
-   /* The difference between where the interpreter got mapped and
-      where it asked to be mapped.  Needed for computing the ppc64 ELF
-      entry point and initial tocptr (R2) value. */
-   ESZ(Word) interp_offset = 0;
-
-#ifdef HAVE_PIE
+#  if defined(HAVE_PIE)
    ebase = info->exe_base;
-#endif
+#  endif
 
    e = readelf(fd, name);
 
@@ -334,17 +329,27 @@ Int VG_(load_ELF)(Int fd, const HChar* name, /*MOD*/ExeInfo* info)
          become legit, which is really bad) and causes problems for
          exp-ptrcheck, which assumes all numbers below 1MB are
          nonpointers.  So, hackily, move it above 1MB. */
-      /* Later .. is appears ppc32-linux tries to put [vdso] at 1MB,
+      /* Later .. it appears ppc32-linux tries to put [vdso] at 1MB,
          which totally screws things up, because nothing else can go
-         there.  So bump the hacky load addess along by 0x8000, to
-         0x108000. */
-      if (ebase < 0x108000)
-         ebase = 0x108000;
+         there.  The size of [vdso] is around 2 or 3 pages, so bump
+         the hacky load addess along by 8 * VKI_PAGE_SIZE to be safe. */
+      /* Later .. on mips64 we can't use 0x108000, because mapelf will
+         fail. */
+#     if defined(VGP_mips64_linux)
+      if (ebase < 0x100000)
+         ebase = 0x100000;
+#     else
+      vg_assert(VKI_PAGE_SIZE >= 4096); /* stay sane */
+      ESZ(Addr) hacky_load_address = 0x100000 + 8 * VKI_PAGE_SIZE;
+      if (ebase < hacky_load_address)
+         ebase = hacky_load_address;
+#     endif
    }
 
    info->phnum = e->e.e_phnum;
    info->entry = e->e.e_entry + ebase;
    info->phdr = 0;
+   info->stack_prot = VKI_PROT_READ|VKI_PROT_WRITE|VKI_PROT_EXEC;
 
    for (i = 0; i < e->e.e_phnum; i++) {
       ESZ(Phdr) *ph = &e->p[i];
@@ -406,6 +411,15 @@ Int VG_(load_ELF)(Int fd, const HChar* name, /*MOD*/ExeInfo* info)
                interp_size = end;
          }
          break;
+
+#     if defined(PT_GNU_STACK)
+      /* Android's elf.h doesn't appear to have PT_GNU_STACK. */
+      case PT_GNU_STACK:
+         if ((ph->p_flags & PF_X) == 0) info->stack_prot &= ~VKI_PROT_EXEC;
+         if ((ph->p_flags & PF_W) == 0) info->stack_prot &= ~VKI_PROT_WRITE;
+         if ((ph->p_flags & PF_R) == 0) info->stack_prot &= ~VKI_PROT_READ;
+         break;
+#     endif
 
       default:
          // do nothing
@@ -481,8 +495,7 @@ Int VG_(load_ELF)(Int fd, const HChar* name, /*MOD*/ExeInfo* info)
       VG_(close)(interp->fd);
 
       entry = (void *)(advised - interp_addr + interp->e.e_entry);
-      info->interp_base = (ESZ(Addr))advised;
-      interp_offset = advised - interp_addr;
+      info->interp_offset = advised - interp_addr;
 
       VG_(free)(interp->p);
       VG_(free)(interp);
@@ -499,12 +512,11 @@ Int VG_(load_ELF)(Int fd, const HChar* name, /*MOD*/ExeInfo* info)
       is the static chain value. */
    info->init_ip  = ((ULong*)entry)[0];
    info->init_toc = ((ULong*)entry)[1];
-   info->init_ip  += interp_offset;
-   info->init_toc += interp_offset;
+   info->init_ip  += info->interp_offset;
+   info->init_toc += info->interp_offset;
 #else
    info->init_ip  = (Addr)entry;
    info->init_toc = 0; /* meaningless on this platform */
-   (void) interp_offset; /* stop gcc complaining it is unused */
 #endif
    VG_(free)(e->p);
    VG_(free)(e);

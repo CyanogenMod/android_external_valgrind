@@ -7,7 +7,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2000-2012 Julian Seward
+   Copyright (C) 2000-2013 Julian Seward
       jseward@acm.org
 
    This program is free software; you can redistribute it and/or
@@ -30,6 +30,8 @@
 
 #ifndef __PUB_CORE_TRAMPOLINE_H
 #define __PUB_CORE_TRAMPOLINE_H
+
+#include "pub_core_basics.h"   // VG_ macro
 
 //--------------------------------------------------------------------
 // PURPOSE: This module defines a few replacement functions for Linux
@@ -101,6 +103,10 @@ extern UInt  VG_(arm_linux_REDIR_FOR_strlen)( void* );
 extern void* VG_(arm_linux_REDIR_FOR_memcpy)( void*, void*, Int );
 #endif
 
+#if defined(VGP_arm64_linux)
+extern Addr  VG_(arm64_linux_SUBST_FOR_rt_sigreturn);
+#endif
+
 #if defined(VGP_x86_darwin)
 extern Addr  VG_(x86_darwin_SUBST_FOR_sigreturn);
 extern SizeT VG_(x86_darwin_REDIR_FOR_strlen)( void* );
@@ -131,6 +137,11 @@ extern Addr VG_(s390x_linux_SUBST_FOR_rt_sigreturn);
 extern Addr  VG_(mips32_linux_SUBST_FOR_sigreturn);
 extern Addr  VG_(mips32_linux_SUBST_FOR_rt_sigreturn);
 extern UInt  VG_(mips32_linux_REDIR_FOR_strlen)( void* );
+#endif
+
+#if defined(VGP_mips64_linux)
+extern Addr  VG_(mips64_linux_SUBST_FOR_rt_sigreturn);
+extern UInt  VG_(mips64_linux_REDIR_FOR_strlen)( void* );
 #endif
 
 #endif   // __PUB_CORE_TRAMPOLINE_H

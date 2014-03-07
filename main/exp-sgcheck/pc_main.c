@@ -9,7 +9,7 @@
    This file is part of Ptrcheck, a Valgrind tool for checking pointer
    use in programs.
 
-   Copyright (C) 2008-2011 OpenWorks Ltd
+   Copyright (C) 2008-2013 OpenWorks Ltd
       info@open-works.co.uk
 
    This program is free software; you can redistribute it and/or
@@ -62,7 +62,19 @@ static void pc_pre_clo_init(void)
 #endif
 #if defined(VGA_s390x)
    /* fixs390: to be done. */
-   VG_(printf)("SGCheck doesn't work s390x yet, sorry.\n");
+   VG_(printf)("SGCheck doesn't work on s390x yet, sorry.\n");
+   VG_(exit)(1);
+#endif
+#if defined(VGA_ppc32) || defined(VGA_ppc64)
+   VG_(printf)("SGCheck doesn't work on PPC yet, sorry.\n");
+   VG_(exit)(1);
+#endif
+#if defined(VGA_arm) || defined(VGA_arm64)
+   VG_(printf)("SGCheck doesn't work on ARM yet, sorry.\n");
+   VG_(exit)(1);
+#endif
+#if defined(VGA_mips32) || defined(VGA_mips64)
+   VG_(printf)("SGCheck doesn't work on MIPS yet, sorry.\n");
    VG_(exit)(1);
 #endif
 
@@ -73,7 +85,7 @@ static void pc_pre_clo_init(void)
    VG_(details_description)     ("a stack and global array "
                                  "overrun detector");
    VG_(details_copyright_author)(
-      "Copyright (C) 2003-2011, and GNU GPL'd, by OpenWorks Ltd et al.");
+      "Copyright (C) 2003-2013, and GNU GPL'd, by OpenWorks Ltd et al.");
    VG_(details_bug_reports_to)  (VG_BUGS_TO);
    VG_(details_avg_translation_sizeB) ( 496 );
 
@@ -105,7 +117,9 @@ static void pc_pre_clo_init(void)
                                  pc_read_extra_suppression_info,
                                  pc_error_matches_suppression,
                                  pc_get_error_name,
-                                 pc_get_extra_suppression_info);
+                                 pc_get_extra_suppression_info,
+                                 pc_print_extra_suppression_use,
+                                 pc_update_extra_suppression_use);
 
    VG_(needs_xml_output)        ();
 

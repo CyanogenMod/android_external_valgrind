@@ -1,7 +1,7 @@
 
 Julian Seward was the original founder, designer and author of
 Valgrind, created the dynamic translation frameworks, wrote Memcheck,
-the 3.X versions of Helgrind, Ptrcheck, DHAT, and did lots of other
+the 3.X versions of Helgrind, SGCheck, DHAT, and did lots of other
 things.
 
 Nicholas Nethercote did the core/tool generalisation, wrote
@@ -65,8 +65,22 @@ Philippe Waroquiers wrote and maintains the embedded GDB server.  He
 also made a bunch of performance and memory-reduction fixes across
 diverse parts of the system.
 
-Maynard Johnson contributed IBM Power6 and Power7 support, and generally
-deals with ppc64-linux issues.
+Carl Love and Maynard Johnson contributed IBM Power6 and Power7
+support, and generally deal with ppc{32,64}-linux issues.
+
+Petar Jovanovic and Dejan Jevtic wrote and maintain the mips32-linux
+port.
+
+Dragos Tatulea modified the arm-android port so it also works on
+x86-android.
+
+Jakub Jelinek helped out extensively with the AVX and AVX2 support.
+
+Mark Wielaard fixed a bunch of bugs and acts as our Fedora/RHEL
+liaison.
+
+Maran Pakkirisamy implemented support for decimal floating point on
+s390.
 
 Many, many people sent bug reports, patches, and helpful feedback.
 

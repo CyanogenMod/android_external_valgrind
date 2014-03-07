@@ -5,7 +5,7 @@
 /*
   This file is part of DRD, a thread error detector.
 
-  Copyright (C) 2006-2012 Bart Van Assche <bvanassche@acm.org>.
+  Copyright (C) 2006-2013 Bart Van Assche <bvanassche@acm.org>.
 
   This program is free software; you can redistribute it and/or
   modify it under the terms of the GNU General Public License as
@@ -243,8 +243,15 @@ static void DRD_(sema_up)(DrdSema* sema)
  * statement because some of the PTHREAD_MUTEX_ macro's may have the same
  * value.
  */
-static MutexT DRD_(pthread_to_drd_mutex_type)(const int kind)
+static MutexT DRD_(pthread_to_drd_mutex_type)(int kind)
 {
+   /*
+    * See also PTHREAD_MUTEX_KIND_MASK_NP in glibc source file
+    * <nptl/pthreadP.h>.
+    */
+   kind &= PTHREAD_MUTEX_RECURSIVE | PTHREAD_MUTEX_ERRORCHECK |
+      PTHREAD_MUTEX_NORMAL | PTHREAD_MUTEX_DEFAULT;
+
    if (kind == PTHREAD_MUTEX_RECURSIVE)
       return mutex_type_recursive_mutex;
    else if (kind == PTHREAD_MUTEX_ERRORCHECK)
@@ -258,9 +265,7 @@ static MutexT DRD_(pthread_to_drd_mutex_type)(const int kind)
       return mutex_type_default_mutex;
 #endif
    else
-   {
       return mutex_type_invalid_mutex;
-   }
 }
 
 #define IS_ALIGNED(p) (((uintptr_t)(p) & (sizeof(*(p)) - 1)) == 0)
@@ -367,7 +372,7 @@ static int DRD_(detected_linuxthreads)(void)
 #if defined(linux)
 #if defined(_CS_GNU_LIBPTHREAD_VERSION)
    /* Linux with a recent glibc. */
-   char buffer[256];
+   HChar buffer[256];
    unsigned len;
    len = confstr(_CS_GNU_LIBPTHREAD_VERSION, buffer, sizeof(buffer));
    assert(len <= sizeof(buffer));
@@ -533,28 +538,6 @@ int pthread_detach_intercept(pthread_t pt_thread)
 PTH_FUNCS(int, pthreadZudetach, pthread_detach_intercept,
           (pthread_t thread), (thread));
 
-// Don't intercept pthread_cancel() because pthread_cancel_init() loads
-// libgcc.so. That library is loaded by calling _dl_open(). The function
-// dl_open_worker() looks up from which object the caller is calling in
-// GL(dn_ns)[]. Since the DRD intercepts are linked into vgpreload_drd-*.so
-// and since that object file is not loaded through glibc, glibc does not
-// have any information about that object. That results in the following
-// segmentation fault on at least Fedora 17 x86_64:
-//   Process terminating with default action of signal 11 (SIGSEGV)
-//    General Protection Fault
-//      at 0x4006B75: _dl_map_object_from_fd (dl-load.c:1580)
-//      by 0x4008312: _dl_map_object (dl-load.c:2355)
-//      by 0x4012FFB: dl_open_worker (dl-open.c:226)
-//      by 0x400ECB5: _dl_catch_error (dl-error.c:178)
-//      by 0x4012B2B: _dl_open (dl-open.c:652)
-//      by 0x5184511: do_dlopen (dl-libc.c:89)
-//      by 0x400ECB5: _dl_catch_error (dl-error.c:178)
-//      by 0x51845D1: __libc_dlopen_mode (dl-libc.c:48)
-//      by 0x4E4A703: pthread_cancel_init (unwind-forcedunwind.c:53)
-//      by 0x4E476F2: pthread_cancel (pthread_cancel.c:40)
-//      by 0x4C2C050: pthread_cancel (drd_pthread_intercepts.c:547)
-//      by 0x400B3A: main (bar_bad.c:83)
-#if 0
 // NOTE: be careful to intercept only pthread_cancel() and not
 // pthread_cancel_init() on Linux.
 
@@ -574,7 +557,6 @@ int pthread_cancel_intercept(pthread_t pt_thread)
 
 PTH_FUNCS(int, pthreadZucancel, pthread_cancel_intercept,
           (pthread_t thread), (thread))
-#endif
 
 static __always_inline
 int pthread_once_intercept(pthread_once_t *once_control,
@@ -740,7 +722,7 @@ int pthread_cond_destroy_intercept(pthread_cond_t* cond)
                                    cond, 0, 0, 0, 0);
    CALL_FN_W_W(ret, fn, cond);
    VALGRIND_DO_CLIENT_REQUEST_STMT(VG_USERREQ__POST_COND_DESTROY,
-                                   cond, 0, 0, 0, 0);
+                                   cond, ret==0, 0, 0, 0);
    return ret;
 }
 
@@ -826,7 +808,8 @@ int pthread_cond_broadcast_intercept(pthread_cond_t* cond)
 PTH_FUNCS(int, pthreadZucondZubroadcast, pthread_cond_broadcast_intercept,
           (pthread_cond_t* cond), (cond));
 
-#if defined(HAVE_PTHREAD_SPIN_LOCK)
+#if defined(HAVE_PTHREAD_SPIN_LOCK) \
+    && !defined(DISABLE_PTHREAD_SPINLOCK_INTERCEPT)
 static __always_inline
 int pthread_spin_init_intercept(pthread_spinlock_t *spinlock, int pshared)
 {

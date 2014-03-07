@@ -7,7 +7,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2000-2012 Julian Seward 
+   Copyright (C) 2000-2013 Julian Seward 
       jseward@acm.org
 
    This program is free software; you can redistribute it and/or
@@ -60,12 +60,12 @@
 
 /* As deduced from sp_at_startup, the client's argc, argv[] and
    envp[] as extracted from the client's stack at startup-time. */
-Char** VG_(client_envp) = NULL;
+HChar** VG_(client_envp) = NULL;
 
 /* Path to library directory */
-const Char *VG_(libdir) = VG_LIBDIR;
+const HChar *VG_(libdir) = VG_LIBDIR;
 
-const Char *VG_(LD_PRELOAD_var_name) =
+const HChar *VG_(LD_PRELOAD_var_name) =
 #if defined(VGO_linux)
    "LD_PRELOAD";
 #elif defined(VGO_darwin)
@@ -76,13 +76,13 @@ const Char *VG_(LD_PRELOAD_var_name) =
 
 /* We do getenv without libc's help by snooping around in
    VG_(client_envp) as determined at startup time. */
-Char *VG_(getenv)(Char *varname)
+HChar *VG_(getenv)(const HChar *varname)
 {
    Int i, n;
    vg_assert( VG_(client_envp) );
    n = VG_(strlen)(varname);
    for (i = 0; VG_(client_envp)[i] != NULL; i++) {
-      Char* s = VG_(client_envp)[i];
+      HChar* s = VG_(client_envp)[i];
       if (VG_(strncmp)(varname, s, n) == 0 && s[n] == '=') {
          return & s[n+1];
       }
@@ -90,9 +90,9 @@ Char *VG_(getenv)(Char *varname)
    return NULL;
 }
 
-void  VG_(env_unsetenv) ( Char **env, const Char *varname )
+void  VG_(env_unsetenv) ( HChar **env, const HChar *varname )
 {
-   Char **from, **to;
+   HChar **from, **to;
    vg_assert(env);
    vg_assert(varname);
    to = NULL;
@@ -108,14 +108,15 @@ void  VG_(env_unsetenv) ( Char **env, const Char *varname )
 }
 
 /* set the environment; returns the old env if a new one was allocated */
-Char **VG_(env_setenv) ( Char ***envp, const Char* varname, const Char *val )
+HChar **VG_(env_setenv) ( HChar ***envp, const HChar* varname,
+                          const HChar *val )
 {
-   Char **env = (*envp);
-   Char **cpp;
+   HChar **env = (*envp);
+   HChar **cpp;
    Int len = VG_(strlen)(varname);
-   Char *valstr = VG_(arena_malloc)(VG_AR_CORE, "libcproc.es.1",
-                                    len + VG_(strlen)(val) + 2);
-   Char **oldenv = NULL;
+   HChar *valstr = VG_(arena_malloc)(VG_AR_CORE, "libcproc.es.1",
+                                     len + VG_(strlen)(val) + 2);
+   HChar **oldenv = NULL;
 
    VG_(sprintf)(valstr, "%s=%s", varname, val);
 
@@ -127,7 +128,7 @@ Char **VG_(env_setenv) ( Char ***envp, const Char* varname, const Char *val )
    }
 
    if (env == NULL) {
-      env = VG_(arena_malloc)(VG_AR_CORE, "libcproc.es.2", sizeof(Char **) * 2);
+      env = VG_(arena_malloc)(VG_AR_CORE, "libcproc.es.2", sizeof(HChar *) * 2);
       env[0] = valstr;
       env[1] = NULL;
 
@@ -135,8 +136,8 @@ Char **VG_(env_setenv) ( Char ***envp, const Char* varname, const Char *val )
 
    }  else {
       Int envlen = (cpp-env) + 2;
-      Char **newenv = VG_(arena_malloc)(VG_AR_CORE, "libcproc.es.3",
-                                        envlen * sizeof(Char **));
+      HChar **newenv = VG_(arena_malloc)(VG_AR_CORE, "libcproc.es.3",
+                                         envlen * sizeof(HChar *));
 
       for (cpp = newenv; *env; )
 	 *cpp++ = *env++;
@@ -162,18 +163,18 @@ Char **VG_(env_setenv) ( Char ***envp, const Char* varname, const Char *val )
    This is also careful to mop up any excess ':'s, since empty strings
    delimited by ':' are considered to be '.' in a path.
 */
-static void mash_colon_env(Char *varp, const Char *remove_pattern)
+static void mash_colon_env(HChar *varp, const HChar *remove_pattern)
 {
-   Char *const start = varp;
-   Char *entry_start = varp;
-   Char *output = varp;
+   HChar *const start = varp;
+   HChar *entry_start = varp;
+   HChar *output = varp;
 
    if (varp == NULL)
       return;
 
    while(*varp) {
       if (*varp == ':') {
-	 Char prev;
+	 HChar prev;
 	 Bool match;
 
 	 /* This is a bit subtle: we want to match against the entry
@@ -219,7 +220,7 @@ static void mash_colon_env(Char *varp, const Char *remove_pattern)
 
 // Removes all the Valgrind-added stuff from the passed environment.  Used
 // when starting child processes, so they don't see that added stuff.
-void VG_(env_remove_valgrind_env_stuff)(Char** envp)
+void VG_(env_remove_valgrind_env_stuff)(HChar** envp)
 {
 
 #if defined(VGO_darwin)
@@ -230,10 +231,10 @@ void VG_(env_remove_valgrind_env_stuff)(Char** envp)
 #endif
 
    Int i;
-   Char* ld_preload_str = NULL;
-   Char* ld_library_path_str = NULL;
-   Char* dyld_insert_libraries_str = NULL;
-   Char* buf;
+   HChar* ld_preload_str = NULL;
+   HChar* ld_library_path_str = NULL;
+   HChar* dyld_insert_libraries_str = NULL;
+   HChar* buf;
 
    // Find LD_* variables
    // DDD: should probably conditionally compiled some of this:
@@ -296,11 +297,11 @@ Int VG_(waitpid)(Int pid, Int *status, Int options)
 }
 
 /* clone the environment */
-Char **VG_(env_clone) ( Char **oldenv )
+HChar **VG_(env_clone) ( HChar **oldenv )
 {
-   Char **oldenvp;
-   Char **newenvp;
-   Char **newenv;
+   HChar **oldenvp;
+   HChar **newenvp;
+   HChar **newenv;
    Int  envlen;
 
    vg_assert(oldenv);
@@ -309,7 +310,7 @@ Char **VG_(env_clone) ( Char **oldenv )
    envlen = oldenvp - oldenv + 1;
    
    newenv = VG_(arena_malloc)(VG_AR_CORE, "libcproc.ec.1",
-                              envlen * sizeof(Char **));
+                              envlen * sizeof(HChar *));
 
    oldenvp = oldenv;
    newenvp = newenv;
@@ -323,9 +324,9 @@ Char **VG_(env_clone) ( Char **oldenv )
    return newenv;
 }
 
-void VG_(execv) ( Char* filename, Char** argv )
+void VG_(execv) ( const HChar* filename, HChar** argv )
 {
-   Char** envp;
+   HChar** envp;
    SysRes res;
 
    /* restore the DATA rlimit for the child */
@@ -342,7 +343,7 @@ void VG_(execv) ( Char* filename, Char** argv )
 
 /* Return -1 if error, else 0.  NOTE does not indicate return code of
    child! */
-Int VG_(system) ( Char* cmd )
+Int VG_(system) ( const HChar* cmd )
 {
    Int pid;
    if (cmd == NULL)
@@ -352,10 +353,10 @@ Int VG_(system) ( Char* cmd )
       return -1;
    if (pid == 0) {
       /* child */
-      Char* argv[4] = { "/bin/sh", "-c", cmd, 0 };
-      VG_(execv)(argv[0], argv);
+      const HChar* argv[4] = { "/bin/sh", "-c", cmd, 0 };
+      VG_(execv)(argv[0], (HChar **)argv);
 
-      /* If we're still alive here, execve failed. */
+      /* If we're still alive here, execv failed. */
       VG_(exit)(1);
    } else {
       /* parent */
@@ -442,7 +443,7 @@ Int VG_(gettid)(void)
    SysRes res = VG_(do_syscall0)(__NR_gettid);
 
    if (sr_isError(res) && sr_Res(res) == VKI_ENOSYS) {
-      Char pid[16];      
+      HChar pid[16];      
       /*
        * The gettid system call does not exist. The obvious assumption
        * to make at this point would be that we are running on an older
@@ -457,10 +458,16 @@ Int VG_(gettid)(void)
        * the /proc/self link is pointing...
        */
 
+#     if defined(VGP_arm64_linux)
+      res = VG_(do_syscall4)(__NR_readlinkat, VKI_AT_FDCWD,
+                             (UWord)"/proc/self",
+                             (UWord)pid, sizeof(pid));
+#     else
       res = VG_(do_syscall3)(__NR_readlink, (UWord)"/proc/self",
                              (UWord)pid, sizeof(pid));
+#     endif
       if (!sr_isError(res) && sr_Res(res) > 0) {
-         Char* s;
+         HChar* s;
          pid[sr_Res(res)] = '\0';
          res = VG_(mk_SysRes_Success)(  VG_(strtoll10)(pid, &s) );
          if (*s != '\0') {
@@ -532,7 +539,8 @@ Int VG_(getegid) ( void )
    platform. */
 Int VG_(getgroups)( Int size, UInt* list )
 {
-#  if defined(VGP_x86_linux) || defined(VGP_ppc32_linux)
+#  if defined(VGP_x86_linux) || defined(VGP_ppc32_linux) \
+      || defined(VGP_mips64_linux)
    Int    i;
    SysRes sres;
    UShort list16[64];
@@ -550,7 +558,7 @@ Int VG_(getgroups)( Int size, UInt* list )
 #  elif defined(VGP_amd64_linux) || defined(VGP_ppc64_linux)  \
         || defined(VGP_arm_linux)                             \
         || defined(VGO_darwin) || defined(VGP_s390x_linux)    \
-        || defined(VGP_mips32_linux)
+        || defined(VGP_mips32_linux) || defined(VGP_arm64_linux)
    SysRes sres;
    sres = VG_(do_syscall2)(__NR_getgroups, size, (Addr)list);
    if (sr_isError(sres))
@@ -724,21 +732,26 @@ void VG_(do_atfork_child)(ThreadId tid)
 
 void VG_(invalidate_icache) ( void *ptr, SizeT nbytes )
 {
+   if (nbytes == 0) return;    // nothing to do
+
+   // Get cache info
+   VexArchInfo vai;
+   VG_(machine_get_VexArchInfo)(NULL, &vai);
+
+   // If I-caches are coherent, nothing needs to be done here
+   if (vai.hwcache_info.icaches_maintain_coherence) return;
+
 #  if defined(VGA_ppc32) || defined(VGA_ppc64)
    Addr startaddr = (Addr) ptr;
    Addr endaddr   = startaddr + nbytes;
    Addr cls;
    Addr addr;
-   VexArchInfo vai;
-
-   if (nbytes == 0) return;
-   vg_assert(nbytes > 0);
 
    VG_(machine_get_VexArchInfo)( NULL, &vai );
-   cls = vai.ppc_cache_line_szB;
+   cls = vai.ppc_icache_line_szB;
 
    /* Stay sane .. */
-   vg_assert(cls == 32 || cls == 64 || cls == 128);
+   vg_assert(cls == 16 || cls == 32 || cls == 64 || cls == 128);
 
    startaddr &= ~(cls - 1);
    for (addr = startaddr; addr < endaddr; addr += cls) {
@@ -750,28 +763,132 @@ void VG_(invalidate_icache) ( void *ptr, SizeT nbytes )
    }
    __asm__ __volatile__("sync; isync");
 
-#  elif defined(VGA_x86)
-   /* no need to do anything, hardware provides coherence */
-
-#  elif defined(VGA_amd64)
-   /* no need to do anything, hardware provides coherence */
-
-#  elif defined(VGA_s390x)
-   /* no need to do anything, hardware provides coherence */
-
 #  elif defined(VGP_arm_linux)
    /* ARM cache flushes are privileged, so we must defer to the kernel. */
    Addr startaddr = (Addr) ptr;
    Addr endaddr   = startaddr + nbytes;
    VG_(do_syscall2)(__NR_ARM_cacheflush, startaddr, endaddr);
 
-#  elif defined(VGA_mips32)
+#  elif defined(VGP_arm64_linux)
+   // This arm64_linux section of this function VG_(invalidate_icache)
+   // is copied from
+   // https://github.com/armvixl/vixl/blob/master/src/a64/cpu-a64.cc
+   // which has the following copyright notice:
+   /*
+   Copyright 2013, ARM Limited
+   All rights reserved.
+
+   Redistribution and use in source and binary forms, with or without
+   modification, are permitted provided that the following conditions are met:
+   
+   * Redistributions of source code must retain the above copyright notice,
+     this list of conditions and the following disclaimer.
+   * Redistributions in binary form must reproduce the above copyright notice,
+     this list of conditions and the following disclaimer in the documentation
+     and/or other materials provided with the distribution.
+   * Neither the name of ARM Limited nor the names of its contributors may be
+     used to endorse or promote products derived from this software without
+     specific prior written permission.
+
+   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS CONTRIBUTORS "AS IS" AND
+   ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+   WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+   DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE
+   FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+   DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+   SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+   CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+   OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+   */
+
+   // Ask what the I and D line sizes are
+   UInt cache_type_register;
+   // Copy the content of the cache type register to a core register.
+   __asm__ __volatile__ ("mrs %[ctr], ctr_el0" // NOLINT
+                         : [ctr] "=r" (cache_type_register));
+
+   const Int kDCacheLineSizeShift = 16;
+   const Int kICacheLineSizeShift = 0;
+   const UInt kDCacheLineSizeMask = 0xf << kDCacheLineSizeShift;
+   const UInt kICacheLineSizeMask = 0xf << kICacheLineSizeShift;
+
+   // The cache type register holds the size of the I and D caches as a power of
+   // two.
+   const UInt dcache_line_size_power_of_two =
+       (cache_type_register & kDCacheLineSizeMask) >> kDCacheLineSizeShift;
+   const UInt icache_line_size_power_of_two =
+       (cache_type_register & kICacheLineSizeMask) >> kICacheLineSizeShift;
+
+   const UInt dcache_line_size_ = 1 << dcache_line_size_power_of_two;
+   const UInt icache_line_size_ = 1 << icache_line_size_power_of_two;
+
+   Addr start = (Addr)ptr;
+   // Sizes will be used to generate a mask big enough to cover a pointer.
+   Addr dsize = (Addr)dcache_line_size_;
+   Addr isize = (Addr)icache_line_size_;
+
+   // Cache line sizes are always a power of 2.
+   Addr dstart = start & ~(dsize - 1);
+   Addr istart = start & ~(isize - 1);
+   Addr end    = start + nbytes;
+
+   __asm__ __volatile__ (
+     // Clean every line of the D cache containing the target data.
+     "0: \n\t"
+     // dc : Data Cache maintenance
+     // c : Clean
+     // va : by (Virtual) Address
+     // u : to the point of Unification
+     // The point of unification for a processor is the point by which the
+     // instruction and data caches are guaranteed to see the same copy of a
+     // memory location. See ARM DDI 0406B page B2-12 for more information.
+     "dc cvau, %[dline] \n\t"
+     "add %[dline], %[dline], %[dsize] \n\t"
+     "cmp %[dline], %[end] \n\t"
+     "b.lt 0b \n\t"
+     // Barrier to make sure the effect of the code above is visible to the rest
+     // of the world.
+     // dsb : Data Synchronisation Barrier
+     // ish : Inner SHareable domain
+     // The point of unification for an Inner Shareable shareability domain is
+     // the point by which the instruction and data caches of all the processors
+     // in that Inner Shareable shareability domain are guaranteed to see the
+     // same copy of a memory location. See ARM DDI 0406B page B2-12 for more
+     // information.
+     "dsb ish \n\t"
+     // Invalidate every line of the I cache containing the target data.
+     "1: \n\t"
+     // ic : instruction cache maintenance
+     // i : invalidate
+     // va : by address
+     // u : to the point of unification
+     "ic ivau, %[iline] \n\t"
+     "add %[iline], %[iline], %[isize] \n\t"
+     "cmp %[iline], %[end] \n\t"
+     "b.lt 1b \n\t"
+     // Barrier to make sure the effect of the code above is visible to the rest
+     // of the world.
+     "dsb ish \n\t"
+     // Barrier to ensure any prefetching which happened before this code is
+     // discarded.
+     // isb : Instruction Synchronisation Barrier
+     "isb \n\t"
+     : [dline] "+r" (dstart),
+       [iline] "+r" (istart)
+     : [dsize] "r" (dsize),
+       [isize] "r" (isize),
+       [end] "r" (end)
+     // This code does not write to memory but without the dependency gcc might
+     // move this code before the code is generated.
+     : "cc", "memory"
+   );
+
+#  elif defined(VGA_mips32) || defined(VGA_mips64)
    SysRes sres = VG_(do_syscall3)(__NR_cacheflush, (UWord) ptr,
                                  (UWord) nbytes, (UWord) 3);
    vg_assert( sres._isError == 0 );
 
-#  else
-#    error "Unknown ARCH"
 #  endif
 }
 

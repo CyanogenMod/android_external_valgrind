@@ -1,24 +1,6 @@
 # Suppressions for Android's libc (bionic) and probably other
 # stuff too.
 
-{
-  bionic_dlopen
-  Memcheck:Addr4
-  fun:__dl_strlen
-  ...
-  fun:__dl_find_library
-  fun:__dl_dlopen
-}
-
-{
-  bionic_dlopen_c
-  Memcheck:Cond
-  fun:__dl_strlen
-  ...
-  fun:__dl_find_library
-  fun:__dl_dlopen
-}
-
 # this is a real bug in the Android stack -- this routine really does read and write below sp.
 {
    sha1_block_data_order-reads-below-sp

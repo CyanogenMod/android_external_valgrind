@@ -8,7 +8,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright IBM Corp. 2010-2012
+   Copyright IBM Corp. 2010-2013
 
    This program is free software; you can redistribute it and/or
    modify it under the terms of the GNU General Public License as
@@ -34,8 +34,6 @@
 #define __VEX_GUEST_S390_DEFS_H
 
 #include "libvex_basictypes.h"        // offsetof
-#include "libvex_ir.h"                // IRSB  (needed by bb_to_IR.h)
-#include "libvex.h"                   // VexArch  (needed by bb_to_IR.h)
 #include "guest_generic_bb_to_IR.h"   // DisResult
 #include "libvex_guest_s390x.h"       // VexGuestS390XState
 
@@ -52,10 +50,11 @@ DisResult disInstr_S390 ( IRSB*        irbb,
                           VexArch      guest_arch,
                           VexArchInfo* archinfo,
                           VexAbiInfo*  abiinfo,
-                          Bool         host_bigendian );
+                          Bool         host_bigendian,
+                          Bool         sigill_diag );
 
 /* Used by the optimiser to specialise calls to helpers. */
-IRExpr* guest_s390x_spechelper ( HChar   *function_name,
+IRExpr* guest_s390x_spechelper ( const HChar *function_name,
                                  IRExpr **args,
                                  IRStmt **precedingStmts,
                                  Int n_precedingStmts);
@@ -92,6 +91,8 @@ ULong s390_do_cu41(UInt srcvalue);
 ULong s390_do_cu42(UInt srcvalue);
 UInt  s390_do_cvb(ULong decimal);
 ULong s390_do_cvd(ULong binary);
+ULong s390_do_ecag(ULong op2addr);
+UInt  s390_do_pfpo(UInt gpr0);
 
 /* The various ways to compute the condition code. */
 enum {
@@ -130,7 +131,32 @@ enum {
    S390_CC_OP_BFP_TDC_32 = 32,
    S390_CC_OP_BFP_TDC_64 = 33,
    S390_CC_OP_BFP_TDC_128 = 34,
-   S390_CC_OP_SET = 35
+   S390_CC_OP_SET = 35,
+   S390_CC_OP_BFP_32_TO_UINT_32 = 36,
+   S390_CC_OP_BFP_64_TO_UINT_32 = 37,
+   S390_CC_OP_BFP_128_TO_UINT_32 = 38,
+   S390_CC_OP_BFP_32_TO_UINT_64 = 39,
+   S390_CC_OP_BFP_64_TO_UINT_64 = 40,
+   S390_CC_OP_BFP_128_TO_UINT_64 = 41,
+   S390_CC_OP_DFP_RESULT_64 = 42,
+   S390_CC_OP_DFP_RESULT_128 = 43,
+   S390_CC_OP_DFP_TDC_32 = 44,
+   S390_CC_OP_DFP_TDC_64 = 45,
+   S390_CC_OP_DFP_TDC_128 = 46,
+   S390_CC_OP_DFP_TDG_32 = 47,
+   S390_CC_OP_DFP_TDG_64 = 48,
+   S390_CC_OP_DFP_TDG_128 = 49,
+   S390_CC_OP_DFP_64_TO_UINT_32 = 50,
+   S390_CC_OP_DFP_128_TO_UINT_32 = 51,
+   S390_CC_OP_DFP_64_TO_UINT_64 = 52,
+   S390_CC_OP_DFP_128_TO_UINT_64 = 53,
+   S390_CC_OP_DFP_64_TO_INT_32 = 54,
+   S390_CC_OP_DFP_128_TO_INT_32 = 55,
+   S390_CC_OP_DFP_64_TO_INT_64 = 56,
+   S390_CC_OP_DFP_128_TO_INT_64 = 57,
+   S390_CC_OP_PFPO_32 = 58,
+   S390_CC_OP_PFPO_64 = 59,
+   S390_CC_OP_PFPO_128 = 60
 };
 
 /*------------------------------------------------------------*/
@@ -141,47 +167,73 @@ enum {
    Z -- value is zero extended to 32 / 64 bit
    S -- value is sign extended to 32 / 64 bit
    F -- a binary floating point value
+   D -- a decimal floating point value
 
-   +--------------------------------+-----------------------+----------------------+-------------+
-   | op                             |   cc_dep1             |   cc_dep2            |   cc_ndep   |
-   +--------------------------------+-----------------------+----------------------+-------------+
-   | S390_CC_OP_BITWISE             | Z result              |                      |             |
-   | S390_CC_OP_SIGNED_COMPARE      | S 1st operand         | S 2nd operand        |             |
-   | S390_CC_OP_UNSIGNED_COMPARE    | Z 1st operand         | Z 2nd operand        |             |
-   | S390_CC_OP_SIGNED_ADD_32       | S 1st operand         | S 2nd operand        |             |
-   | S390_CC_OP_SIGNED_ADD_64       | S 1st operand         | S 2nd operand        |             |
-   | S390_CC_OP_UNSIGNED_ADD_32     | Z 1st operand         | Z 2nd operand        |             |
-   | S390_CC_OP_UNSIGNED_ADD_64     | Z 1st operand         | Z 2nd operand        |             |
-   | S390_CC_OP_UNSIGNED_ADDC_32    | Z 1st operand         | Z 2nd operand        | Z carry in  |
-   | S390_CC_OP_UNSIGNED_ADDC_64    | Z 1st operand         | Z 2nd operand        | Z carry in  |
-   | S390_CC_OP_SIGNED_SUB_32       | S left operand        | S right operand      |             |
-   | S390_CC_OP_SIGNED_SUB_64       | S left operand        | S right operand      |             |
-   | S390_CC_OP_UNSIGNED_SUB_32     | Z left operand        | Z right operand      |             |
-   | S390_CC_OP_UNSIGNED_SUB_64     | Z left operand        | Z right operand      |             |
-   | S390_CC_OP_UNSIGNED_SUBB_32    | Z left operand        | Z right operand      | Z borrow in |
-   | S390_CC_OP_UNSIGNED_SUBB_64    | Z left operand        | Z right operand      | Z borrow in |
-   | S390_CC_OP_LOAD_AND_TEST       | S loaded value        |                      |             |
-   | S390_CC_OP_LOAD_POSITIVE_32    | S loaded value        |                      |             |
-   | S390_CC_OP_LOAD_POSITIVE_64    | S loaded value        |                      |             |
-   | S390_CC_OP_TEST_UNDER_MASK_8   | Z tested value        | Z mask               |             |
-   | S390_CC_OP_TEST_UNDER_MASK_16  | Z tested value        | Z mask               |             |
-   | S390_CC_OP_SHIFT_LEFT_32       | Z value to be shifted | Z shift amount       |             |
-   | S390_CC_OP_SHIFT_LEFT_64       | Z value to be shifted | Z shift amount       |             |
-   | S390_CC_OP_INSERT_CHAR_MASK_32 | Z result              | Z mask               |             |
-   | S390_CC_OP_BFP_RESULT_32       | F result              |                      |             |
-   | S390_CC_OP_BFP_RESULT_64       | F result              |                      |             |
-   | S390_CC_OP_BFP_RESULT_128      | F result hi 64 bits   | F result low 64 bits |             |
-   | S390_CC_OP_BFP_32_TO_INT_32    | F source              |                      |             |
-   | S390_CC_OP_BFP_64_TO_INT_32    | F source              |                      |             |
-   | S390_CC_OP_BFP_128_TO_INT_32   | F source hi 64 bits   |                      |             |
-   | S390_CC_OP_BFP_32_TO_INT_64    | F source              |                      |             |
-   | S390_CC_OP_BFP_64_TO_INT_64    | F source              |                      |             |
-   | S390_CC_OP_BFP_128_TO_INT_64   | F source hi 64 bits   |                      |             |
-   | S390_CC_OP_BFP_TDC_32          | F value               | Z class              |             |
-   | S390_CC_OP_BFP_TDC_64          | F value               | Z class              |             |
-   | S390_CC_OP_BFP_TDC_128         | F value hi 64 bits    | F value low 64 bits  | Z class     |
-   | S390_CC_OP_SET                 | Z condition code      |                      |             |
-   +--------------------------------+-----------------------+----------------------+-------------+
+   +--------------------------------+-----------------------+----------------------+-----------------+
+   | op                             |   cc_dep1             |   cc_dep2            |   cc_ndep       |
+   +--------------------------------+-----------------------+----------------------+-----------------+
+   | S390_CC_OP_BITWISE             | Z result              |                      |                 |
+   | S390_CC_OP_SIGNED_COMPARE      | S 1st operand         | S 2nd operand        |                 |
+   | S390_CC_OP_UNSIGNED_COMPARE    | Z 1st operand         | Z 2nd operand        |                 |
+   | S390_CC_OP_SIGNED_ADD_32       | S 1st operand         | S 2nd operand        |                 |
+   | S390_CC_OP_SIGNED_ADD_64       | S 1st operand         | S 2nd operand        |                 |
+   | S390_CC_OP_UNSIGNED_ADD_32     | Z 1st operand         | Z 2nd operand        |                 |
+   | S390_CC_OP_UNSIGNED_ADD_64     | Z 1st operand         | Z 2nd operand        |                 |
+   | S390_CC_OP_UNSIGNED_ADDC_32    | Z 1st operand         | Z 2nd operand        | Z carry in      |
+   | S390_CC_OP_UNSIGNED_ADDC_64    | Z 1st operand         | Z 2nd operand        | Z carry in      |
+   | S390_CC_OP_SIGNED_SUB_32       | S left operand        | S right operand      |                 |
+   | S390_CC_OP_SIGNED_SUB_64       | S left operand        | S right operand      |                 |
+   | S390_CC_OP_UNSIGNED_SUB_32     | Z left operand        | Z right operand      |                 |
+   | S390_CC_OP_UNSIGNED_SUB_64     | Z left operand        | Z right operand      |                 |
+   | S390_CC_OP_UNSIGNED_SUBB_32    | Z left operand        | Z right operand      | Z borrow in     |
+   | S390_CC_OP_UNSIGNED_SUBB_64    | Z left operand        | Z right operand      | Z borrow in     |
+   | S390_CC_OP_LOAD_AND_TEST       | S loaded value        |                      |                 |
+   | S390_CC_OP_LOAD_POSITIVE_32    | S loaded value        |                      |                 |
+   | S390_CC_OP_LOAD_POSITIVE_64    | S loaded value        |                      |                 |
+   | S390_CC_OP_TEST_UNDER_MASK_8   | Z tested value        | Z mask               |                 |
+   | S390_CC_OP_TEST_UNDER_MASK_16  | Z tested value        | Z mask               |                 |
+   | S390_CC_OP_SHIFT_LEFT_32       | Z value to be shifted | Z shift amount       |                 |
+   | S390_CC_OP_SHIFT_LEFT_64       | Z value to be shifted | Z shift amount       |                 |
+   | S390_CC_OP_INSERT_CHAR_MASK_32 | Z result              | Z mask               |                 |
+   | S390_CC_OP_BFP_RESULT_32       | F result              |                      |                 |
+   | S390_CC_OP_BFP_RESULT_64       | F result              |                      |                 |
+   | S390_CC_OP_BFP_RESULT_128      | F result hi 64 bits   | F result low 64 bits |                 |
+   | S390_CC_OP_BFP_32_TO_INT_32    | F source              | Z rounding mode      |                 |
+   | S390_CC_OP_BFP_64_TO_INT_32    | F source              | Z rounding mode      |                 |
+   | S390_CC_OP_BFP_128_TO_INT_32   | F source hi 64 bits   | F source low 64 bits | Z rounding mode |
+   | S390_CC_OP_BFP_32_TO_INT_64    | F source              | Z rounding mode      |                 |
+   | S390_CC_OP_BFP_64_TO_INT_64    | F source              | Z rounding mode      |                 |
+   | S390_CC_OP_BFP_128_TO_INT_64   | F source hi 64 bits   | F source low 64 bits | Z rounding mode |
+   | S390_CC_OP_BFP_TDC_32          | F value               | Z class              |                 |
+   | S390_CC_OP_BFP_TDC_64          | F value               | Z class              |                 |
+   | S390_CC_OP_BFP_TDC_128         | F value hi 64 bits    | F value low 64 bits  | Z class         |
+   | S390_CC_OP_SET                 | Z condition code      |                      |                 |
+   | S390_CC_OP_BFP_32_TO_UINT_32   | F source              | Z rounding mode      |                 |
+   | S390_CC_OP_BFP_64_TO_UINT_32   | F source              | Z rounding mode      |                 |
+   | S390_CC_OP_BFP_128_TO_UINT_32  | F source hi 64 bits   | F source low 64 bits | Z rounding mode |
+   | S390_CC_OP_BFP_32_TO_UINT_64   | F source              | Z rounding mode      |                 |
+   | S390_CC_OP_BFP_64_TO_UINT_64   | F source              | Z rounding mode      |                 |
+   | S390_CC_OP_BFP_128_TO_UINT_64  | F source hi 64 bits   | F source low 64 bits | Z rounding mode |
+   | S390_CC_OP_DFP_RESULT_64       | D result              |                      |                 |
+   | S390_CC_OP_DFP_RESULT_128      | D result hi 64 bits   | D result low 64 bits |                 |
+   | S390_CC_OP_DFP_TDC_32          | D value               | Z class              |                 |
+   | S390_CC_OP_DFP_TDC_64          | D value               | Z class              |                 |
+   | S390_CC_OP_DFP_TDC_128         | D value hi 64 bits    | D value low 64 bits  | Z class         |
+   | S390_CC_OP_DFP_TDG_32          | D value               | Z group              |                 |
+   | S390_CC_OP_DFP_TDG_64          | D value               | Z group              |                 |
+   | S390_CC_OP_DFP_TDG_128         | D value hi 64 bits    | D value low 64 bits  | Z group         |
+   | S390_CC_OP_DFP_64_TO_UINT_32   | D source              | Z rounding mode      |                 |
+   | S390_CC_OP_DFP_128_TO_UINT_32  | D source hi 64 bits   | D source low 64 bits | Z rounding mode |
+   | S390_CC_OP_DFP_64_TO_UINT_64   | D source              | Z rounding mode      |                 |
+   | S390_CC_OP_DFP_128_TO_UINT_64  | D source hi 64 bits   | D source low 64 bits | Z rounding mode |
+   | S390_CC_OP_DFP_64_TO_INT_32    | D source              | Z rounding mode      |                 |
+   | S390_CC_OP_DFP_128_TO_INT_32   | D source hi 64 bits   | D source low 64 bits | Z rounding mode |
+   | S390_CC_OP_DFP_64_TO_INT_64    | D source              | Z rounding mode      |                 |
+   | S390_CC_OP_DFP_128_TO_INT_64   | D source hi 64 bits   | D source low 64 bits | Z rounding mode |
+   | S390_CC_OP_PFPO_32             | F|D source            | Z GR0 low 32 bits    |                 |
+   | S390_CC_OP_PFPO_64             | F|D source            | Z GR0 low 32 bits    |                 |
+   | S390_CC_OP_PFPO_128            | F|D source hi 64 bits | F|D src low 64 bits  | Z GR0 low 32 bits |
+   +--------------------------------+-----------------------+----------------------+-----------------+
 */
 
 /*------------------------------------------------------------*/

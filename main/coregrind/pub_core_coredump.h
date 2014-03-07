@@ -7,7 +7,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2000-2012 Julian Seward
+   Copyright (C) 2000-2013 Julian Seward
       jseward@acm.org
 
    This program is free software; you can redistribute it and/or
@@ -31,12 +31,15 @@
 #ifndef __PUB_CORE_COREDUMP_H
 #define __PUB_CORE_COREDUMP_H
 
+#include "pub_core_basics.h"      // ThreadId
+#include "pub_core_vki.h"         // vki_siginfo_t
+
 //--------------------------------------------------------------------
 // PURPOSE: This module produces a core dump when asked.
 //--------------------------------------------------------------------
 
 extern void VG_(make_coredump) ( ThreadId tid, const vki_siginfo_t *si,
-                                 UInt max_size );
+                                 ULong max_size );
 
 #endif   // __PUB_CORE_COREDUMP_H
 

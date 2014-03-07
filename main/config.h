@@ -1,5 +1,5 @@
 /* config.h.  Generated from config.h.in by configure.  */
-/* config.h.in.  Generated from configure.in by autoheader.  */
+/* config.h.in.  Generated from configure.ac by autoheader.  */
 
 /* Define to 1 if you're using Bionic */
 /* #undef BIONIC_LIBC */
@@ -22,6 +22,9 @@
 /* Darwin / Mac OS X version */
 /* #undef DARWIN_VERS */
 
+/* Disable intercept pthread_spin_lock() on MIPS32 and MIPS64. */
+/* #undef DISABLE_PTHREAD_SPINLOCK_INTERCEPT */
+
 /* configured to run as an inner Valgrind */
 /* #undef ENABLE_INNER */
 
@@ -32,7 +35,7 @@
 /* #undef GLIBC_2_10 */
 
 /* Define to 1 if you're using glibc 2.11.x */
-/* #dundef GLIBC_2_11 1 */
+/* #undef GLIBC_2_11 */
 
 /* Define to 1 if you're using glibc 2.12.x */
 /* #undef GLIBC_2_12 */
@@ -44,10 +47,19 @@
 /* #undef GLIBC_2_14 */
 
 /* Define to 1 if you're using glibc 2.15.x */
-/* #undef GLIBC_2_15 */
+#define GLIBC_2_15 1
 
 /* Define to 1 if you're using glibc 2.16.x */
 /* #undef GLIBC_2_16 */
+
+/* Define to 1 if you're using glibc 2.17.x */
+/* #undef GLIBC_2_17 */
+
+/* Define to 1 if you're using glibc 2.18.x */
+/* #undef GLIBC_2_18 */
+
+/* Define to 1 if you're using glibc 2.19.x */
+/* #undef GLIBC_2_19 */
 
 /* Define to 1 if you're using glibc 2.2.x */
 /* #undef GLIBC_2_2 */
@@ -78,6 +90,9 @@
 
 /* Define to 1 if you have the <asm/unistd.h> header file. */
 #define HAVE_ASM_UNISTD_H 1
+
+/* Define to 1 if as supports floating point phased out category. */
+/* #undef HAVE_AS_PPC_FPPO */
 
 /* Define to 1 if as supports mtocrf/mfocrf. */
 /* #undef HAVE_AS_PPC_MFTOCRF */
@@ -154,10 +169,10 @@
 #define HAVE_PPOLL 1
 
 /* Define to 1 if you have the `process_vm_readv' function. */
-/* #undef HAVE_PROCESS_VM_READV */
+#define HAVE_PROCESS_VM_READV 1
 
 /* Define to 1 if you have the `process_vm_writev' function. */
-/* #undef HAVE_PROCESS_VM_WRITEV */
+#define HAVE_PROCESS_VM_WRITEV 1
 
 /* Define to 1 if you have the `pthread_barrier_init' function. */
 /* #undef HAVE_PTHREAD_BARRIER_INIT */
@@ -199,11 +214,17 @@
 /* Define to 1 if you have the `pthread_rwlock_timedwrlock' function. */
 #define HAVE_PTHREAD_RWLOCK_TIMEDWRLOCK 1
 
+/* Define to 1 if you have the `pthread_setname_np' function. */
+#define HAVE_PTHREAD_SETNAME_NP 1
+
 /* Define to 1 if you have the `pthread_spin_lock' function. */
 /* #undef HAVE_PTHREAD_SPIN_LOCK */
 
 /* Define to 1 if you have the `pthread_yield' function. */
 #define HAVE_PTHREAD_YIELD 1
+
+/* Define to 1 if you have the `PTRACE_GETREGS' ptrace request. */
+#define HAVE_PTRACE_GETREGS 1
 
 /* Define to 1 if you have the `readlinkat' function. */
 #define HAVE_READLINKAT 1
@@ -212,7 +233,7 @@
 #define HAVE_SEMTIMEDOP 1
 
 /* Define to 1 if libstd++ supports annotating shared pointers */
-/* #undef HAVE_SHARED_POINTER_ANNOTATION */
+#define HAVE_SHARED_POINTER_ANNOTATION 1
 
 /* Define to 1 if you have the `signalfd' function. */
 #define HAVE_SIGNALFD 1
@@ -320,7 +341,7 @@
 #define PACKAGE_NAME "Valgrind"
 
 /* Define to the full name and version of this package. */
-#define PACKAGE_STRING "Valgrind 3.8.1"
+#define PACKAGE_STRING "Valgrind 3.10.0.SVN"
 
 /* Define to the one symbol short name of this package. */
 #define PACKAGE_TARNAME "valgrind"
@@ -329,10 +350,7 @@
 #define PACKAGE_URL ""
 
 /* Define to the version of this package. */
-#define PACKAGE_VERSION "3.8.1"
-
-/* configured memory alignment 2*PAGE_SIZE */
-#define SHM_ALIGNMENT 2*(1UL << MIPS_PAGE_SHIFT)
+#define PACKAGE_VERSION "3.10.0.SVN"
 
 /* Define to 1 if you have the ANSI C header files. */
 #define STDC_HEADERS 1
@@ -341,7 +359,7 @@
 #define TIME_WITH_SYS_TIME 1
 
 /* Version number of package */
-#define VERSION "3.8.1"
+#define VERSION "3.10.0.SVN"
 
 /* Temporary files directory */
 #define VG_TMPDIR "/data/local/tmp"

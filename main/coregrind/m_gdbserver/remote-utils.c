@@ -59,7 +59,7 @@ static char *to_gdb = NULL;
 static char *shared_mem = NULL;
 
 static
-int open_fifo (char *side, char *path, int flags)
+int open_fifo (const char *side, const char *path, int flags)
 {
   SysRes o;
   int fd;
@@ -91,7 +91,7 @@ void remote_utils_output_status(void)
 /* Returns 0 if vgdb and connection state looks good,
    otherwise returns an int value telling which check failed. */
 static
-int vgdb_state_looks_bad(char* where)
+int vgdb_state_looks_bad(const char* where)
 {
    if (VG_(kill)(shared->vgdb_pid, 0) != 0)
       return 1; // vgdb process does not exist anymore.
@@ -105,16 +105,11 @@ int vgdb_state_looks_bad(char* where)
    return 0; // all is ok.
 }
 
-/* On systems that defines PR_SET_PTRACER, verify if ptrace_scope is
-   is permissive enough for vgdb. Otherwise, call set_ptracer.
-   This is especially aimed at Ubuntu >= 10.10 which has added
-   the ptrace_scope context. */
-static
-void set_ptracer(void)
+void VG_(set_ptracer)(void)
 {
 #ifdef PR_SET_PTRACER
    SysRes o;
-   char *ptrace_scope_setting_file = "/proc/sys/kernel/yama/ptrace_scope";
+   const char *ptrace_scope_setting_file = "/proc/sys/kernel/yama/ptrace_scope";
    int fd;
    char ptrace_scope;
    int ret;
@@ -132,11 +127,16 @@ void set_ptracer(void)
       dlog(1, "ptrace_scope %c\n", ptrace_scope);
       if (ptrace_scope != '0') {
          /* insufficient default ptrace_scope.
-            Indicate to the kernel that we accept to be
-            ptraced by our vgdb. */
-         ret = VG_(prctl) (PR_SET_PTRACER, shared->vgdb_pid, 0, 0, 0);
-         dlog(1, "set_ptracer to vgdb_pid %d result %d\n",
-              shared->vgdb_pid, ret);
+            Indicate to the kernel that we accept to be ptraced. */
+#ifdef PR_SET_PTRACER_ANY
+         ret = VG_(prctl) (PR_SET_PTRACER, PR_SET_PTRACER_ANY, 0, 0, 0);
+         dlog(1, "set_ptracer to PR_SET_PTRACER_ANY result %d\n", ret);
+#else
+         ret = VG_(prctl) (PR_SET_PTRACER, 1, 0, 0, 0);
+         dlog(1, "set_ptracer to 1 result %d\n", ret);
+#endif
+         if (ret)
+            VG_(umsg)("error calling PR_SET_PTRACER, vgdb might block\n");
       }
    } else {
       dlog(0, "Could not read the ptrace_scope setting from %s\n",
@@ -157,22 +157,27 @@ int poll_cond (short revents)
 
 /* Ensures we have a valid write file descriptor.
    Returns 1 if we have a valid write file descriptor,
-   0 if the write fd could not be opened. */
+   0 if the write fd is not valid/cannot be opened. */
 static
 int ensure_write_remote_desc(void)
 {
    struct vki_pollfd write_remote_desc_ok;
-   int ret;
+   SysRes ret;
    if (write_remote_desc != INVALID_DESCRIPTOR) {
       write_remote_desc_ok.fd = write_remote_desc;
       write_remote_desc_ok.events = VKI_POLLOUT;
       write_remote_desc_ok.revents = 0;
       ret = VG_(poll)(&write_remote_desc_ok, 1, 0);
-      if (ret && poll_cond(write_remote_desc_ok.revents)) {
-         dlog(1, "POLLcond %d closing write_remote_desc %d\n", 
-              write_remote_desc_ok.revents, write_remote_desc);
-         VG_(close) (write_remote_desc);
-         write_remote_desc = INVALID_DESCRIPTOR;
+      if (sr_isError(ret) 
+          || (sr_Res(ret) > 0 && poll_cond(write_remote_desc_ok.revents))) {
+        if (sr_isError(ret)) {
+          sr_perror(ret, "ensure_write_remote_desc: poll error\n");
+        } else {
+          dlog(0, "POLLcond %d closing write_remote_desc %d\n", 
+               write_remote_desc_ok.revents, write_remote_desc);
+        }
+        VG_(close) (write_remote_desc);
+        write_remote_desc = INVALID_DESCRIPTOR;
       }
    }
    if (write_remote_desc == INVALID_DESCRIPTOR) {
@@ -181,7 +186,6 @@ int ensure_write_remote_desc(void)
          be reasonably sure someone is reading on the other
          side of the fifo. */
       if (!vgdb_state_looks_bad("bad?@ensure_write_remote_desc")) {
-         set_ptracer();
          write_remote_desc = open_fifo ("write", to_gdb, VKI_O_WRONLY);
       }
    }
@@ -219,7 +223,7 @@ void safe_mknod (char *nod)
    will be created if not existing yet. They will be removed when
    the gdbserver connection is closed or the process exits */
 
-void remote_open (char *name)
+void remote_open (const HChar *name)
 {
    const HChar *user, *host;
    int save_fcntl_flags, len;
@@ -230,7 +234,6 @@ void remote_open (char *name)
        offsetof(ThreadState, os_state) + offsetof(ThreadOSstate, lwpid),
        0};
    const int pid = VG_(getpid)();
-   const int name_default = strcmp(name, VG_(vgdb_prefix_default)()) == 0;
    Addr addr_shared;
    SysRes o;
    int shared_mem_fd = INVALID_DESCRIPTOR;
@@ -269,10 +272,11 @@ void remote_open (char *name)
       VG_(umsg)("TO CONTROL THIS PROCESS USING vgdb (which you probably\n"
                 "don't want to do, unless you know exactly what you're doing,\n"
                 "or are doing some strange experiment):\n"
-                "  %s/../../bin/vgdb --pid=%d%s%s ...command...\n",
+                "  %s/../../bin/vgdb%s%s --pid=%d ...command...\n",
                 VG_(libdir),
-                pid, (name_default ? "" : " --vgdb-prefix="),
-                (name_default ? "" : name));
+                (VG_(arg_vgdb_prefix) ? " " : ""),
+                (VG_(arg_vgdb_prefix) ? VG_(arg_vgdb_prefix) : ""),
+                pid);
    }
    if (VG_(clo_verbosity) > 1 
        || VG_(clo_vgdb_error) < 999999999) {
@@ -281,11 +285,12 @@ void remote_open (char *name)
          "TO DEBUG THIS PROCESS USING GDB: start GDB like this\n"
          "  /path/to/gdb %s\n"
          "and then give GDB the following command\n"
-         "  target remote | %s/../../bin/vgdb --pid=%d%s%s\n",
+         "  target remote | %s/../../bin/vgdb%s%s --pid=%d\n",
          VG_(args_the_exename),
          VG_(libdir),
-         pid, (name_default ? "" : " --vgdb-prefix="), 
-         (name_default ? "" : name)
+         (VG_(arg_vgdb_prefix) ? " " : ""),
+         (VG_(arg_vgdb_prefix) ? VG_(arg_vgdb_prefix) : ""),
+         pid
       );
       VG_(umsg)("--pid is optional if only one valgrind process is running\n");
       VG_(umsg)("\n");
@@ -293,7 +298,7 @@ void remote_open (char *name)
 
    if (!mknod_done) {
       mknod_done++;
-
+      VG_(set_ptracer)();
       /*
        * Unlink just in case a previous process with the same PID had been
        * killed and hence Valgrind hasn't had the chance yet to remove these.
@@ -362,7 +367,7 @@ void sync_gdb_connection(void)
 }
 
 static
-char * ppFinishReason (FinishReason reason)
+const char * ppFinishReason (FinishReason reason)
 {
    switch (reason) {
    case orderly_finish:    return "orderly_finish";
@@ -438,12 +443,12 @@ void error_poll_cond(void)
    gives a small value to --vgdb-poll. So, the function avoids
    doing repetitively system calls by rather looking at the
    counter values maintained in shared memory by vgdb. */
-int remote_desc_activity(char *msg)
+int remote_desc_activity(const char *msg)
 {
-   int ret;
+   int retval;
+   SysRes ret;
    const int looking_at = shared->written_by_vgdb;
    if (shared->seen_by_valgrind == looking_at)
-   //   if (last_looked_cntr == looking_at)
       return 0;
    if (remote_desc == INVALID_DESCRIPTOR)
       return 0;
@@ -451,23 +456,30 @@ int remote_desc_activity(char *msg)
    /* poll the remote desc */
    remote_desc_pollfdread_activity.revents = 0;
    ret = VG_(poll) (&remote_desc_pollfdread_activity, 1, 0);
-   if (ret && poll_cond(remote_desc_pollfdread_activity.revents)) {
-      dlog(1, "POLLcond %d remote_desc_pollfdread %d\n", 
-           remote_desc_pollfdread_activity.revents, remote_desc);
-      error_poll_cond();
-      ret = 2;
+   if (sr_isError(ret)
+       || (sr_Res(ret) && poll_cond(remote_desc_pollfdread_activity.revents))) {
+     if (sr_isError(ret)) {
+       sr_perror(ret, "remote_desc_activity: poll error\n");
+     } else {
+       dlog(0, "POLLcond %d remote_desc_pollfdread %d\n", 
+            remote_desc_pollfdread_activity.revents, remote_desc);
+       error_poll_cond();
+     }
+     retval = 2;
+   } else {
+     retval = sr_Res(ret);
    }
    dlog(1,
         "remote_desc_activity %s %d last_looked_cntr %d looking_at %d"
         " shared->written_by_vgdb %d shared->seen_by_valgrind %d"
-        " ret %d\n", 
+        " retval %d\n", 
         msg, remote_desc, last_looked_cntr, looking_at, 
         shared->written_by_vgdb, shared->seen_by_valgrind,
-        ret);
+        retval);
    /* if no error from poll, indicate we have "seen" up to looking_at */
-   if (ret != 2)
+   if (retval == 1)
       last_looked_cntr = looking_at;
-   return ret;
+   return retval;
 }
 
 /* Convert hex digit A to a number.  */
@@ -696,7 +708,10 @@ int putpkt_binary (char *buf, int cnt)
    char *p;
    int cc;
 
-   buf2 = malloc (PBUFSIZ);
+   buf2 = malloc (PBUFSIZ+POVERHSIZ);
+   // should malloc PBUFSIZ, but bypass GDB bug (see gdbserver_init in server.c)
+   vg_assert (5 == POVERHSIZ);
+   vg_assert (cnt <= PBUFSIZ); // be tolerant for GDB bug.
 
    /* Copy the packet into buffer BUF2, encapsulating it
       and giving it a checksum.  */
@@ -771,19 +786,23 @@ int putpkt (char *buf)
 
 void monitor_output (char *s)
 {
-   const int len = strlen(s);
-   char *buf = malloc(1 + 2*len + 1);
-
-   buf[0] = 'O';
-   hexify(buf+1, s, len);
-   if (putpkt (buf) < 0) {
-      /* We probably have lost the connection with vgdb. */
-      reset_valgrind_sink("Error writing monitor output");
-      /* write again after reset */
-      VG_(printf) ("%s", s);
+   if (remote_connected()) {
+      const int len = strlen(s);
+      char *buf = malloc(1 + 2*len + 1);
+      
+      buf[0] = 'O';
+      hexify(buf+1, s, len);
+      if (putpkt (buf) < 0) {
+         /* We probably have lost the connection with vgdb. */
+         reset_valgrind_sink("Error writing monitor output");
+         /* write again after reset */
+         VG_(printf) ("%s", s);
+      }
+      
+      free (buf);
+   } else {
+      print_to_initial_valgrind_sink (s);
    }
-   
-   free (buf);
 }
 
 /* Returns next char from remote GDB.  -1 if error.  */
@@ -797,7 +816,7 @@ int readchar (int single)
    static unsigned char buf[PBUFSIZ];
    static int bufcnt = 0;
    static unsigned char *bufp;
-   int ret;
+   SysRes ret;
   
    if (bufcnt-- > 0)
       return *bufp++;
@@ -809,9 +828,13 @@ int readchar (int single)
       wait for some characters to arrive */
    remote_desc_pollfdread_activity.revents = 0;
    ret = VG_(poll)(&remote_desc_pollfdread_activity, 1, -1);
-   if (ret != 1) {
-      dlog(0, "readchar: poll got %d\n", ret);
-      return -1;
+   if (sr_isError(ret) || sr_Res(ret) != 1) {
+     if (sr_isError(ret)) {
+        sr_perror(ret, "readchar: poll error\n");
+     } else {
+        dlog(0, "readchar: poll got %d, expecting 1\n", (int)sr_Res(ret));
+     }
+     return -1;
    }
    if (single)
       bufcnt = VG_(read) (remote_desc, buf, 1);
@@ -929,7 +952,7 @@ void write_enn (char *buf)
    buf[3] = '\0';
 }
 
-void convert_int_to_ascii (unsigned char *from, char *to, int n)
+void convert_int_to_ascii (const unsigned char *from, char *to, int n)
 {
    int nib;
    int ch;
@@ -944,7 +967,7 @@ void convert_int_to_ascii (unsigned char *from, char *to, int n)
 }
 
 
-void convert_ascii_to_int (char *from, unsigned char *to, int n)
+void convert_ascii_to_int (const char *from, unsigned char *to, int n)
 {
    int nib1, nib2;
    while (n--) {
@@ -1097,7 +1120,7 @@ int decode_X_packet (char *from, int packet_len, CORE_ADDR *mem_addr_ptr,
 }
 
 
-/* Return the path prefix for the named pipes (FIFOs) used by vgdb/gdb
+/* Return the default path prefix for the named pipes (FIFOs) used by vgdb/gdb
    to communicate with valgrind */
 HChar *
 VG_(vgdb_prefix_default)(void)
