@@ -4097,6 +4097,23 @@ POST(sys_socketcall)
       ML_(generic_POST_sys_recvmsg)( tid, "msg", (struct vki_msghdr *)ARG2_1, RES );
       break;
 
+#  if defined(ANDROID_HARDWARE_nexus_10)
+   /* undocumented ioctl ids noted on the device */
+   case 0x4d07:
+   case 0x6101:
+   case 0xfa01: /* used by NFC */
+   case 0xfa05: /* used by NFC */
+      return;
+#  elif defined(ANDROID_HARDWARE_nexus_7)
+   /* undocumented ioctl ids noted on the device */
+   case 0x4e04:
+   case 0x7231:
+   case 0x4004e901: /* used by NFC */
+      return;
+#  elif defined(ANDROID_HARDWARE_nexus_4)
+
+#  endif
+
    default:
       VG_(message)(Vg_DebugMsg,"FATAL: unhandled socketcall 0x%lx\n",ARG1);
       VG_(core_panic)("... bye!\n");
@@ -5665,6 +5682,30 @@ PRE(sys_ioctl)
       break;
    }
 
+
+#  if defined(ANDROID_HARDWARE_nexus_10)
+
+   /* undocumented ioctl ids noted on the device */
+   if (ARG2 >= 0xc0108000 && ARG2 <= 0xc1e8820b && ARG3 != 0) {
+       int size = (ARG2 >> 16) & 0x3fff;
+       PRE_MEM_WRITE("ioctl(GL_UNDOCUMENTED)", (Addr)ARG3,  size);
+       return;
+   }
+
+#  endif
+
+
+#  if defined(ANDROID_HARDWARE_nexus_10)
+
+   /* undocumented ioctl ids noted on the device */
+   if (ARG2 >= 0xc0108000 && ARG2 <= 0xc1e8820b && ARG3 != 0) {
+       int size = (ARG2 >> 16) & 0x3fff;
+       PRE_MEM_WRITE("ioctl(GL_UNDOCUMENTED)", (Addr)ARG3,  size);
+       return;
+   }
+
+#  endif
+
    // We now handle those that do look at ARG3 (and unknown ones fall into
    // this category).  Nb: some of these may well belong in the
    // doesn't-use-ARG3 switch above.
@@ -6978,6 +7019,16 @@ PRE(sys_ioctl)
    }
 #endif
 
+   case VKI_EVIOCSSUSPENDBLOCK:
+      break;
+
+   case VKI_MEDIA_IOC_DEVICE_INFO:
+      if (ARG3) {
+         PRE_MEM_WRITE("ioctl(MEDIA_IOC_DEVICE_INFO)", ARG3,
+                       sizeof(struct vki_media_device_info));
+      }
+      break;
+
    default:
       /* EVIOC* are variable length and return size written on success */
       switch (ARG2 & ~(_VKI_IOC_SIZEMASK << _VKI_IOC_SIZESHIFT)) {
@@ -7086,6 +7137,18 @@ POST(sys_ioctl)
    /* END generic/emulator specific ioctls */
 
 
+#  elif defined(ANDROID_HARDWARE_nexus_10)
+
+   /* undocumented ioctl ids noted on the device */
+   if (ARG2 >= 0xc0108000 && ARG2 <= 0xc1e8820b && ARG3 != 0) {
+      int size = (ARG2 >> 16) & 0x3fff;
+      POST_MEM_WRITE(ARG3, size);
+   }
+
+#  elif defined(ANDROID_HARDWARE_nexus_7)
+
+#  elif defined(ANDROID_HARDWARE_nexus_4)
+
 #  else /* no ANDROID_HARDWARE_anything defined */
 
 #   warning ""
@@ -7094,6 +7157,9 @@ POST(sys_ioctl)
 #   warning "building for.  Currently known values are"
 #   warning ""
 #   warning "   ANDROID_HARDWARE_nexus_s       Samsung Nexus S"
+#   warning "   ANDROID_HARDWARE_nexus_10      Samsung Nexus 10"
+#   warning "   ANDROID_HARDWARE_nexus_7       ASUS Nexus 7"
+#   warning "   ANDROID_HARDWARE_nexus_4       LG Nexus 4"
 #   warning "   ANDROID_HARDWARE_generic       Generic device (eg, Pandaboard)"
 #   warning "   ANDROID_HARDWARE_emulator      x86 or arm emulator"
 #   warning ""
@@ -8036,6 +8102,16 @@ POST(sys_ioctl)
       }
       break;
 #endif
+
+   case VKI_EVIOCSSUSPENDBLOCK:
+      POST_MEM_WRITE( ARG3, sizeof(int) );
+      break;
+
+   case VKI_MEDIA_IOC_DEVICE_INFO:
+      if (ARG3) {
+         POST_MEM_WRITE(ARG3, sizeof(struct vki_media_device_info));
+      }
+      break;
 
    default:
       /* EVIOC* are variable length and return size written on success */

@@ -1,5 +1,5 @@
 /* config.h.  Generated from config.h.in by configure.  */
-/* config.h.in.  Generated from configure.ac by autoheader.  */
+/* config.h.in.  Generated from configure.in by autoheader.  */
 
 /* Define to 1 if you're using Bionic */
 /* #undef BIONIC_LIBC */
@@ -35,7 +35,7 @@
 /* #undef GLIBC_2_10 */
 
 /* Define to 1 if you're using glibc 2.11.x */
-/* #undef GLIBC_2_11 */
+/* #dundef GLIBC_2_11 1 */
 
 /* Define to 1 if you're using glibc 2.12.x */
 /* #undef GLIBC_2_12 */
@@ -47,7 +47,7 @@
 /* #undef GLIBC_2_14 */
 
 /* Define to 1 if you're using glibc 2.15.x */
-#define GLIBC_2_15 1
+/* #undef GLIBC_2_15 */
 
 /* Define to 1 if you're using glibc 2.16.x */
 /* #undef GLIBC_2_16 */
@@ -169,10 +169,10 @@
 #define HAVE_PPOLL 1
 
 /* Define to 1 if you have the `process_vm_readv' function. */
-#define HAVE_PROCESS_VM_READV 1
+/* #undef HAVE_PROCESS_VM_READV */
 
 /* Define to 1 if you have the `process_vm_writev' function. */
-#define HAVE_PROCESS_VM_WRITEV 1
+/* #undef HAVE_PROCESS_VM_WRITEV */
 
 /* Define to 1 if you have the `pthread_barrier_init' function. */
 /* #undef HAVE_PTHREAD_BARRIER_INIT */
@@ -233,7 +233,7 @@
 #define HAVE_SEMTIMEDOP 1
 
 /* Define to 1 if libstd++ supports annotating shared pointers */
-#define HAVE_SHARED_POINTER_ANNOTATION 1
+/* #undef HAVE_SHARED_POINTER_ANNOTATION */
 
 /* Define to 1 if you have the `signalfd' function. */
 #define HAVE_SIGNALFD 1
@@ -351,6 +351,9 @@
 
 /* Define to the version of this package. */
 #define PACKAGE_VERSION "3.10.0.SVN"
+
+/* configured memory alignment 2*PAGE_SIZE */
+#define SHM_ALIGNMENT 2*(1UL << MIPS_PAGE_SHIFT)
 
 /* Define to 1 if you have the ANSI C header files. */
 #define STDC_HEADERS 1

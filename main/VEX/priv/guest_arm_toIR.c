@@ -14222,15 +14222,30 @@ static Bool decode_CP10_CP11_instruction (
       UInt size      = bSX == 0 ? 16 : 32;
       Int  frac_bits = size - ((imm4 << 1) | bI);
       UInt d         = dp_op  ? ((bD << 4) | Vd)  : ((Vd << 1) | bD);
-      if (frac_bits >= 1 && frac_bits <= 32 && !to_fixed && !dp_op
-                                            && size == 32) {
-         /* VCVT.F32.{S,U}32 S[d], S[d], #frac_bits */
+      if (frac_bits >= 1 && frac_bits <= 32 && !to_fixed && size == 32) {
+         /* dp_op == 0 : VCVT.F32.{S,U}32 S[d], S[d], #frac_bits */
+         /* dp_op == 1 : VCVT.F64.{S,U}32 D[d], D[d], #frac_bits */
          /* This generates really horrible code.  We could potentially
             do much better. */
          IRTemp rmode = newTemp(Ity_I32);
          assign(rmode, mkU32(Irrm_NEAREST)); // per the spec
          IRTemp src32 = newTemp(Ity_I32);
-         assign(src32,  unop(Iop_ReinterpF32asI32, getFReg(d)));
+         if (dp_op == 0) {
+            assign(src32,  unop(Iop_ReinterpF32asI32, getFReg(d)));
+         } else {
+            /* Example code sequence of using vcvt.f64.s32. The s32 value is
+               initialized in s14 but loaded via d7 (s14 is the low half of
+               d7), so we need to decode the register using getDReg instead of
+               getFReg. Since the conversion size is from s32 to f64, we also
+               need to explicitly extract the low half of i64 here.
+
+               81a0:       ee07 2a10       vmov            s14, r2
+               81a4:       eeba 7bef       vcvt.f64.s32    d7, d7, #1
+             */
+            IRTemp src64 = newTemp(Ity_I64);
+            assign(src64,  unop(Iop_ReinterpF64asI64, getDReg(d)));
+            assign(src32, unop(Iop_64to32, mkexpr(src64)));
+         }
          IRExpr* as_F64 = unop( unsyned ? Iop_I32UtoF64 : Iop_I32StoF64,
                                 mkexpr(src32 ) );
          IRTemp scale = newTemp(Ity_F64);
@@ -14240,10 +14255,16 @@ static Bool decode_CP10_CP11_instruction (
                                 rm, as_F64, 
                                 triop(Iop_AddF64, rm, mkexpr(scale),
                                                       mkexpr(scale)));
-         IRExpr* resF32 = binop(Iop_F64toF32, mkexpr(rmode), resF64);
-         putFReg(d, resF32, condT);
-         DIP("vcvt.f32.%c32, s%u, s%u, #%d\n",
-             unsyned ? 'u' : 's', d, d, frac_bits);
+         if (dp_op == 0) {
+            IRExpr* resF32 = binop(Iop_F64toF32, mkexpr(rmode), resF64);
+            putFReg(d, resF32, condT);
+            DIP("vcvt.f32.%c32, s%u, s%u, #%d\n",
+                unsyned ? 'u' : 's', d, d, frac_bits);
+         } else {
+            putDReg(d, resF64, condT);
+            DIP("vcvt.f64.%c32, d%u, d%u, #%d\n",
+                unsyned ? 'u' : 's', d, d, frac_bits);
+         }
          goto decode_success_vfp;
       }
       if (frac_bits >= 1 && frac_bits <= 32 && !to_fixed && dp_op
@@ -16619,6 +16640,30 @@ DisResult disInstr_ARM_WRK (
          putIRegA(rD, res, condT, Ijk_Boring);
          DIP("smmul%s%s r%u, r%u, r%u\n",
              nCC(INSN_COND), bitR ? "r" : "", rD, rN, rM);
+         goto decode_success;
+      }
+   }
+
+   /* ------------------- smmla ------------------ */
+   if (INSN(27,20) == BITS8(0,1,1,1,0,1,0,1)
+       && INSN(15,12) != BITS4(1,1,1,1)
+       && (INSN(7,4) & BITS4(1,1,0,1)) == BITS4(0,0,0,1)) {
+      UInt bitR = INSN(5,5);
+      UInt rD = INSN(19,16);
+      UInt rA = INSN(15,12);
+      UInt rM = INSN(11,8);
+      UInt rN = INSN(3,0);
+      if (rD != 15 && rM != 15 && rN != 15) {
+         IRExpr* res
+         = unop(Iop_64HIto32,
+                binop(Iop_Add64,
+                      binop(Iop_Add64,
+                            binop(Iop_32HLto64, getIRegA(rA), mkU32(0)),
+                            binop(Iop_MullS32, getIRegA(rN), getIRegA(rM))),
+                      mkU64(bitR ? 0x80000000ULL : 0ULL)));
+         putIRegA(rD, res, condT, Ijk_Boring);
+         DIP("smmla%s%s r%u, r%u, r%u, r%u\n",
+             nCC(INSN_COND), bitR ? "r" : "", rD, rN, rM, rA);
          goto decode_success;
       }
    }
@@ -21701,6 +21746,30 @@ DisResult disInstr_THUMB_WRK (
       UInt bU    = INSN0(7,7);
       DIP("pli [pc, #%c%u]\n", bU == 1 ? '+' : '-', imm12);
       goto decode_success;
+   }
+
+   /* ------------------- (T1) SMMLA{R} ------------------ */
+   if (INSN0(15,7) == BITS9(1,1,1,1,1,0,1,1,0)
+       && INSN0(6,4) == BITS3(1,0,1)
+       && INSN1(7,5) == BITS3(0,0,0)) {
+      UInt bitR = INSN1(4,4);
+      UInt rA = INSN1(15,12);
+      UInt rD = INSN1(11,8);
+      UInt rM = INSN1(3,0);
+      UInt rN = INSN0(3,0);
+      if (!isBadRegT(rD) && !isBadRegT(rN) && !isBadRegT(rM) && (rA != 13)) {
+         IRExpr* res
+         = unop(Iop_64HIto32,
+                binop(Iop_Add64,
+                      binop(Iop_Add64,
+                            binop(Iop_32HLto64, getIRegT(rA), mkU32(0)),
+                            binop(Iop_MullS32, getIRegT(rN), getIRegT(rM))),
+                      mkU64(bitR ? 0x80000000ULL : 0ULL)));
+         putIRegT(rD, res, condT);
+         DIP("smmla%s r%u, r%u, r%u, r%u\n",
+             bitR ? "r" : "", rD, rN, rM, rA);
+         goto decode_success;
+      }
    }
 
    /* ----------------------------------------------------------- */

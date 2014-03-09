@@ -2840,6 +2840,8 @@ struct vki_getcpu_cache {
 
 #define VKI_EVIOCGBIT(ev,len)	_VKI_IOC(_VKI_IOC_READ, 'E', 0x20 + ev, len)	/* get event bits */
 
+#define VKI_EVIOCSSUSPENDBLOCK	_VKI_IOW('E', 0x91, int)	/* set suspend block enable */
+
 /*
  * Event types
  */
@@ -3161,6 +3163,25 @@ struct vki_sock_fprog {
 	__vki_u16 len;  /* actually unsigned short */
 	struct vki_sock_filter *filter;
 };
+
+//----------------------------------------------------------------------
+// From include/linux/media.h
+//----------------------------------------------------------------------
+
+struct vki_media_device_info {
+    char driver[16];
+    char model[32];
+    char serial[40];
+    char bus_info[32];
+    __vki_u32 media_version;
+    __vki_u32 hw_revision;
+    __vki_u32 driver_version;
+    __vki_u32 reserved[31];
+};
+
+#define VKI_MEDIA_IOC_DEVICE_INFO _VKI_IOWR('|', 0x00, struct vki_media_device_info)
+
+
    
 #endif // __VKI_LINUX_H
 
