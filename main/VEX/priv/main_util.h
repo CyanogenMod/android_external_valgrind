@@ -7,7 +7,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2004-2012 OpenWorks LLP
+   Copyright (C) 2004-2013 OpenWorks LLP
       info@open-works.net
 
    This program is free software; you can redistribute it and/or
@@ -60,16 +60,16 @@ __attribute__ ((__noreturn__))
 extern void vex_assert_fail ( const HChar* expr, const HChar* file,
                               Int line, const HChar* fn );
 __attribute__ ((__noreturn__))
-extern void vpanic ( HChar* str );
+extern void vpanic ( const HChar* str );
 
 
 /* Printing */
 
 __attribute__ ((format (printf, 1, 2)))
-extern UInt vex_printf ( HChar *format, ... );
+extern UInt vex_printf ( const HChar *format, ... );
 
 __attribute__ ((format (printf, 2, 3)))
-extern UInt vex_sprintf ( HChar* buf, HChar *format, ... );
+extern UInt vex_sprintf ( HChar* buf, const HChar *format, ... );
 
 
 /* String ops */

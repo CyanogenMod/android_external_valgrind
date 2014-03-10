@@ -30,7 +30,7 @@ unsigned int mem1[] = {
 
 unsigned int mem2[100];
 
-int main () 
+int main ()
 {
    int i, out;
    for (i = 0; i < 100; i++)
@@ -53,5 +53,7 @@ int main ()
      : "s0", "a1", "a2", "v0", "v1", "cc", "memory"
    );
    for (i = 0; i < 100; i = i+4)
-      printf("0x%x, 0x%x, 0x%x, 0x%x\n", mem2[i], mem2[i+1], mem2[i+2], mem2[i+3]);
+      printf("0x%x, 0x%x, 0x%x, 0x%x\n", mem2[i], mem2[i+1],
+                                         mem2[i+2], mem2[i+3]);
+   return 0;
 }

@@ -6,7 +6,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2004-2012 OpenWorks LLP
+   Copyright (C) 2004-2013 OpenWorks LLP
       info@open-works.net
 
    This program is free software; you can redistribute it and/or
@@ -29,6 +29,10 @@
 
 #ifndef __VEX_HOST_ARM_DEFS_H
 #define __VEX_HOST_ARM_DEFS_H
+
+#include "libvex_basictypes.h"
+#include "libvex.h"                      // VexArch
+#include "host_generic_regs.h"           // HReg
 
 extern UInt arm_hwcaps;
 
@@ -110,7 +114,7 @@ typedef
    }
    ARMCondCode;
 
-extern HChar* showARMCondCode ( ARMCondCode );
+extern const HChar* showARMCondCode ( ARMCondCode );
 
 
 
@@ -354,7 +358,7 @@ typedef
    }
    ARMAluOp;
 
-extern HChar* showARMAluOp ( ARMAluOp op );
+extern const HChar* showARMAluOp ( ARMAluOp op );
 
 
 typedef
@@ -365,7 +369,7 @@ typedef
    }
    ARMShiftOp;
 
-extern HChar* showARMShiftOp ( ARMShiftOp op );
+extern const HChar* showARMShiftOp ( ARMShiftOp op );
 
 
 typedef
@@ -376,22 +380,19 @@ typedef
    }
    ARMUnaryOp;
 
-extern HChar* showARMUnaryOp ( ARMUnaryOp op );
+extern const HChar* showARMUnaryOp ( ARMUnaryOp op );
 
 
 typedef
    enum {
       ARMmul_PLAIN=60,
       ARMmul_ZX,
-      ARMmul_SX,
-      ARMdiv_S,
-      ARMdiv_U
+      ARMmul_SX
    }
-   ARMMulDivOp;
+   ARMMulOp;
 
-extern HChar* showARMMulOp ( ARMMulDivOp op );
+extern const HChar* showARMMulOp ( ARMMulOp op );
 
-extern HChar* showARMDivOp ( ARMMulDivOp op );
 
 typedef
    enum {
@@ -402,7 +403,7 @@ typedef
    }
    ARMVfpOp;
 
-extern HChar* showARMVfpOp ( ARMVfpOp op );
+extern const HChar* showARMVfpOp ( ARMVfpOp op );
 
 
 typedef
@@ -414,7 +415,7 @@ typedef
    }
    ARMVfpUnaryOp;
 
-extern HChar* showARMVfpUnaryOp ( ARMVfpUnaryOp op );
+extern const HChar* showARMVfpUnaryOp ( ARMVfpUnaryOp op );
 
 typedef
    enum {
@@ -543,16 +544,16 @@ typedef
    }
    ARMNeonDualOp;
 
-extern HChar* showARMNeonBinOp ( ARMNeonBinOp op );
-extern HChar* showARMNeonUnOp ( ARMNeonUnOp op );
-extern HChar* showARMNeonUnOpS ( ARMNeonUnOpS op );
-extern HChar* showARMNeonShiftOp ( ARMNeonShiftOp op );
-extern HChar* showARMNeonDualOp ( ARMNeonDualOp op );
-extern HChar* showARMNeonBinOpDataType ( ARMNeonBinOp op );
-extern HChar* showARMNeonUnOpDataType ( ARMNeonUnOp op );
-extern HChar* showARMNeonUnOpSDataType ( ARMNeonUnOpS op );
-extern HChar* showARMNeonShiftOpDataType ( ARMNeonShiftOp op );
-extern HChar* showARMNeonDualOpDataType ( ARMNeonDualOp op );
+extern const HChar* showARMNeonBinOp ( ARMNeonBinOp op );
+extern const HChar* showARMNeonUnOp ( ARMNeonUnOp op );
+extern const HChar* showARMNeonUnOpS ( ARMNeonUnOpS op );
+extern const HChar* showARMNeonShiftOp ( ARMNeonShiftOp op );
+extern const HChar* showARMNeonDualOp ( ARMNeonDualOp op );
+extern const HChar* showARMNeonBinOpDataType ( ARMNeonBinOp op );
+extern const HChar* showARMNeonUnOpDataType ( ARMNeonUnOp op );
+extern const HChar* showARMNeonUnOpSDataType ( ARMNeonUnOpS op );
+extern const HChar* showARMNeonShiftOpDataType ( ARMNeonShiftOp op );
+extern const HChar* showARMNeonDualOpDataType ( ARMNeonDualOp op );
 
 typedef
    enum {
@@ -573,7 +574,6 @@ typedef
       ARMin_CMov,
       ARMin_Call,
       ARMin_Mul,
-      ARMin_Div,
       ARMin_LdrEX,
       ARMin_StrEX,
       /* vfp */
@@ -602,6 +602,7 @@ typedef
       ARMin_NBinary,
       ARMin_NBinaryS,
       ARMin_NShift,
+      ARMin_NShl64, // special case 64-bit shift of Dreg by immediate
       ARMin_NeonImm,
       ARMin_NCMovQ,
       /* This is not a NEON instruction. Actually there is no corresponding
@@ -659,29 +660,33 @@ typedef
             HReg dst;
             UInt imm32;
          } Imm32;
-         /* 32-bit load or store */
+         /* 32-bit load or store, may be conditional */
          struct {
-            Bool       isLoad;
-            HReg       rD;
-            ARMAMode1* amode;
+            ARMCondCode cc; /* ARMcc_NV is not allowed */
+            Bool        isLoad;
+            HReg        rD;
+            ARMAMode1*  amode;
          } LdSt32;
-         /* 16-bit load or store */
+         /* 16-bit load or store, may be conditional */
          struct {
-            Bool       isLoad;
-            Bool       signedLoad;
-            HReg       rD;
-            ARMAMode2* amode;
+            ARMCondCode cc; /* ARMcc_NV is not allowed */
+            Bool        isLoad;
+            Bool        signedLoad;
+            HReg        rD;
+            ARMAMode2*  amode;
          } LdSt16;
-         /* 8-bit (unsigned) load or store */
+         /* 8-bit (unsigned) load or store, may be conditional */
          struct {
-            Bool       isLoad;
-            HReg       rD;
-            ARMAMode1* amode;
+            ARMCondCode cc; /* ARMcc_NV is not allowed */
+            Bool        isLoad;
+            HReg        rD;
+            ARMAMode1*  amode;
          } LdSt8U;
-         /* 8-bit signed load */
+         /* 8-bit signed load, may be conditional */
          struct {
-            HReg       rD;
-            ARMAMode2* amode;
+            ARMCondCode cc; /* ARMcc_NV is not allowed */
+            HReg        rD;
+            ARMAMode2*  amode;
          } Ld8S;
          /* Update the guest R15T value, then exit requesting to chain
             to it.  May be conditional.  Urr, use of Addr32 implicitly
@@ -720,6 +725,7 @@ typedef
             ARMCondCode cond;
             HWord       target;
             Int         nArgRegs; /* # regs carrying args: 0 .. 4 */
+            RetLoc      rloc;     /* where the return value will be */
          } Call;
          /* (PLAIN) 32 *  32 -> 32:  r0    = r2 * r3
             (ZX)    32 *u 32 -> 64:  r1:r0 = r2 *u r3
@@ -731,15 +737,8 @@ typedef
             complexity).  Hence hardwire it.  At least using caller-saves
             registers, which are less likely to be in use. */
          struct {
-            ARMMulDivOp op;
+            ARMMulOp op;
          } Mul;
-         /* ARMdiv_S/ARMdiv_U: signed/unsigned integer divides, respectively. */
-         struct {
-            ARMMulDivOp op;
-            HReg        dst;
-            HReg        argL;
-            HReg        argR;
-         } Div;
          /* LDREX{,H,B} r2, [r4]  and
             LDREXD r2, r3, [r4]   (on LE hosts, transferred value is r3:r2)
             Again, hardwired registers since this is not performance
@@ -888,6 +887,11 @@ typedef
             Bool Q;
          } NShift;
          struct {
+            HReg dst;
+            HReg src;
+            UInt amt; /* 1..63 only */
+         } NShl64;
+         struct {
             Bool isLoad;
             HReg dQ;
             ARMAModeN *amode;
@@ -956,11 +960,14 @@ extern ARMInstr* ARMInstr_Unary    ( ARMUnaryOp, HReg, HReg );
 extern ARMInstr* ARMInstr_CmpOrTst ( Bool isCmp, HReg, ARMRI84* );
 extern ARMInstr* ARMInstr_Mov      ( HReg, ARMRI84* );
 extern ARMInstr* ARMInstr_Imm32    ( HReg, UInt );
-extern ARMInstr* ARMInstr_LdSt32   ( Bool isLoad, HReg, ARMAMode1* );
-extern ARMInstr* ARMInstr_LdSt16   ( Bool isLoad, Bool signedLoad,
+extern ARMInstr* ARMInstr_LdSt32   ( ARMCondCode,
+                                     Bool isLoad, HReg, ARMAMode1* );
+extern ARMInstr* ARMInstr_LdSt16   ( ARMCondCode,
+                                     Bool isLoad, Bool signedLoad,
                                      HReg, ARMAMode2* );
-extern ARMInstr* ARMInstr_LdSt8U   ( Bool isLoad, HReg, ARMAMode1* );
-extern ARMInstr* ARMInstr_Ld8S     ( HReg, ARMAMode2* );
+extern ARMInstr* ARMInstr_LdSt8U   ( ARMCondCode,
+                                     Bool isLoad, HReg, ARMAMode1* );
+extern ARMInstr* ARMInstr_Ld8S     ( ARMCondCode, HReg, ARMAMode2* );
 extern ARMInstr* ARMInstr_XDirect  ( Addr32 dstGA, ARMAMode1* amR15T,
                                      ARMCondCode cond, Bool toFastEP );
 extern ARMInstr* ARMInstr_XIndir   ( HReg dstGA, ARMAMode1* amR15T,
@@ -968,10 +975,9 @@ extern ARMInstr* ARMInstr_XIndir   ( HReg dstGA, ARMAMode1* amR15T,
 extern ARMInstr* ARMInstr_XAssisted ( HReg dstGA, ARMAMode1* amR15T,
                                       ARMCondCode cond, IRJumpKind jk );
 extern ARMInstr* ARMInstr_CMov     ( ARMCondCode, HReg dst, ARMRI84* src );
-extern ARMInstr* ARMInstr_Call     ( ARMCondCode, HWord, Int nArgRegs );
-extern ARMInstr* ARMInstr_Mul      ( ARMMulDivOp op );
-extern ARMInstr* ARMInstr_Div      ( ARMMulDivOp op, HReg dst, HReg argL,
-                                     HReg argR );
+extern ARMInstr* ARMInstr_Call     ( ARMCondCode, HWord, Int nArgRegs,
+                                     RetLoc rloc );
+extern ARMInstr* ARMInstr_Mul      ( ARMMulOp op );
 extern ARMInstr* ARMInstr_LdrEX    ( Int szB );
 extern ARMInstr* ARMInstr_StrEX    ( Int szB );
 extern ARMInstr* ARMInstr_VLdStD   ( Bool isLoad, HReg, ARMAModeV* );
@@ -1001,6 +1007,7 @@ extern ARMInstr* ARMInstr_NBinary  ( ARMNeonBinOp, HReg, HReg, HReg,
                                      UInt, Bool );
 extern ARMInstr* ARMInstr_NShift   ( ARMNeonShiftOp, HReg, HReg, HReg,
                                      UInt, Bool );
+extern ARMInstr* ARMInstr_NShl64   ( HReg, HReg, UInt );
 extern ARMInstr* ARMInstr_NeonImm  ( HReg, ARMNImm* );
 extern ARMInstr* ARMInstr_NCMovQ   ( ARMCondCode, HReg, HReg );
 extern ARMInstr* ARMInstr_Add32    ( HReg rD, HReg rN, UInt imm32 );

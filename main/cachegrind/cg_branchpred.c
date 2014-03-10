@@ -7,7 +7,7 @@
    This file is part of Cachegrind, a Valgrind tool for cache
    profiling programs.
 
-   Copyright (C) 2002-2012 Nicholas Nethercote
+   Copyright (C) 2002-2013 Nicholas Nethercote
       njn@valgrind.org
 
    This program is free software; you can redistribute it and/or
@@ -44,12 +44,12 @@
 
 /* How many bits at the bottom of an instruction address are
    guaranteed to be zero? */
-#if defined(VGA_ppc32) || defined(VGA_ppc64) || defined(VGA_arm) \
-    || defined(VGA_mips32)
+#if defined(VGA_ppc32) || defined(VGA_ppc64) \
+    || defined(VGA_mips32) || defined(VGA_mips64) || defined(VGA_arm64)
 #  define N_IADDR_LO_ZERO_BITS 2
 #elif defined(VGA_x86) || defined(VGA_amd64)
 #  define N_IADDR_LO_ZERO_BITS 0
-#elif defined(VGA_s390x)
+#elif defined(VGA_s390x) || defined(VGA_arm)
 #  define N_IADDR_LO_ZERO_BITS 1
 #else
 #  error "Unsupported architecture"

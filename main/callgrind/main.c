@@ -8,10 +8,10 @@
    This file is part of Callgrind, a Valgrind tool for call graph
    profiling programs.
 
-   Copyright (C) 2002-2012, Josef Weidendorfer (Josef.Weidendorfer@gmx.de)
+   Copyright (C) 2002-2013, Josef Weidendorfer (Josef.Weidendorfer@gmx.de)
 
    This tool is derived from and contains code from Cachegrind
-   Copyright (C) 2002-2012 Nicholas Nethercote (njn@valgrind.org)
+   Copyright (C) 2002-2013 Nicholas Nethercote (njn@valgrind.org)
 
    This program is free software; you can redistribute it and/or
    modify it under the terms of the GNU General Public License as
@@ -377,7 +377,7 @@ static void showEvent ( Event* ev )
 static void flushEvents ( ClgState* clgs )
 {
    Int        i, regparms, inew;
-   Char*      helperName;
+   const HChar* helperName;
    void*      helperAddr;
    IRExpr**   argv;
    IRExpr*    i_node_expr;
@@ -669,6 +669,50 @@ void addEvent_Dw ( ClgState* clgs, InstrInfo* inode, Int datasize, IRAtom* ea )
 }
 
 static
+void addEvent_D_guarded ( ClgState* clgs, InstrInfo* inode,
+                          Int datasize, IRAtom* ea, IRAtom* guard,
+                          Bool isWrite )
+{
+   tl_assert(isIRAtom(ea));
+   tl_assert(guard);
+   tl_assert(isIRAtom(guard));
+   tl_assert(datasize >= 1);
+   if (!CLG_(clo).simulate_cache) return;
+   tl_assert(datasize <= CLG_(min_line_size));
+
+   /* Adding guarded memory actions and merging them with the existing
+      queue is too complex.  Simply flush the queue and add this
+      action immediately.  Since guarded loads and stores are pretty
+      rare, this is not thought likely to cause any noticeable
+      performance loss as a result of the loss of event-merging
+      opportunities. */
+   tl_assert(clgs->events_used >= 0);
+   flushEvents(clgs);
+   tl_assert(clgs->events_used == 0);
+   /* Same as case Ev_Dw / case Ev_Dr in flushEvents, except with guard */
+   IRExpr*      i_node_expr;
+   const HChar* helperName;
+   void*        helperAddr;
+   IRExpr**     argv;
+   Int          regparms;
+   IRDirty*     di;
+   i_node_expr = mkIRExpr_HWord( (HWord)inode );
+   helperName  = isWrite ? CLG_(cachesim).log_0I1Dw_name
+                         : CLG_(cachesim).log_0I1Dr_name;
+   helperAddr  = isWrite ? CLG_(cachesim).log_0I1Dw
+                         : CLG_(cachesim).log_0I1Dr;
+   argv        = mkIRExprVec_3( i_node_expr,
+                                ea, mkIRExpr_HWord( datasize ) );
+   regparms    = 3;
+   di          = unsafeIRDirty_0_N(
+                    regparms, 
+                    helperName, VG_(fnptr_to_fnentry)( helperAddr ), 
+                    argv );
+   di->guard = guard;
+   addStmtToIRSB( clgs->sbOut, IRStmt_Dirty(di) );
+}
+
+static
 void addEvent_Bc ( ClgState* clgs, InstrInfo* inode, IRAtom* guard )
 {
    Event* evt;
@@ -909,15 +953,16 @@ IRSB* CLG_(instrument)( VgCallbackClosure* closure,
 			IRSB* sbIn,
 			VexGuestLayout* layout,
 			VexGuestExtents* vge,
+                        VexArchInfo* archinfo_host,
 			IRType gWordTy, IRType hWordTy )
 {
-   Int      i;
-   IRStmt*  st;
-   Addr     origAddr;
+   Int        i;
+   IRStmt*    st;
+   Addr       origAddr;
    InstrInfo* curr_inode = NULL;
-   ClgState clgs;
-   UInt     cJumps = 0;
-
+   ClgState   clgs;
+   UInt       cJumps = 0;
+   IRTypeEnv* tyenv = sbIn->tyenv;
 
    if (gWordTy != hWordTy) {
       /* We don't currently support this case. */
@@ -1021,6 +1066,31 @@ IRSB* CLG_(instrument)( VgCallbackClosure* closure,
 	    break;
 	 }
 
+         case Ist_StoreG: {
+            IRStoreG* sg   = st->Ist.StoreG.details;
+            IRExpr*   data = sg->data;
+            IRExpr*   addr = sg->addr;
+            IRType    type = typeOfIRExpr(tyenv, data);
+            tl_assert(type != Ity_INVALID);
+            addEvent_D_guarded( &clgs, curr_inode,
+                                sizeofIRType(type), addr, sg->guard,
+                                True/*isWrite*/ );
+            break;
+         }
+
+         case Ist_LoadG: {
+            IRLoadG* lg       = st->Ist.LoadG.details;
+            IRType   type     = Ity_INVALID; /* loaded type */
+            IRType   typeWide = Ity_INVALID; /* after implicit widening */
+            IRExpr*  addr     = lg->addr;
+            typeOfIRLoadGOp(lg->cvt, &typeWide, &type);
+            tl_assert(type != Ity_INVALID);
+            addEvent_D_guarded( &clgs, curr_inode,
+                                sizeofIRType(type), addr, lg->guard,
+                                False/*!isWrite*/ );
+            break;
+         }
+
 	 case Ist_Dirty: {
 	    Int      dataSize;
 	    IRDirty* d = st->Ist.Dirty.details;
@@ -1072,6 +1142,8 @@ IRSB* CLG_(instrument)( VgCallbackClosure* closure,
                dataTy = typeOfIRTemp(sbIn->tyenv, st->Ist.LLSC.result);
                addEvent_Dr( &clgs, curr_inode,
                             sizeofIRType(dataTy), st->Ist.LLSC.addr );
+               /* flush events before LL, should help SC to succeed */
+               flushEvents( &clgs );
             } else {
                /* SC */
                dataTy = typeOfIRExpr(sbIn->tyenv, st->Ist.LLSC.storedata);
@@ -1171,9 +1243,10 @@ IRSB* CLG_(instrument)( VgCallbackClosure* closure,
 	    /* Update global variable jmps_passed before the jump
 	     * A correction is needed if VEX inverted the last jump condition
 	    */
+	    UInt val = inverted ? cJumps+1 : cJumps;
 	    addConstMemStoreStmt( clgs.sbOut,
 				  (UWord) &CLG_(current_state).jmps_passed,
-                                  inverted ? cJumps+1 : cJumps, hWordTy);
+				  val, hWordTy);
 	    cJumps++;
 
 	    break;
@@ -1217,10 +1290,12 @@ IRSB* CLG_(instrument)( VgCallbackClosure* closure,
    /* At the end of the bb.  Flush outstandings. */
    flushEvents( &clgs );
 
-   /* Always update global variable jmps_passed at end of bb.
+   /* Update global variable jmps_passed at end of SB.
+    * As CLG_(current_state).jmps_passed is reset to 0 in setup_bbcc,
+    * this can be omitted if there is no conditional jump in this SB.
     * A correction is needed if VEX inverted the last jump condition
     */
-   {
+   if (cJumps>0) {
       UInt jmps_passed = cJumps;
       if (clgs.bb->cjmp_inverted) jmps_passed--;
       addConstMemStoreStmt( clgs.sbOut,
@@ -1228,7 +1303,7 @@ IRSB* CLG_(instrument)( VgCallbackClosure* closure,
 			    jmps_passed, hWordTy);
    }
    CLG_ASSERT(clgs.bb->cjmp_count == cJumps);
-   CLG_ASSERT(clgs.bb->instr_count = clgs.ii_index);
+   CLG_ASSERT(clgs.bb->instr_count == clgs.ii_index);
 
    /* Info for final exit from BB */
    {
@@ -1264,7 +1339,7 @@ IRSB* CLG_(instrument)( VgCallbackClosure* closure,
 
    if (clgs.seen_before) {
        CLG_ASSERT(clgs.bb->cost_count == update_cost_offsets(&clgs));
-       CLG_ASSERT(clgs.bb->instr_len = clgs.instr_offset);
+       CLG_ASSERT(clgs.bb->instr_len == clgs.instr_offset);
    }
    else {
        clgs.bb->cost_count = update_cost_offsets(&clgs);
@@ -1373,10 +1448,11 @@ void zero_state_cost(thread_info* t)
     CLG_(zero_cost)( CLG_(sets).full, CLG_(current_state).cost );
 }
 
-/* Ups, this can go very wrong... */
-extern void VG_(discard_translations) ( Addr64 start, ULong range, HChar* who );
+/* Ups, this can go very wrong...
+   FIXME: We should export this function or provide other means to get a handle */
+extern void VG_(discard_translations) ( Addr64 start, ULong range, const HChar* who );
 
-void CLG_(set_instrument_state)(Char* reason, Bool state)
+void CLG_(set_instrument_state)(const HChar* reason, Bool state)
 {
   if (CLG_(instrument_state) == state) {
     CLG_DEBUG(2, "%s: instrumentation already %s\n",
@@ -1402,7 +1478,7 @@ void CLG_(set_instrument_state)(Char* reason, Bool state)
 /* helper for dump_state_togdb */
 static void dump_state_of_thread_togdb(thread_info* ti)
 {
-    static Char buf[512];
+    static HChar buf[512];
     static FullCost sum = 0, tmp = 0;
     Int t, p, i;
     BBCC *from, *to;
@@ -1448,7 +1524,7 @@ static void dump_state_of_thread_togdb(thread_info* ti)
 /* Dump current state */
 static void dump_state_togdb(void)
 {
-    static Char buf[512];
+    static HChar buf[512];
     thread_info** th;
     int t, p;
     Int orig_tid = CLG_(current_tid);
@@ -1500,11 +1576,11 @@ static void print_monitor_help ( void )
 }
 
 /* return True if request recognised, False otherwise */
-static Bool handle_gdb_monitor_command (ThreadId tid, Char *req)
+static Bool handle_gdb_monitor_command (ThreadId tid, const HChar *req)
 {
-   Char* wcmd;
-   Char s[VG_(strlen(req))]; /* copy for strtok_r */
-   Char *ssaveptr;
+   HChar* wcmd;
+   HChar s[VG_(strlen(req))]; /* copy for strtok_r */
+   HChar *ssaveptr;
 
    VG_(strcpy) (s, req);
 
@@ -1528,7 +1604,7 @@ static Bool handle_gdb_monitor_command (ThreadId tid, Char *req)
    }
 
    case 3: { /* status */
-     Char* arg = VG_(strtok_r) (0, " ", &ssaveptr);
+     HChar* arg = VG_(strtok_r) (0, " ", &ssaveptr);
      if (arg && (VG_(strcmp)(arg, "internal") == 0)) {
        /* internal interface to callgrind_control */
        dump_state_togdb();
@@ -1549,7 +1625,7 @@ static Bool handle_gdb_monitor_command (ThreadId tid, Char *req)
    }
 
    case 4: { /* instrumentation */
-     Char* arg = VG_(strtok_r) (0, " ", &ssaveptr);
+     HChar* arg = VG_(strtok_r) (0, " ", &ssaveptr);
      if (!arg) {
        VG_(gdb_printf)("instrumentation: %s\n",
 		       CLG_(instrument_state) ? "on":"off");
@@ -1580,8 +1656,8 @@ Bool CLG_(handle_client_request)(ThreadId tid, UWord *args, UWord *ret)
 
    case VG_USERREQ__DUMP_STATS_AT:
      {
-       Char buf[512];
-       VG_(sprintf)(buf,"Client Request: %s", (Char*)args[1]);
+       HChar buf[512];
+       VG_(sprintf)(buf,"Client Request: %s", (HChar*)args[1]);
        CLG_(dump_profile)(buf, True);
        *ret = 0;                 /* meaningless */
      }
@@ -1610,7 +1686,7 @@ Bool CLG_(handle_client_request)(ThreadId tid, UWord *args, UWord *ret)
      break;
 
    case VG_USERREQ__GDB_MONITOR_COMMAND: {
-      Bool handled = handle_gdb_monitor_command (tid, (Char*)args[1]);
+      Bool handled = handle_gdb_monitor_command (tid, (HChar*)args[1]);
       if (handled)
          *ret = 1;
       else
@@ -1699,7 +1775,8 @@ static UInt ULong_width(ULong n)
 static
 void branchsim_printstat(int l1, int l2, int l3)
 {
-    static Char buf1[128], buf2[128], buf3[128], fmt[128];
+    static HChar buf1[128], buf2[128], buf3[128];
+    static HChar fmt[128];
     FullCost total;
     ULong Bc_total_b, Bc_total_mp, Bi_total_b, Bi_total_mp;
     ULong B_total_b, B_total_mp;
@@ -1733,11 +1810,84 @@ void branchsim_printstat(int l1, int l2, int l3)
     VG_(umsg)("Mispred rate:  %s (%s     + %s   )\n", buf1, buf2,buf3);
 }
 
+static
+void clg_print_stats(void)
+{
+   int BB_lookups =
+     CLG_(stat).full_debug_BBs +
+     CLG_(stat).fn_name_debug_BBs +
+     CLG_(stat).file_line_debug_BBs +
+     CLG_(stat).no_debug_BBs;
+
+   /* Hash table stats */
+   VG_(message)(Vg_DebugMsg, "Distinct objects: %d\n",
+		CLG_(stat).distinct_objs);
+   VG_(message)(Vg_DebugMsg, "Distinct files:   %d\n",
+		CLG_(stat).distinct_files);
+   VG_(message)(Vg_DebugMsg, "Distinct fns:     %d\n",
+		CLG_(stat).distinct_fns);
+   VG_(message)(Vg_DebugMsg, "Distinct contexts:%d\n",
+		CLG_(stat).distinct_contexts);
+   VG_(message)(Vg_DebugMsg, "Distinct BBs:     %d\n",
+		CLG_(stat).distinct_bbs);
+   VG_(message)(Vg_DebugMsg, "Cost entries:     %d (Chunks %d)\n",
+		CLG_(costarray_entries), CLG_(costarray_chunks));
+   VG_(message)(Vg_DebugMsg, "Distinct BBCCs:   %d\n",
+		CLG_(stat).distinct_bbccs);
+   VG_(message)(Vg_DebugMsg, "Distinct JCCs:    %d\n",
+		CLG_(stat).distinct_jccs);
+   VG_(message)(Vg_DebugMsg, "Distinct skips:   %d\n",
+		CLG_(stat).distinct_skips);
+   VG_(message)(Vg_DebugMsg, "BB lookups:       %d\n",
+		BB_lookups);
+   if (BB_lookups>0) {
+      VG_(message)(Vg_DebugMsg, "With full      debug info:%3d%% (%d)\n",
+		   CLG_(stat).full_debug_BBs    * 100 / BB_lookups,
+		   CLG_(stat).full_debug_BBs);
+      VG_(message)(Vg_DebugMsg, "With file/line debug info:%3d%% (%d)\n",
+		   CLG_(stat).file_line_debug_BBs * 100 / BB_lookups,
+		   CLG_(stat).file_line_debug_BBs);
+      VG_(message)(Vg_DebugMsg, "With fn name   debug info:%3d%% (%d)\n",
+		   CLG_(stat).fn_name_debug_BBs * 100 / BB_lookups,
+		   CLG_(stat).fn_name_debug_BBs);
+      VG_(message)(Vg_DebugMsg, "With no        debug info:%3d%% (%d)\n",
+		   CLG_(stat).no_debug_BBs      * 100 / BB_lookups,
+		   CLG_(stat).no_debug_BBs);
+   }
+   VG_(message)(Vg_DebugMsg, "BBCC Clones:       %d\n",
+		CLG_(stat).bbcc_clones);
+   VG_(message)(Vg_DebugMsg, "BBs Retranslated:  %d\n",
+		CLG_(stat).bb_retranslations);
+   VG_(message)(Vg_DebugMsg, "Distinct instrs:   %d\n",
+		CLG_(stat).distinct_instrs);
+   VG_(message)(Vg_DebugMsg, "");
+
+   VG_(message)(Vg_DebugMsg, "LRU Contxt Misses: %d\n",
+		CLG_(stat).cxt_lru_misses);
+   VG_(message)(Vg_DebugMsg, "LRU BBCC Misses:   %d\n",
+		CLG_(stat).bbcc_lru_misses);
+   VG_(message)(Vg_DebugMsg, "LRU JCC Misses:    %d\n",
+		CLG_(stat).jcc_lru_misses);
+   VG_(message)(Vg_DebugMsg, "BBs Executed:      %llu\n",
+		CLG_(stat).bb_executions);
+   VG_(message)(Vg_DebugMsg, "Calls:             %llu\n",
+		CLG_(stat).call_counter);
+   VG_(message)(Vg_DebugMsg, "CondJMP followed:  %llu\n",
+		CLG_(stat).jcnd_counter);
+   VG_(message)(Vg_DebugMsg, "Boring JMPs:       %llu\n",
+		CLG_(stat).jump_counter);
+   VG_(message)(Vg_DebugMsg, "Recursive calls:   %llu\n",
+		CLG_(stat).rec_call_counter);
+   VG_(message)(Vg_DebugMsg, "Returns:           %llu\n",
+		CLG_(stat).ret_counter);
+}
+
 
 static
 void finish(void)
 {
-  Char buf[32+COSTS_LEN], fmt[128];
+  HChar buf[32+COSTS_LEN];
+  HChar fmt[128];
   Int l1, l2, l3;
   FullCost total;
 
@@ -1753,77 +1903,10 @@ void finish(void)
 
   if (VG_(clo_verbosity) == 0) return;
   
-  /* Hash table stats */
   if (VG_(clo_stats)) {
-    int BB_lookups =
-      CLG_(stat).full_debug_BBs +
-      CLG_(stat).fn_name_debug_BBs +
-      CLG_(stat).file_line_debug_BBs +
-      CLG_(stat).no_debug_BBs;
-    
     VG_(message)(Vg_DebugMsg, "\n");
-    VG_(message)(Vg_DebugMsg, "Distinct objects: %d\n",
-		 CLG_(stat).distinct_objs);
-    VG_(message)(Vg_DebugMsg, "Distinct files:   %d\n",
-		 CLG_(stat).distinct_files);
-    VG_(message)(Vg_DebugMsg, "Distinct fns:     %d\n",
-		 CLG_(stat).distinct_fns);
-    VG_(message)(Vg_DebugMsg, "Distinct contexts:%d\n",
-		 CLG_(stat).distinct_contexts);
-    VG_(message)(Vg_DebugMsg, "Distinct BBs:     %d\n",
-		 CLG_(stat).distinct_bbs);
-    VG_(message)(Vg_DebugMsg, "Cost entries:     %d (Chunks %d)\n",
-		 CLG_(costarray_entries), CLG_(costarray_chunks));
-    VG_(message)(Vg_DebugMsg, "Distinct BBCCs:   %d\n",
-		 CLG_(stat).distinct_bbccs);
-    VG_(message)(Vg_DebugMsg, "Distinct JCCs:    %d\n",
-		 CLG_(stat).distinct_jccs);
-    VG_(message)(Vg_DebugMsg, "Distinct skips:   %d\n",
-		 CLG_(stat).distinct_skips);
-    VG_(message)(Vg_DebugMsg, "BB lookups:       %d\n",
-		 BB_lookups);
-    if (BB_lookups>0) {
-      VG_(message)(Vg_DebugMsg, "With full      debug info:%3d%% (%d)\n", 
-		   CLG_(stat).full_debug_BBs    * 100 / BB_lookups,
-		   CLG_(stat).full_debug_BBs);
-      VG_(message)(Vg_DebugMsg, "With file/line debug info:%3d%% (%d)\n", 
-		   CLG_(stat).file_line_debug_BBs * 100 / BB_lookups,
-		   CLG_(stat).file_line_debug_BBs);
-      VG_(message)(Vg_DebugMsg, "With fn name   debug info:%3d%% (%d)\n", 
-		   CLG_(stat).fn_name_debug_BBs * 100 / BB_lookups,
-		   CLG_(stat).fn_name_debug_BBs);
-      VG_(message)(Vg_DebugMsg, "With no        debug info:%3d%% (%d)\n", 
-		   CLG_(stat).no_debug_BBs      * 100 / BB_lookups,
-		   CLG_(stat).no_debug_BBs);
-    }
-    VG_(message)(Vg_DebugMsg, "BBCC Clones:       %d\n",
-		 CLG_(stat).bbcc_clones);
-    VG_(message)(Vg_DebugMsg, "BBs Retranslated:  %d\n",
-		 CLG_(stat).bb_retranslations);
-    VG_(message)(Vg_DebugMsg, "Distinct instrs:   %d\n",
-		 CLG_(stat).distinct_instrs);
-    VG_(message)(Vg_DebugMsg, "");
-    
-    VG_(message)(Vg_DebugMsg, "LRU Contxt Misses: %d\n",
-		 CLG_(stat).cxt_lru_misses);
-    VG_(message)(Vg_DebugMsg, "LRU BBCC Misses:   %d\n",
-		 CLG_(stat).bbcc_lru_misses);
-    VG_(message)(Vg_DebugMsg, "LRU JCC Misses:    %d\n",
-		 CLG_(stat).jcc_lru_misses);
-    VG_(message)(Vg_DebugMsg, "BBs Executed:      %llu\n",
-		 CLG_(stat).bb_executions);
-    VG_(message)(Vg_DebugMsg, "Calls:             %llu\n",
-		 CLG_(stat).call_counter);
-    VG_(message)(Vg_DebugMsg, "CondJMP followed:  %llu\n",
-		 CLG_(stat).jcnd_counter);
-    VG_(message)(Vg_DebugMsg, "Boring JMPs:       %llu\n",
-		 CLG_(stat).jump_counter);
-    VG_(message)(Vg_DebugMsg, "Recursive calls:   %llu\n",
-		 CLG_(stat).rec_call_counter);
-    VG_(message)(Vg_DebugMsg, "Returns:           %llu\n",
-		 CLG_(stat).ret_counter);
-
-    VG_(message)(Vg_DebugMsg, "");
+    clg_print_stats();
+    VG_(message)(Vg_DebugMsg, "\n");
   }
 
   CLG_(sprint_eventmapping)(buf, CLG_(dumpmap));
@@ -1889,9 +1972,29 @@ static void clg_start_client_code_callback ( ThreadId tid, ULong blocks_done )
 static
 void CLG_(post_clo_init)(void)
 {
-   VG_(clo_vex_control).iropt_unroll_thresh = 0;
-   VG_(clo_vex_control).guest_chase_thresh = 0;
+   if (VG_(clo_vex_control).iropt_register_updates
+       != VexRegUpdSpAtMemAccess) {
+      CLG_DEBUG(1, " Using user specified value for "
+                "--vex-iropt-register-updates\n");
+   } else {
+      CLG_DEBUG(1, 
+                " Using default --vex-iropt-register-updates="
+                "sp-at-mem-access\n");
+   }
 
+   if (VG_(clo_vex_control).iropt_unroll_thresh != 0) {
+      VG_(message)(Vg_UserMsg, 
+                   "callgrind only works with --vex-iropt-unroll-thresh=0\n"
+                   "=> resetting it back to 0\n");
+      VG_(clo_vex_control).iropt_unroll_thresh = 0;   // cannot be overriden.
+   }
+   if (VG_(clo_vex_control).guest_chase_thresh != 0) {
+      VG_(message)(Vg_UserMsg,
+                   "callgrind only works with --vex-guest-chase-thresh=0\n"
+                   "=> resetting it back to 0\n");
+      VG_(clo_vex_control).guest_chase_thresh = 0; // cannot be overriden.
+   }
+   
    CLG_DEBUG(1, "  dump threads: %s\n", CLG_(clo).separate_threads ? "Yes":"No");
    CLG_DEBUG(1, "  call sep. : %d\n", CLG_(clo).separate_callers);
    CLG_DEBUG(1, "  rec. sep. : %d\n", CLG_(clo).separate_recursions);
@@ -1921,7 +2024,9 @@ void CLG_(post_clo_init)(void)
 
    if (VG_(clo_verbosity > 0)) {
       VG_(message)(Vg_UserMsg,
-                   "For interactive control, run 'callgrind_control -h'.\n");
+                   "For interactive control, run 'callgrind_control%s%s -h'.\n",
+                   (VG_(arg_vgdb_prefix) ? " " : ""),
+                   (VG_(arg_vgdb_prefix) ? VG_(arg_vgdb_prefix) : ""));
    }
 }
 
@@ -1931,10 +2036,15 @@ void CLG_(pre_clo_init)(void)
     VG_(details_name)            ("Callgrind");
     VG_(details_version)         (NULL);
     VG_(details_description)     ("a call-graph generating cache profiler");
-    VG_(details_copyright_author)("Copyright (C) 2002-2012, and GNU GPL'd, "
+    VG_(details_copyright_author)("Copyright (C) 2002-2013, and GNU GPL'd, "
 				  "by Josef Weidendorfer et al.");
     VG_(details_bug_reports_to)  (VG_BUGS_TO);
     VG_(details_avg_translation_sizeB) ( 500 );
+
+    VG_(clo_vex_control).iropt_register_updates
+       = VexRegUpdSpAtMemAccess; // overridable by the user.
+    VG_(clo_vex_control).iropt_unroll_thresh = 0;   // cannot be overriden.
+    VG_(clo_vex_control).guest_chase_thresh = 0;    // cannot be overriden.
 
     VG_(basic_tool_funcs)        (CLG_(post_clo_init),
                                   CLG_(instrument),
@@ -1948,6 +2058,7 @@ void CLG_(pre_clo_init)(void)
 				    CLG_(print_debug_usage));
 
     VG_(needs_client_requests)(CLG_(handle_client_request));
+    VG_(needs_print_stats)    (clg_print_stats);
     VG_(needs_syscall_wrapper)(CLG_(pre_syscalltime),
 			       CLG_(post_syscalltime));
 

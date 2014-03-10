@@ -7,9 +7,9 @@
   This file is part of Valgrind, a dynamic binary instrumentation
   framework.
 
-  Copyright (C) 2000-2012 Julian Seward 
+  Copyright (C) 2000-2013 Julian Seward 
      jseward@acm.org
-  Copyright (C) 2006-2012 OpenWorks LLP
+  Copyright (C) 2006-2013 OpenWorks LLP
      info@open-works.co.uk
 	
   This program is free software; you can redistribute it and/or
@@ -519,9 +519,9 @@ VG_(trampoline_stuff_end):
 #	undef UD2_1024
 #	undef UD2_PAGE
 
-/*---------------- ppc32-linux ----------------*/
-
-#elif defined(VGP_arm_linux)
+/*---------------- arm-linux ----------------*/
+#else
+#if defined(VGP_arm_linux)
 
 #       define UD2_4      .word 0xFFFFFFFF
 #	define UD2_16     UD2_4    ; UD2_4    ; UD2_4    ; UD2_4
@@ -666,6 +666,45 @@ VG_(arm_linux_REDIR_FOR_memcpy):
 	mov	r0, r5
 	ldmfd	sp!, {r4, r5, pc}
 	UD2_4
+
+.global VG_(trampoline_stuff_end)
+VG_(trampoline_stuff_end):
+
+	/* and a trailing page of unexecutable code */
+	UD2_PAGE
+
+#	undef UD2_4
+#	undef UD2_16
+#	undef UD2_64
+#	undef UD2_256
+#	undef UD2_1024
+#	undef UD2_PAGE
+        
+/*---------------- arm64-linux ----------------*/
+#else
+#if defined(VGP_arm64_linux)
+
+#       define UD2_4      .word 0xFFFFFFFF
+#	define UD2_16     UD2_4    ; UD2_4    ; UD2_4    ; UD2_4
+#	define UD2_64     UD2_16   ; UD2_16   ; UD2_16   ; UD2_16
+#	define UD2_256    UD2_64   ; UD2_64   ; UD2_64   ; UD2_64
+#	define UD2_1024   UD2_256  ; UD2_256  ; UD2_256  ; UD2_256
+#	define UD2_PAGE   UD2_1024 ; UD2_1024 ; UD2_1024 ; UD2_1024  
+
+	/* a leading page of unexecutable code */
+	UD2_PAGE
+
+.global VG_(trampoline_stuff_start)
+VG_(trampoline_stuff_start):
+
+.global VG_(arm64_linux_SUBST_FOR_rt_sigreturn)
+.type   VG_(arm64_linux_SUBST_FOR_rt_sigreturn),#function
+VG_(arm64_linux_SUBST_FOR_rt_sigreturn):
+	mov x8, # __NR_rt_sigreturn
+        svc #0
+        .long 0xFFFFFFFF /*illegal insn*/
+.size VG_(arm64_linux_SUBST_FOR_rt_sigreturn), \
+        .-VG_(arm64_linux_SUBST_FOR_rt_sigreturn)
 
 .global VG_(trampoline_stuff_end)
 VG_(trampoline_stuff_end):
@@ -1079,10 +1118,69 @@ VG_(trampoline_stuff_end):
 #	undef UD2_1024
 #	undef UD2_PAGE
 
+/*---------------------- mips64-linux ----------------------*/
+#else
+#if defined(VGP_mips64_linux)
+
+#       define UD2_16     trap ; trap ; trap; trap
+#       define UD2_64     UD2_16   ; UD2_16   ; UD2_16   ; UD2_16
+#       define UD2_256    UD2_64   ; UD2_64   ; UD2_64   ; UD2_64
+#       define UD2_1024   UD2_256  ; UD2_256  ; UD2_256  ; UD2_256
+#       define UD2_PAGE   UD2_1024 ; UD2_1024 ; UD2_1024 ; UD2_1024  
+
+.global VG_(trampoline_stuff_start)
+VG_(trampoline_stuff_start):
+
+.global VG_(mips64_linux_SUBST_FOR_rt_sigreturn)
+VG_(mips64_linux_SUBST_FOR_rt_sigreturn):
+        li $2,__NR_rt_sigreturn
+        syscall
+        nop
+        .long 0	/*illegal insn*/
+
+/* There's no particular reason that this needs to be handwritten
+   assembly, but since that's what this file contains, here's a
+   simple strlen implementation (written in C and compiled by gcc.)
+*/
+.global VG_(mips64_linux_REDIR_FOR_strlen)
+.type   VG_(mips64_linux_REDIR_FOR_strlen), @function
+VG_(mips64_linux_REDIR_FOR_strlen):
+        lbu $12, 0($4)
+        li  $13, 0
+        beq $12, $0, M01 
+        nop
+
+M02: 
+        addiu $13, $13, 1 
+        addiu $4, $4, 1 
+        lbu $12, 0($4) 
+        bne $12, $0, M02 
+        nop 
+
+M01: 
+        move $2, $13 
+        jr $31 
+        nop
+
+.size VG_(mips64_linux_REDIR_FOR_strlen), .-VG_(mips64_linux_REDIR_FOR_strlen)
+
+.global VG_(trampoline_stuff_end)
+VG_(trampoline_stuff_end):
+
+
+#	undef UD2_16
+#	undef UD2_64
+#	undef UD2_256
+#	undef UD2_1024
+#	undef UD2_PAGE
+
 /*---------------- unknown ----------------*/
 #else
 #  error Unknown platform
 
+#endif
+#endif
+#endif
 #endif
 #endif
 #endif

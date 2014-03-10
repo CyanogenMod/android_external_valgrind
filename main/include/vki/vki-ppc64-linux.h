@@ -7,7 +7,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2005-2012 Julian Seward
+   Copyright (C) 2005-2013 Julian Seward
       jseward@acm.org
 
    This program is free software; you can redistribute it and/or
@@ -64,8 +64,8 @@ typedef unsigned int vki_u32;
 
 /* PAGE_SHIFT determines the page size, unfortunately
    page size might vary between 32-bit and 64-bit ppc kernels */
-extern unsigned long VKI_PAGE_SHIFT;
-extern unsigned long VKI_PAGE_SIZE;
+extern UWord VKI_PAGE_SHIFT;
+extern UWord VKI_PAGE_SIZE;
 #define VKI_MAX_PAGE_SHIFT	16
 #define VKI_MAX_PAGE_SIZE	(1UL << VKI_MAX_PAGE_SHIFT)
 
@@ -360,6 +360,7 @@ struct vki_sigcontext {
 // From linux-2.6.13/include/asm-ppc64/fcntl.h
 //----------------------------------------------------------------------
 
+#define VKI_O_ACCMODE	         03
 #define VKI_O_RDONLY             00
 #define VKI_O_WRONLY             01
 #define VKI_O_RDWR               02
@@ -421,6 +422,8 @@ struct vki_f_owner_ex {
 #define VKI_SOL_SOCKET      1
 
 #define VKI_SO_TYPE         3
+
+#define VKI_SO_ATTACH_FILTER	26
 
 //----------------------------------------------------------------------
 // From linux-2.6.13/include/asm-ppc64/sockios.h
@@ -601,6 +604,9 @@ struct vki_termios {
 // From linux-2.6.13/include/asm-ppc64/ioctls.h
 //----------------------------------------------------------------------
 
+#define VKI_FIOCLEX         _VKI_IO('f', 1)
+#define VKI_FIONCLEX        _VKI_IO('f', 2)
+
 #define VKI_TCGETS          _VKI_IOR('t', 19, struct vki_termios)
 #define VKI_TCSETS          _VKI_IOW('t', 20, struct vki_termios)
 #define VKI_TCSETSW         _VKI_IOW('t', 21, struct vki_termios)
@@ -772,6 +778,13 @@ struct vki_shminfo64 {
   unsigned long   __unused3;
   unsigned long   __unused4;
 };
+
+//----------------------------------------------------------------------
+// From linux-2.6.8.1/include/asm-generic/errno.h
+//----------------------------------------------------------------------
+
+#define	VKI_ENOSYS       38  /* Function not implemented */
+#define	VKI_EOVERFLOW    75  /* Value too large for defined data type */
 
 //----------------------------------------------------------------------
 // end

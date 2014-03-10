@@ -58,6 +58,8 @@ void test_VG_STREQN(void)
 // On PPC/Linux VKI_PAGE_SIZE is a variable, not a macro.
 #if defined(VGP_ppc32_linux) || defined(VGP_ppc64_linux)
 unsigned long VKI_PAGE_SIZE  = 1UL << 12;
+#elif defined(VGP_arm64_linux)
+unsigned long VKI_PAGE_SIZE  = 1UL << 16;
 #endif
 
 void test_VG_IS_XYZ_ALIGNED(void)
@@ -302,9 +304,9 @@ void test_strtoll_and_strtod(void)
 {
    // For VG_(strtoll*)()
    typedef struct {
-      Char* str;        // The string to convert.
-      Long  res;        // The result.
-      Char  endptr_val; // The char one past the end of the converted text.
+      HChar* str;        // The string to convert.
+      Long   res;        // The result.
+      HChar  endptr_val; // The char one past the end of the converted text.
    } StrtollInputs;
 
    // VG_(strtoll10)()
@@ -342,8 +344,8 @@ void test_strtoll_and_strtod(void)
       // Nb: We test the results against strtoll() as well.
       int i;
       for (i = 0; i < (sizeof(a) / sizeof(StrtollInputs)); i++) {
-         Char* endptr1;
-         char* endptr2;
+         HChar* endptr1;
+         HChar* endptr2;
          Long      res1 = VG_(strtoll10)(a[i].str, &endptr1);
          long long res2 =     strtoll   (a[i].str, &endptr2, 10);
          //printf("res1 = %lld, *endptr1 = '%c'\n", res1, *endptr1);
@@ -397,8 +399,8 @@ void test_strtoll_and_strtod(void)
       // Nb: We test the results against strtoll() as well.
       int i;
       for (i = 0; i < (sizeof(a) / sizeof(StrtollInputs)); i++) {
-         Char* endptr1;
-         char* endptr2;
+         HChar* endptr1;
+         HChar* endptr2;
          Long      res1 = VG_(strtoll16)(a[i].str, &endptr1);
          long long res2 =     strtoll   (a[i].str, &endptr2, 16);
          //printf("  res1 = %lld, *endptr1 = '%c'\n", res1, *endptr1);

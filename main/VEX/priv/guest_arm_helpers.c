@@ -7,7 +7,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2004-2012 OpenWorks LLP
+   Copyright (C) 2004-2013 OpenWorks LLP
       info@open-works.net
 
    This program is free software; you can redistribute it and/or
@@ -29,12 +29,13 @@
 */
 
 #include "libvex_basictypes.h"
-#include "libvex_emwarn.h"
+#include "libvex_emnote.h"
 #include "libvex_guest_arm.h"
 #include "libvex_ir.h"
 #include "libvex.h"
 
 #include "main_util.h"
+#include "main_globals.h"
 #include "guest_generic_bb_to_IR.h"
 #include "guest_arm_defs.h"
 
@@ -506,7 +507,7 @@ UInt armg_calculate_condition ( UInt cond_n_op /* (ARMCondcode << 4) | cc_op */,
       case ARMCondLS:    // C=0 || Z=1
          cf = armg_calculate_flag_c(cc_op, cc_dep1, cc_dep2, cc_dep3);
          zf = armg_calculate_flag_z(cc_op, cc_dep1, cc_dep2, cc_dep3);
-         return inv ^ (cf & ~zf);
+         return inv ^ (1 & (cf & ~zf));
 
       case ARMCondGE:    // N=V          => ~(n^v)
       case ARMCondLT:    // N!=V
@@ -550,7 +551,7 @@ static Bool isU32 ( IRExpr* e, UInt n )
               && e->Iex.Const.con->Ico.U32 == n );
 }
 
-IRExpr* guest_arm_spechelper ( HChar*   function_name,
+IRExpr* guest_arm_spechelper ( const HChar* function_name,
                                IRExpr** args,
                                IRStmt** precedingStmts,
                                Int      n_precedingStmts )
@@ -660,12 +661,12 @@ IRExpr* guest_arm_spechelper ( HChar*   function_name,
             --> oldC ? (argR <=u argL) : (argR <u argL)
          */
          return
-            IRExpr_Mux0X(
-               unop(Iop_32to8, cc_ndep),
-               /* case oldC == 0 */
-               unop(Iop_1Uto32, binop(Iop_CmpLT32U, cc_dep2, cc_dep1)),
+            IRExpr_ITE(
+               binop(Iop_CmpNE32, cc_ndep, mkU32(0)),
                /* case oldC != 0 */
-               unop(Iop_1Uto32, binop(Iop_CmpLE32U, cc_dep2, cc_dep1))
+               unop(Iop_1Uto32, binop(Iop_CmpLE32U, cc_dep2, cc_dep1)),
+               /* case oldC == 0 */
+               unop(Iop_1Uto32, binop(Iop_CmpLT32U, cc_dep2, cc_dep1))
             );
       }
 
@@ -796,12 +797,12 @@ IRExpr* guest_arm_spechelper ( HChar*   function_name,
             --> oldC ? (argR <=u argL) : (argR <u argL)
          */
          return
-            IRExpr_Mux0X(
-               unop(Iop_32to8, cc_ndep),
-               /* case oldC == 0 */
-               unop(Iop_1Uto32, binop(Iop_CmpLT32U, cc_dep2, cc_dep1)),
+            IRExpr_ITE(
+               binop(Iop_CmpNE32, cc_ndep, mkU32(0)),
                /* case oldC != 0 */
-               unop(Iop_1Uto32, binop(Iop_CmpLE32U, cc_dep2, cc_dep1))
+               unop(Iop_1Uto32, binop(Iop_CmpLE32U, cc_dep2, cc_dep1)),
+               /* case oldC == 0 */
+               unop(Iop_1Uto32, binop(Iop_CmpLT32U, cc_dep2, cc_dep1))
             );
       }
 
@@ -909,7 +910,7 @@ void LibVEX_GuestARM_put_flags ( UInt flags_native,
 #endif
 
 /* VISIBLE TO LIBVEX CLIENT */
-UInt LibVEX_GuestARM_get_cpsr ( /*IN*/VexGuestARMState* vex_state )
+UInt LibVEX_GuestARM_get_cpsr ( /*IN*/const VexGuestARMState* vex_state )
 {
    UInt cpsr = 0;
    // NZCV
@@ -979,7 +980,7 @@ void LibVEX_GuestARM_initialise ( /*OUT*/VexGuestARMState* vex_state )
    vex_state->guest_GEFLAG2 = 0;
    vex_state->guest_GEFLAG3 = 0;
 
-   vex_state->guest_EMWARN  = 0;
+   vex_state->guest_EMNOTE  = EmNote_NONE;
    vex_state->guest_TISTART = 0;
    vex_state->guest_TILEN   = 0;
    vex_state->guest_NRADDR  = 0;
@@ -1029,10 +1030,6 @@ void LibVEX_GuestARM_initialise ( /*OUT*/VexGuestARMState* vex_state )
    vex_state->guest_ITSTATE = 0;
 
    vex_state->padding1 = 0;
-   vex_state->padding2 = 0;
-   vex_state->padding3 = 0;
-   vex_state->padding4 = 0;
-   vex_state->padding5 = 0;
 }
 
 
@@ -1043,9 +1040,12 @@ void LibVEX_GuestARM_initialise ( /*OUT*/VexGuestARMState* vex_state )
 
 /* Figure out if any part of the guest state contained in minoff
    .. maxoff requires precise memory exceptions.  If in doubt return
-   True (but this is generates significantly slower code).  
+   True (but this generates significantly slower code).  
 
-   We enforce precise exns for guest R13(sp), R15T(pc).
+   We enforce precise exns for guest R13(sp), R15T(pc), R7, R11.
+
+
+   Only R13(sp) is needed in mode VexRegUpdSpAtMemAccess.   
 */
 Bool guest_arm_state_requires_precise_mem_exns ( Int minoff, 
                                                  Int maxoff)
@@ -1057,6 +1057,8 @@ Bool guest_arm_state_requires_precise_mem_exns ( Int minoff,
 
    if (maxoff < sp_min || minoff > sp_max) {
       /* no overlap with sp */
+      if (vex_control.iropt_register_updates == VexRegUpdSpAtMemAccess)
+         return False; // We only need to check stack pointer.
    } else {
       return True;
    }
@@ -1123,7 +1125,7 @@ VexGuestLayout
              = { /* 0 */ ALWAYSDEFD(guest_R15T),
                  /* 1 */ ALWAYSDEFD(guest_CC_OP),
                  /* 2 */ ALWAYSDEFD(guest_CC_NDEP),
-                 /* 3 */ ALWAYSDEFD(guest_EMWARN),
+                 /* 3 */ ALWAYSDEFD(guest_EMNOTE),
                  /* 4 */ ALWAYSDEFD(guest_TISTART),
                  /* 5 */ ALWAYSDEFD(guest_TILEN),
                  /* 6 */ ALWAYSDEFD(guest_NRADDR),

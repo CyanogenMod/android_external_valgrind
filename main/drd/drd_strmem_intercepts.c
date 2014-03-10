@@ -9,7 +9,7 @@
   from memchec/mc_replace_strmem.c, which has the following copyright
   notice:
 
-  Copyright (C) 2000-2012 Julian Seward
+  Copyright (C) 2000-2013 Julian Seward
   jseward@acm.org
 
   This program is free software; you can redistribute it and/or
@@ -30,50 +30,4 @@
   The GNU General Public License is contained in the file COPYING.
 */
 
-#include "pub_tool_basics.h"
-#include "pub_tool_hashtable.h"
-#include "pub_tool_redir.h"
-#include "pub_tool_tooliface.h"
-#include "valgrind.h"
-
-
-#define STRNLEN(soname, fnname)                                         \
-   SizeT VG_REPLACE_FUNCTION_ZU(soname,fnname) ( const char* str, SizeT n ); \
-   SizeT VG_REPLACE_FUNCTION_ZU(soname,fnname) ( const char* str, SizeT n ) \
-   {                                                                    \
-      SizeT i = 0;                                                      \
-      while (i < n && str[i] != 0) i++;                                 \
-      return i;                                                         \
-   }
-
-#if defined(VGO_linux)
- STRNLEN(VG_Z_LIBC_SONAME, strnlen)
-#elif defined(VGO_darwin)
- STRNLEN(VG_Z_LIBC_SONAME, strnlen)
-#endif
-
-
-// Note that this replacement often doesn't get used because gcc inlines
-// calls to strlen() with its own built-in version.  This can be very
-// confusing if you aren't expecting it.  Other small functions in this file
-// may also be inline by gcc.
-#define STRLEN(soname, fnname)                                          \
-   SizeT VG_REPLACE_FUNCTION_ZU(soname,fnname)( const char* str );      \
-   SizeT VG_REPLACE_FUNCTION_ZU(soname,fnname)( const char* str )       \
-   {                                                                    \
-      SizeT i = 0;                                                      \
-      while (str[i] != 0) i++;                                          \
-      return i;                                                         \
-   }
-
-#if defined(VGO_linux)
- STRLEN(VG_Z_LIBC_SONAME,          strlen)
- STRLEN(VG_Z_LD_LINUX_SO_2,        strlen)
- STRLEN(VG_Z_LD_LINUX_X86_64_SO_2, strlen)
-#elif defined(VGO_darwin)
- STRLEN(VG_Z_LIBC_SONAME,          strlen)
-#endif
-
-/*--------------------------------------------------------------------*/
-/*--- end                                                          ---*/
-/*--------------------------------------------------------------------*/
+#include "../shared/vg_replace_strmem.c"

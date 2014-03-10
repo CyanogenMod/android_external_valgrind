@@ -76,6 +76,7 @@ LOCAL_SRC_FILES := \
 	VEX/priv/ir_defs.c \
 	VEX/priv/ir_match.c \
 	VEX/priv/ir_opt.c \
+    VEX/priv/ir_inject.c \
 	VEX/priv/guest_generic_bb_to_IR.c \
 	VEX/priv/guest_generic_x87.c \
 	VEX/priv/guest_mips_helpers.c \
@@ -88,11 +89,15 @@ LOCAL_SRC_FILES := \
 	VEX/priv/guest_ppc_toIR.c \
 	VEX/priv/guest_arm_helpers.c \
 	VEX/priv/guest_arm_toIR.c \
+	VEX/priv/guest_arm64_helpers.c \
+	VEX/priv/guest_arm64_toIR.c \
 	VEX/priv/guest_s390_helpers.c \
 	VEX/priv/guest_s390_toIR.c \
+    VEX/priv/host_generic_maddf.c \
 	VEX/priv/host_generic_regs.c \
 	VEX/priv/host_generic_simd64.c \
 	VEX/priv/host_generic_simd128.c \
+	VEX/priv/host_generic_simd256.c \
 	VEX/priv/host_generic_reg_alloc2.c \
 	VEX/priv/host_x86_defs.c \
 	VEX/priv/host_x86_isel.c \
@@ -104,9 +109,11 @@ LOCAL_SRC_FILES := \
 	VEX/priv/host_ppc_isel.c \
 	VEX/priv/host_arm_defs.c \
 	VEX/priv/host_arm_isel.c \
+	VEX/priv/host_arm64_defs.c \
+	VEX/priv/host_arm64_isel.c \
 	VEX/priv/host_s390_defs.c \
-	VEX/priv/host_s390_disasm.c \
-	VEX/priv/host_s390_isel.c
+	VEX/priv/host_s390_isel.c \
+	VEX/priv/s390_disasm.c
 
 
 LOCAL_C_INCLUDES := $(common_includes)
@@ -127,6 +134,7 @@ LOCAL_MODULE_TAGS := optional
 LOCAL_ARM_MODE := arm
 
 LOCAL_SRC_FILES := \
+	coregrind/m_cache.c \
 	coregrind/m_commandline.c \
 	coregrind/m_clientstate.c \
 	coregrind/m_cpuid.S \
@@ -169,6 +177,7 @@ LOCAL_SRC_FILES := \
 	coregrind/m_aspacemgr/aspacemgr-linux.c \
 	coregrind/m_coredump/coredump-elf.c \
 	coregrind/m_coredump/coredump-macho.c \
+	coregrind/m_debuginfo/image.c \
 	coregrind/m_debuginfo/misc.c \
 	coregrind/m_debuginfo/d3basics.c \
 	coregrind/m_debuginfo/debuginfo.c \
@@ -199,6 +208,7 @@ LOCAL_SRC_FILES := \
 	coregrind/m_mach/mach_traps-x86-darwin.S \
 	coregrind/m_mach/mach_traps-amd64-darwin.S \
 	coregrind/m_replacemalloc/replacemalloc_core.c \
+    coregrind/m_sbprofile.c \
 	coregrind/m_scheduler/sched-lock.c \
 	coregrind/m_scheduler/sched-lock-generic.c \
 	coregrind/m_scheduler/scheduler.c \
@@ -373,13 +383,8 @@ LOCAL_NO_CRT := true
 LOCAL_SYSTEM_SHARED_LIBRARIES :=
 
 LOCAL_SRC_FILES := \
-	cachegrind/cg-arch.c \
-	cachegrind/cg-arm.c \
-	cachegrind/cg_main.c \
-	cachegrind/cg-ppc32.c \
-	cachegrind/cg-ppc64.c \
-	cachegrind/cg-s390x.c \
-	cachegrind/cg-x86-amd64.c
+	cachegrind/cg_arch.c \
+	cachegrind/cg_main.c
 
 LOCAL_C_INCLUDES := $(common_includes)
 
@@ -417,13 +422,7 @@ LOCAL_SRC_FILES := \
 	callgrind/jumps.c \
 	callgrind/main.c \
 	callgrind/sim.c \
-	callgrind/threads.c \
-	cachegrind/cg-arch.c \
-	cachegrind/cg-arm.c \
-	cachegrind/cg-ppc32.c \
-	cachegrind/cg-ppc64.c \
-	cachegrind/cg-s390x.c \
-	cachegrind/cg-x86-amd64.c
+	callgrind/threads.c
 
 LOCAL_C_INCLUDES := $(common_includes) \
 	external/valgrind/main/cachegrind

@@ -7,7 +7,7 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2000-2012 Julian Seward 
+   Copyright (C) 2000-2013 Julian Seward 
       jseward@acm.org
 
    This program is free software; you can redistribute it and/or
@@ -35,6 +35,7 @@
 #include "pub_core_xarray.h"
 #include "pub_core_clientstate.h"
 #include "pub_core_debugger.h"
+#include "pub_core_gdbserver.h"
 #include "pub_core_libcbase.h"
 #include "pub_core_libcprint.h"
 #include "pub_core_libcproc.h"
@@ -231,6 +232,47 @@ static Int ptrace_setregs(Int pid, VexGuestArchState* vex)
    uregs.ARM_cpsr = LibVEX_GuestARM_get_cpsr(vex);
    return VG_(ptrace)(VKI_PTRACE_SETREGS, pid, NULL, &uregs);
 
+#elif defined(VGP_arm64_linux)
+   I_die_here;
+   //ATC
+   struct vki_user_pt_regs uregs;
+   VG_(memset)(&uregs, 0, sizeof(uregs));
+   uregs.regs[0]  = vex->guest_X0;
+   uregs.regs[1]  = vex->guest_X1;
+   uregs.regs[2]  = vex->guest_X2;
+   uregs.regs[3]  = vex->guest_X3;
+   uregs.regs[4]  = vex->guest_X4;
+   uregs.regs[5]  = vex->guest_X5;
+   uregs.regs[6]  = vex->guest_X6;
+   uregs.regs[7]  = vex->guest_X7;
+   uregs.regs[8]  = vex->guest_X8;
+   uregs.regs[9]  = vex->guest_X9;
+   uregs.regs[10] = vex->guest_X10;
+   uregs.regs[11] = vex->guest_X11;
+   uregs.regs[12] = vex->guest_X12;
+   uregs.regs[13] = vex->guest_X13;
+   uregs.regs[14] = vex->guest_X14;
+   uregs.regs[15] = vex->guest_X15;
+   uregs.regs[16] = vex->guest_X16;
+   uregs.regs[17] = vex->guest_X17;
+   uregs.regs[18] = vex->guest_X18;
+   uregs.regs[19] = vex->guest_X19;
+   uregs.regs[20] = vex->guest_X20;
+   uregs.regs[21] = vex->guest_X21;
+   uregs.regs[22] = vex->guest_X22;
+   uregs.regs[23] = vex->guest_X23;
+   uregs.regs[24] = vex->guest_X24;
+   uregs.regs[25] = vex->guest_X25;
+   uregs.regs[26] = vex->guest_X26;
+   uregs.regs[27] = vex->guest_X27;
+   uregs.regs[28] = vex->guest_X28;
+   uregs.regs[29] = vex->guest_X29;
+   uregs.regs[30] = vex->guest_X30;
+   uregs.sp       = vex->guest_XSP;
+   uregs.pc       = vex->guest_PC;
+   uregs.pstate   = LibVEX_GuestARM64_get_nzcv(vex); /* is this correct? */
+   return VG_(ptrace)(VKI_PTRACE_SETREGS, pid, NULL, &uregs);
+
 #elif defined(VGP_x86_darwin)
    I_die_here;
 
@@ -307,7 +349,7 @@ static Int ptrace_setregs(Int pid, VexGuestArchState* vex)
 
    return VG_(ptrace)(VKI_PTRACE_POKEUSR_AREA, pid,  &pa, NULL);
 
-#elif defined(VGP_mips32_linux)
+#elif defined(VGP_mips32_linux) || defined(VGP_mips64_linux)
    struct vki_user_regs_struct regs;
    VG_(memset)(&regs, 0, sizeof(regs));
    regs.MIPS_r0     = vex->guest_r0;
@@ -363,6 +405,7 @@ void VG_(start_debugger) ( ThreadId tid )
 
    if (pid == 0) {
       /* child */
+      VG_(set_ptracer)();
       rc = VG_(ptrace)(VKI_PTRACE_TRACEME, 0, NULL, NULL);
       vg_assert(rc == 0);
       rc = VG_(kill)(VG_(getpid)(), VKI_SIGSTOP);
@@ -379,11 +422,11 @@ void VG_(start_debugger) ( ThreadId tid )
           VG_(kill)(pid, VKI_SIGSTOP) == 0 &&
           VG_(ptrace)(VKI_PTRACE_DETACH, pid, NULL, 0) == 0)
       {
-         Char pidbuf[15];
-         Char file[50];
-         Char buf[N_BUF];
-         Char *bufptr;
-         Char *cmdptr;
+         HChar pidbuf[15];
+         HChar file[50];
+         HChar buf[N_BUF];
+         HChar *bufptr;
+         const HChar *cmdptr;
          
          VG_(sprintf)(pidbuf, "%d", pid);
          VG_(sprintf)(file, "/proc/%d/fd/%d", pid, VG_(cl_exec_fd));

@@ -8,6 +8,10 @@ dist_noinst_SCRIPTS = \
 
 EXTRA_DIST = \
 	README_DEVELOPERS \
+	mcblocklistsearch.stderr.exp \
+	mcblocklistsearch.stdinB.gdb \
+	mcblocklistsearch.vgtest \
+	mcblocklistsearch.stderrB.exp \
 	mcbreak.stderrB.exp \
 	mcbreak.stderr.exp \
 	mcbreak.stdinB.gdb \
@@ -88,11 +92,30 @@ EXTRA_DIST = \
 	nlfork_chain.stderr.exp \
 	nlfork_chain.stdout.exp \
 	nlfork_chain.vgtest \
+	nlgone_abrt.stderr.exp \
+	nlgone_abrt.stderrB.exp \
+	nlgone_abrt.stdinB.gdb \
+	nlgone_abrt.stdoutB.exp \
+	nlgone_abrt.vgtest \
+	nlgone_exit.stderr.exp \
+	nlgone_exit.stderrB.exp \
+	nlgone_exit.stdinB.gdb \
+	nlgone_exit.stdoutB.exp \
+	nlgone_exit.vgtest \
+	nlgone_return.stderr.exp \
+	nlgone_return.stderrB.exp \
+	nlgone_return.stdinB.gdb \
+	nlgone_return.stdoutB.exp \
+	nlgone_return.vgtest \
 	nlpasssigalrm.vgtest \
 	nlpasssigalrm.stderrB.exp \
 	nlpasssigalrm.stderr.exp \
 	nlpasssigalrm.stdinB.gdb \
 	nlpasssigalrm.stdoutB.exp \
+	nlself_invalidate.stderrB.exp \
+	nlself_invalidate.stderr.exp \
+	nlself_invalidate.stdinB.gdb \
+	nlself_invalidate.vgtest \
 	nlsigvgdb.vgtest \
 	nlsigvgdb.stderr.exp \
 	nlsigvgdb.stderrB.exp \
@@ -101,9 +124,11 @@ EXTRA_DIST = \
 check_PROGRAMS = \
 	clean_after_fork \
 	fork_chain \
-	passsigalrm \
-	sleepers \
+	gone \
 	main_pic \
+	passsigalrm \
+	self_invalidate \
+	sleepers \
 	t \
 	watchpoints
 
