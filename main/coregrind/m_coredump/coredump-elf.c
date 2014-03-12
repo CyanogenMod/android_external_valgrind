@@ -609,7 +609,7 @@ void make_elf_coredump(ThreadId tid, const vki_siginfo_t *si, ULong max_size)
 
       fill_fpu(&VG_(threads)[i], &fpu);
 #     if !defined(VGPV_arm_linux_android) && !defined(VGPV_x86_linux_android) \
-         && !defined(VGPV_mips32_linux_android)
+         && !defined(VGPV_mips32_linux_android) && !defined(VGPV_arm64_linux_android)
       add_note(&notelist, "CORE", NT_FPREGSET, &fpu, sizeof(fpu));
 #     endif
 
