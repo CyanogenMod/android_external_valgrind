@@ -16,19 +16,29 @@ LOCAL_PATH:= $(call my-dir)
 
 ANDROID_HARDWARE := ANDROID_HARDWARE_generic
 
-ifneq ($(filter arm x86,$(TARGET_ARCH)),)
+ifneq ($(filter arm arm64 x86,$(TARGET_ARCH)),)
 
 common_cflags := \
 	-Wall -Wmissing-prototypes -Wshadow -Wpointer-arith -Wmissing-declarations \
 	-Wno-pointer-sign -Wno-sign-compare -Wno-unused-parameter -Wno-shadow \
 	-fno-strict-aliasing -fno-stack-protector \
-	-DVGA_$(TARGET_ARCH)=1 \
 	-DVGO_linux=1 \
-	-DVGP_$(TARGET_ARCH)_linux=1 \
-	-DVGPV_$(TARGET_ARCH)_linux_android=1 \
-	-DVG_PLATFORM=\"$(TARGET_ARCH)-linux\" \
 	-DVG_LIBDIR=\"/system/lib/valgrind\" \
 	-DANDROID_SYMBOLS_DIR=\"/data/local/symbols\"
+
+target_arch_cflags := \
+	-DVGA_$(TARGET_ARCH)=1 \
+	-DVGP_$(TARGET_ARCH)_linux=1 \
+	-DVGPV_$(TARGET_ARCH)_linux_android=1 \
+	-DVG_PLATFORM=\"$(TARGET_ARCH)-linux\"
+
+ifdef TARGET_2ND_ARCH
+target_2nd_arch_cflags := \
+	-DVGA_$(TARGET_2ND_ARCH)=1 \
+	-DVGP_$(TARGET_2ND_ARCH)_linux=1 \
+	-DVGPV_$(TARGET_2ND_ARCH)_linux_android=1 \
+	-DVG_PLATFORM=\"$(TARGET_2ND_ARCH)-linux\"
+endif
 
 common_includes := \
 	external/valgrind/main \
@@ -124,6 +134,9 @@ LOCAL_CFLAGS := $(common_cflags) \
 	-Wcast-align \
 	-fstrict-aliasing
 
+LOCAL_CFLAGS_$(TARGET_ARCH) = $(target_arch_cflags)
+LOCAL_CFLAGS_$(TARGET_2ND_ARCH) = $(target_2nd_arch_cflags)
+
 include $(BUILD_STATIC_LIBRARY)
 
 # Build libcoregrind-$(TARGET_ARCH)-linux.a
@@ -198,6 +211,7 @@ LOCAL_SRC_FILES := \
 	coregrind/m_dispatch/dispatch-ppc32-linux.S \
 	coregrind/m_dispatch/dispatch-ppc64-linux.S \
 	coregrind/m_dispatch/dispatch-arm-linux.S \
+	coregrind/m_dispatch/dispatch-arm64-linux.S \
 	coregrind/m_dispatch/dispatch-x86-darwin.S \
 	coregrind/m_dispatch/dispatch-amd64-darwin.S \
 	coregrind/m_initimg/initimg-linux.c \
@@ -219,6 +233,7 @@ LOCAL_SRC_FILES := \
 	coregrind/m_sigframe/sigframe-ppc32-linux.c \
 	coregrind/m_sigframe/sigframe-ppc64-linux.c \
 	coregrind/m_sigframe/sigframe-arm-linux.c \
+	coregrind/m_sigframe/sigframe-arm64-linux.c \
 	coregrind/m_sigframe/sigframe-x86-darwin.c \
 	coregrind/m_sigframe/sigframe-amd64-darwin.c \
 	coregrind/m_sigframe/sigframe-s390x-linux.c \
@@ -227,6 +242,7 @@ LOCAL_SRC_FILES := \
 	coregrind/m_syswrap/syscall-ppc32-linux.S \
 	coregrind/m_syswrap/syscall-ppc64-linux.S \
 	coregrind/m_syswrap/syscall-arm-linux.S \
+	coregrind/m_syswrap/syscall-arm64-linux.S \
 	coregrind/m_syswrap/syscall-x86-darwin.S \
 	coregrind/m_syswrap/syscall-amd64-darwin.S \
 	coregrind/m_syswrap/syscall-s390x-linux.S \
@@ -240,6 +256,7 @@ LOCAL_SRC_FILES := \
 	coregrind/m_syswrap/syswrap-ppc32-linux.c \
 	coregrind/m_syswrap/syswrap-ppc64-linux.c \
 	coregrind/m_syswrap/syswrap-arm-linux.c \
+	coregrind/m_syswrap/syswrap-arm64-linux.c \
 	coregrind/m_syswrap/syswrap-x86-darwin.c \
 	coregrind/m_syswrap/syswrap-amd64-darwin.c \
 	coregrind/m_syswrap/syswrap-s390x-linux.c \
@@ -259,6 +276,7 @@ LOCAL_SRC_FILES := \
 	coregrind/m_gdbserver/utils.c \
 	coregrind/m_gdbserver/valgrind-low-amd64.c \
 	coregrind/m_gdbserver/valgrind-low-arm.c \
+	coregrind/m_gdbserver/valgrind-low-arm64.c \
 	coregrind/m_gdbserver/valgrind-low-ppc32.c \
 	coregrind/m_gdbserver/valgrind-low-ppc64.c \
 	coregrind/m_gdbserver/valgrind-low-s390x.c \
@@ -271,7 +289,15 @@ LOCAL_LDFLAGS := $(vex_ldflags)
 
 # TODO: split asflags out from cflags.
 LOCAL_CFLAGS := $(common_cflags)
+LOCAL_CFLAGS_$(TARGET_ARCH) = $(target_arch_cflags)
+LOCAL_CFLAGS_$(TARGET_2ND_ARCH) = $(target_2nd_arch_cflags)
+
 LOCAL_ASFLAGS := $(common_cflags)
+LOCAL_ASFLAGS_$(TARGET_ARCH) = $(target_arch_cflags)
+LOCAL_ASFLAGS_$(TARGET_2ND_ARCH) = $(target_2nd_arch_cflags)
+
+$(info LOCAL_CFLAGS_$(TARGET_ARCH) = $(target_arch_cflags) )
+$(info LOCAL_CFLAGS_$(TARGET_2ND_ARCH) = $(target_2nd_arch_cflags) )
 
 include $(BUILD_STATIC_LIBRARY)
 
@@ -290,6 +316,9 @@ LOCAL_C_INCLUDES := $(common_includes)
 LOCAL_LDFLAGS := $(preload_ldflags)
 
 LOCAL_CFLAGS := $(common_cflags)
+
+LOCAL_CFLAGS_$(TARGET_ARCH) = $(target_arch_cflags)
+LOCAL_CFLAGS_$(TARGET_2ND_ARCH) = $(target_2nd_arch_cflags)
 
 include $(BUILD_STATIC_LIBRARY)
 
@@ -313,6 +342,9 @@ LOCAL_C_INCLUDES := $(common_includes)
 LOCAL_LDFLAGS := $(preload_ldflags)
 
 LOCAL_CFLAGS := $(common_cflags)
+
+LOCAL_CFLAGS_$(TARGET_ARCH) = $(target_arch_cflags)
+LOCAL_CFLAGS_$(TARGET_2ND_ARCH) = $(target_2nd_arch_cflags)
 
 include $(BUILD_SHARED_LIBRARY)
 
@@ -342,6 +374,9 @@ LOCAL_LDFLAGS := $(tool_ldflags)
 
 LOCAL_CFLAGS := $(common_cflags)
 
+LOCAL_CFLAGS_$(TARGET_ARCH) = $(target_arch_cflags)
+LOCAL_CFLAGS_$(TARGET_2ND_ARCH) = $(target_2nd_arch_cflags)
+
 LOCAL_STATIC_LIBRARIES := libcoregrind-$(TARGET_ARCH)-linux libvex-$(TARGET_ARCH)-linux
 
 include $(BUILD_EXECUTABLE)
@@ -366,6 +401,9 @@ LOCAL_C_INCLUDES := $(common_includes)
 LOCAL_LDFLAGS := $(preload_ldflags)
 
 LOCAL_CFLAGS := $(common_cflags)
+
+LOCAL_CFLAGS_$(TARGET_ARCH) = $(target_arch_cflags)
+LOCAL_CFLAGS_$(TARGET_2ND_ARCH) = $(target_2nd_arch_cflags)
 
 LOCAL_WHOLE_STATIC_LIBRARIES := libreplacemalloc_toolpreload-$(TARGET_ARCH)-linux
 
@@ -392,6 +430,9 @@ LOCAL_C_INCLUDES := $(common_includes)
 LOCAL_LDFLAGS := $(tool_ldflags)
 
 LOCAL_CFLAGS := $(common_cflags)
+
+LOCAL_CFLAGS_$(TARGET_ARCH) = $(target_arch_cflags)
+LOCAL_CFLAGS_$(TARGET_2ND_ARCH) = $(target_2nd_arch_cflags)
 
 LOCAL_STATIC_LIBRARIES := libcoregrind-$(TARGET_ARCH)-linux libvex-$(TARGET_ARCH)-linux
 
@@ -432,6 +473,9 @@ LOCAL_LDFLAGS := $(tool_ldflags)
 
 LOCAL_CFLAGS := $(common_cflags)
 
+LOCAL_CFLAGS_$(TARGET_ARCH) = $(target_arch_cflags)
+LOCAL_CFLAGS_$(TARGET_2ND_ARCH) = $(target_2nd_arch_cflags)
+
 LOCAL_STATIC_LIBRARIES := libcoregrind-$(TARGET_ARCH)-linux libvex-$(TARGET_ARCH)-linux
 
 include $(BUILD_EXECUTABLE)
@@ -462,6 +506,9 @@ LOCAL_LDFLAGS := $(tool_ldflags)
 
 LOCAL_CFLAGS := $(common_cflags)
 
+LOCAL_CFLAGS_$(TARGET_ARCH) = $(target_arch_cflags)
+LOCAL_CFLAGS_$(TARGET_2ND_ARCH) = $(target_2nd_arch_cflags)
+
 LOCAL_STATIC_LIBRARIES := libcoregrind-$(TARGET_ARCH)-linux libvex-$(TARGET_ARCH)-linux
 
 include $(BUILD_EXECUTABLE)
@@ -486,6 +533,9 @@ LOCAL_C_INCLUDES := $(common_includes)
 LOCAL_LDFLAGS := $(preload_ldflags)
 
 LOCAL_CFLAGS := $(common_cflags)
+
+LOCAL_CFLAGS_$(TARGET_ARCH) = $(target_arch_cflags)
+LOCAL_CFLAGS_$(TARGET_2ND_ARCH) = $(target_2nd_arch_cflags)
 
 LOCAL_WHOLE_STATIC_LIBRARIES := libreplacemalloc_toolpreload-$(TARGET_ARCH)-linux
 
@@ -525,6 +575,9 @@ LOCAL_LDFLAGS := $(tool_ldflags)
 
 LOCAL_CFLAGS := $(common_cflags)
 
+LOCAL_CFLAGS_$(TARGET_ARCH) = $(target_arch_cflags)
+LOCAL_CFLAGS_$(TARGET_2ND_ARCH) = $(target_2nd_arch_cflags)
+
 LOCAL_STATIC_LIBRARIES := libcoregrind-$(TARGET_ARCH)-linux libvex-$(TARGET_ARCH)-linux
 
 include $(BUILD_EXECUTABLE)
@@ -552,6 +605,9 @@ LOCAL_LDFLAGS := $(preload_ldflags)
 
 LOCAL_CFLAGS := $(common_cflags)
 
+LOCAL_CFLAGS_$(TARGET_ARCH) = $(target_arch_cflags)
+LOCAL_CFLAGS_$(TARGET_2ND_ARCH) = $(target_2nd_arch_cflags)
+
 LOCAL_WHOLE_STATIC_LIBRARIES := libreplacemalloc_toolpreload-$(TARGET_ARCH)-linux
 
 include $(BUILD_SHARED_LIBRARY)
@@ -577,6 +633,9 @@ LOCAL_LDFLAGS := $(tool_ldflags)
 
 LOCAL_CFLAGS := $(common_cflags)
 
+LOCAL_CFLAGS_$(TARGET_ARCH) = $(target_arch_cflags)
+LOCAL_CFLAGS_$(TARGET_2ND_ARCH) = $(target_2nd_arch_cflags)
+
 LOCAL_STATIC_LIBRARIES := libcoregrind-$(TARGET_ARCH)-linux libvex-$(TARGET_ARCH)-linux
 
 include $(BUILD_EXECUTABLE)
@@ -600,6 +659,9 @@ LOCAL_C_INCLUDES := $(common_includes)
 LOCAL_LDFLAGS := $(preload_ldflags)
 
 LOCAL_CFLAGS := $(common_cflags)
+
+LOCAL_CFLAGS_$(TARGET_ARCH) = $(target_arch_cflags)
+LOCAL_CFLAGS_$(TARGET_2ND_ARCH) = $(target_2nd_arch_cflags)
 
 LOCAL_WHOLE_STATIC_LIBRARIES := libreplacemalloc_toolpreload-$(TARGET_ARCH)-linux
 
@@ -626,6 +688,9 @@ LOCAL_LDFLAGS := $(tool_ldflags)
 
 LOCAL_CFLAGS := $(common_cflags)
 
+LOCAL_CFLAGS_$(TARGET_ARCH) = $(target_arch_cflags)
+LOCAL_CFLAGS_$(TARGET_2ND_ARCH) = $(target_2nd_arch_cflags)
+
 LOCAL_STATIC_LIBRARIES := libcoregrind-$(TARGET_ARCH)-linux libvex-$(TARGET_ARCH)-linux
 
 include $(BUILD_EXECUTABLE)
@@ -644,6 +709,9 @@ LOCAL_SRC_FILES := \
 LOCAL_C_INCLUDES := $(common_includes)
 
 LOCAL_CFLAGS := $(common_cflags)
+
+LOCAL_CFLAGS_$(TARGET_ARCH) = $(target_arch_cflags)
+LOCAL_CFLAGS_$(TARGET_2ND_ARCH) = $(target_2nd_arch_cflags)
 
 include $(BUILD_EXECUTABLE)
 
