@@ -18232,29 +18232,38 @@ DisResult disInstr_THUMB_WRK (
       UInt h2 = INSN0(6,6);
       UInt rM = (h2 << 3) | INSN0(5,3);
       UInt rD = (h1 << 3) | INSN0(2,0);
-      //if (h1 == 0 && h2 == 0) { // Original T1 was more restrictive
       if (rD == 15 && rM == 15) {
          // then it's invalid
-      } else {
+      } else if (rD != 15) {
          IRTemp res = newTemp(Ity_I32);
          assign( res, binop(Iop_Add32, getIRegT(rD), getIRegT(rM) ));
-         if (rD != 15) {
-            putIRegT( rD, mkexpr(res), condT );
-         } else {
+         putIRegT( rD, mkexpr(res), condT );
+      } else {
+            // FIXME: remove after official fix is available.
+            // https://bugs.kde.org/show_bug.cgi?id=332037
             /* Only allowed outside or last-in IT block; SIGILL if not so. */
             gen_SIGILL_T_if_in_but_NLI_ITBlock(old_itstate, new_itstate);
             /* jump over insn if not selected */
             mk_skip_over_T16_if_cond_is_false(condT);
             condT = IRTemp_INVALID;
+         IRTemp res = newTemp(Ity_I32);
+         assign( res, binop(Iop_Add32,
+                            mkU32((guest_R15_curr_instr_notENC + 4) | 1),
+                            getIRegT(rM)));
+         llPutIReg(15, mkexpr(res));
+#if 0
             // now uncond
             /* non-interworking branch */
             irsb->next = binop(Iop_Or32, mkexpr(res), mkU32(1));
             irsb->jumpkind = Ijk_Boring;
+#else
+            dres.jk_StopHere = Ijk_Boring;
+
+#endif
             dres.whatNext = Dis_StopHere;
-         }
-         DIP("add(hi) r%u, r%u\n", rD, rM);
-         goto decode_success;
       }
+      DIP("add(hi) r%u, r%u\n", rD, rM);
+      goto decode_success;
       break;
    }
 
@@ -20464,8 +20473,13 @@ DisResult disInstr_THUMB_WRK (
       if (bP == 0 && bW == 0)                 valid = False;
       if (bW == 1 && (rN == rT || rN == rT2)) valid = False;
       if (isBadRegT(rT) || isBadRegT(rT2))    valid = False;
-      if (rN == 15)                           valid = False;
-      if (bL == 1 && rT == rT2)               valid = False;
+
+      if (bL == 1 && (rT == 15 || rT == 13 || rT2 == 15 || rT2 == 13 || rT == rT2) ) {
+         valid = False;
+      }
+      if (bL == 0 && (rN == 15 || rT == 15 || rT == 13 || rT2 == 15 || rT2 == 13) ) {
+         valid = False;
+      }
 
       if (valid) {
          IRTemp preAddr = newTemp(Ity_I32);
