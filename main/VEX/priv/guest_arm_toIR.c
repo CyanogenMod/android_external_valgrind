@@ -20473,8 +20473,13 @@ DisResult disInstr_THUMB_WRK (
       if (bP == 0 && bW == 0)                 valid = False;
       if (bW == 1 && (rN == rT || rN == rT2)) valid = False;
       if (isBadRegT(rT) || isBadRegT(rT2))    valid = False;
-      if (rN == 15)                           valid = False;
-      if (bL == 1 && rT == rT2)               valid = False;
+
+      if (bL == 1 && (rT == 15 || rT == 13 || rT2 == 15 || rT2 == 13 || rT == rT2) ) {
+         valid = False;
+      }
+      if (bL == 0 && (rN == 15 || rT == 15 || rT == 13 || rT2 == 15 || rT2 == 13) ) {
+         valid = False;
+      }
 
       if (valid) {
          IRTemp preAddr = newTemp(Ity_I32);
