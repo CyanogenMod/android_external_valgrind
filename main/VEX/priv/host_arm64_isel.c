@@ -902,8 +902,14 @@ ARM64AMode* iselIntExpr_AMode_wrk ( ISelEnv* env, IRExpr* e, IRType dty )
        && e->Iex.Binop.arg2->tag == Iex_Const
        && e->Iex.Binop.arg2->Iex.Const.con->tag == Ico_U64) {
       Long simm = (Long)e->Iex.Binop.arg2->Iex.Const.con->Ico.U64;
-      if (simm >= -256 && simm <= 255) {
+      if (simm >= -255 && simm <= 255) {
+         /* Although the gating condition might seem to be 
+               simm >= -256 && simm <= 255
+            we will need to negate simm in the case where the op is Sub64.
+            Hence limit the lower value to -255 in order that its negation
+            is representable. */
          HReg reg = iselIntExpr_R(env, e->Iex.Binop.arg1);
+         if (e->Iex.Binop.op == Iop_Sub64) simm = -simm;
          return ARM64AMode_RI9(reg, (Int)simm);
       }
    }
@@ -1812,6 +1818,10 @@ static HReg iselIntExpr_R_wrk ( ISelEnv* env, IRExpr* e )
               cvt_op = ARM64cvt_F64_I32U; srcIsD = True; break;
            case Iop_F32toI32S:
               cvt_op = ARM64cvt_F32_I32S; srcIsD = False; break;
+           case Iop_F32toI32U:
+              cvt_op = ARM64cvt_F32_I32U; srcIsD = False; break;
+           case Iop_F32toI64S:
+              cvt_op = ARM64cvt_F32_I64S; srcIsD = False; break;
            case Iop_F32toI64U:
               cvt_op = ARM64cvt_F32_I64U; srcIsD = False; break;
            default:
@@ -2118,6 +2128,7 @@ static HReg iselIntExpr_R_wrk ( ISelEnv* env, IRExpr* e )
                                            ARM64sh_SAR));
             return dst;
          }
+         case Iop_NarrowUn16to8x8:
          case Iop_NarrowUn32to16x4:
          case Iop_NarrowUn64to32x2: {
             HReg src = iselV128Expr(env, e->Iex.Unop.arg);
@@ -2125,6 +2136,7 @@ static HReg iselIntExpr_R_wrk ( ISelEnv* env, IRExpr* e )
             HReg dst = newVRegI(env);
             UInt dszBlg2 = 3; /* illegal */
             switch (e->Iex.Unop.op) {
+               case Iop_NarrowUn16to8x8:  dszBlg2 = 0; break; // 16to8_x8
                case Iop_NarrowUn32to16x4: dszBlg2 = 1; break; // 32to16_x4
                case Iop_NarrowUn64to32x2: dszBlg2 = 2; break; // 64to32_x2
                default: vassert(0);
@@ -2158,18 +2170,25 @@ static HReg iselIntExpr_R_wrk ( ISelEnv* env, IRExpr* e )
 //ZZ             return rLo;
 //ZZ          }
 
-         case Iop_1Uto64:
+         case Iop_1Uto64: {
             /* 1Uto64(tmp). */
+            HReg dst = newVRegI(env);
             if (e->Iex.Unop.arg->tag == Iex_RdTmp) {
                ARM64RIL* one = mb_mkARM64RIL_I(1);
                HReg src = lookupIRTemp(env, e->Iex.Unop.arg->Iex.RdTmp.tmp);
-               HReg dst = newVRegI(env);
                vassert(one);
                addInstr(env, ARM64Instr_Logic(dst, src, one, ARM64lo_AND));
-               return dst;
+            } else {
+               /* CLONE-01 */
+               HReg zero = newVRegI(env);
+               HReg one  = newVRegI(env);
+               addInstr(env, ARM64Instr_Imm64(zero, 0));
+               addInstr(env, ARM64Instr_Imm64(one,  1));
+               ARM64CondCode cc = iselCondCode(env, e->Iex.Unop.arg);
+               addInstr(env, ARM64Instr_CSel(dst, one, zero, cc));
             }
-            /* else fall through */
-            break; // RM when 1Uto8 is implemented
+            return dst;
+         }
 //ZZ          case Iop_1Uto8: {
 //ZZ             HReg        dst  = newVRegI(env);
 //ZZ             ARMCondCode cond = iselCondCode(env, e->Iex.Unop.arg);
@@ -4395,6 +4414,29 @@ static HReg iselV128Expr_wrk ( ISelEnv* env, IRExpr* e )
             addInstr(env, ARM64Instr_VUnaryV(op, res, arg));
             return res;
          }
+         case Iop_CmpNEZ8x16:
+         case Iop_CmpNEZ16x8:
+         case Iop_CmpNEZ32x4:
+         case Iop_CmpNEZ64x2: {
+            HReg arg  = iselV128Expr(env, e->Iex.Unop.arg);
+            HReg zero = newVRegV(env);
+            HReg res  = newVRegV(env);
+            ARM64VecBinOp cmp = ARM64vecb_INVALID;
+            switch (e->Iex.Unop.op) {
+               case Iop_CmpNEZ64x2: cmp = ARM64vecb_CMEQ64x2; break;
+               case Iop_CmpNEZ32x4: cmp = ARM64vecb_CMEQ32x4; break;
+               case Iop_CmpNEZ16x8: cmp = ARM64vecb_CMEQ16x8; break;
+               case Iop_CmpNEZ8x16: cmp = ARM64vecb_CMEQ8x16; break;
+               default: vassert(0);
+            }
+            // This is pretty feeble.  Better: use CMP against zero
+            // and avoid the extra instruction and extra register.
+            addInstr(env, ARM64Instr_VImmQ(zero, 0x0000));
+            addInstr(env, ARM64Instr_VBinV(cmp, res, arg, zero));
+            addInstr(env, ARM64Instr_VUnaryV(ARM64vecu_NOT, res, res));
+            return res;
+         }
+
 //ZZ          case Iop_NotV128: {
 //ZZ             DECLARE_PATTERN(p_veqz_8x16);
 //ZZ             DECLARE_PATTERN(p_veqz_16x8);
@@ -4648,23 +4690,6 @@ static HReg iselV128Expr_wrk ( ISelEnv* env, IRExpr* e )
 //ZZ                                            tmp, x_lsh, x_rsh, 0, True));
 //ZZ             addInstr(env, ARMInstr_NBinary(ARMneon_VORR,
 //ZZ                                            res, tmp, x, 0, True));
-//ZZ             return res;
-//ZZ          }
-//ZZ          case Iop_CmpNEZ8x16:
-//ZZ          case Iop_CmpNEZ16x8:
-//ZZ          case Iop_CmpNEZ32x4: {
-//ZZ             HReg res = newVRegV(env);
-//ZZ             HReg tmp = newVRegV(env);
-//ZZ             HReg arg = iselNeonExpr(env, e->Iex.Unop.arg);
-//ZZ             UInt size;
-//ZZ             switch (e->Iex.Unop.op) {
-//ZZ                case Iop_CmpNEZ8x16: size = 0; break;
-//ZZ                case Iop_CmpNEZ16x8: size = 1; break;
-//ZZ                case Iop_CmpNEZ32x4: size = 2; break;
-//ZZ                default: vassert(0);
-//ZZ             }
-//ZZ             addInstr(env, ARMInstr_NUnary(ARMneon_EQZ, tmp, arg, size, True));
-//ZZ             addInstr(env, ARMInstr_NUnary(ARMneon_NOT, res, tmp, 4, True));
 //ZZ             return res;
 //ZZ          }
 //ZZ          case Iop_Widen8Uto16x8:
@@ -5425,8 +5450,10 @@ static HReg iselV128Expr_wrk ( ISelEnv* env, IRExpr* e )
 //ZZ          case Iop_ShrN16x8:
 //ZZ          case Iop_ShrN32x4:
          case Iop_ShrN64x2:
+         case Iop_ShrN16x8:
          case Iop_SarN64x2:
-         case Iop_ShlN32x4: {
+         case Iop_ShlN32x4:
+         {
             IRExpr* argL = e->Iex.Binop.arg1;
             IRExpr* argR = e->Iex.Binop.arg2;
             if (argR->tag == Iex_Const && argR->Iex.Const.con->tag == Ico_U8) {
@@ -5436,6 +5463,8 @@ static HReg iselV128Expr_wrk ( ISelEnv* env, IRExpr* e )
                switch (e->Iex.Binop.op) {
                   case Iop_ShrN64x2:
                      op = ARM64vecsh_USHR64x2; limit = 63; break;
+                  case Iop_ShrN16x8:
+                     op = ARM64vecsh_USHR16x8; limit = 15; break;
                   case Iop_SarN64x2:
                      op = ARM64vecsh_SSHR64x2; limit = 63; break;
                   case Iop_ShlN32x4:
@@ -6167,11 +6196,13 @@ static HReg iselFltExpr_wrk ( ISelEnv* env, IRExpr* e )
             addInstr(env, ARM64Instr_VCvtSD(False/*dToS*/, dstS, srcD));
             return dstS;
          }
+         case Iop_I32UtoF32:
          case Iop_I32StoF32:
          case Iop_I64UtoF32:
          case Iop_I64StoF32: {
             ARM64CvtOp cvt_op = ARM64cvt_INVALID;
             switch (e->Iex.Binop.op) {
+               case Iop_I32UtoF32: cvt_op = ARM64cvt_F32_I32U; break;
                case Iop_I32StoF32: cvt_op = ARM64cvt_F32_I32S; break;
                case Iop_I64UtoF32: cvt_op = ARM64cvt_F32_I64U; break;
                case Iop_I64StoF32: cvt_op = ARM64cvt_F32_I64S; break;
@@ -6533,6 +6564,7 @@ static void iselStmt ( ISelEnv* env, IRStmt* stmt )
             here.  LATER: that seems dangerous; safer to do 'tmp & 1'
             in that case.  Also, could do this just with a single CINC
             insn. */
+         /* CLONE-01 */
          HReg zero = newVRegI(env);
          HReg one  = newVRegI(env);
          HReg dst  = lookupIRTemp(env, tmp);
@@ -6734,7 +6766,6 @@ static void iselStmt ( ISelEnv* env, IRStmt* stmt )
       ARM64AMode* amPC
          = mk_baseblock_64bit_access_amode(stmt->Ist.Exit.offsIP);
 
-
       /* Case: boring transfer to known address */
       if (stmt->Ist.Exit.jk == Ijk_Boring
           /*ATC || stmt->Ist.Exit.jk == Ijk_Call */
@@ -6855,7 +6886,7 @@ static void iselNext ( ISelEnv* env,
       /* Keep this list in sync with that for Ist_Exit above */
       case Ijk_ClientReq:
       case Ijk_NoDecode:
-//ZZ       case Ijk_NoRedir:
+      case Ijk_NoRedir:
       case Ijk_Sys_syscall:
 //ZZ       case Ijk_TInval:
 //ZZ       case Ijk_Yield:
