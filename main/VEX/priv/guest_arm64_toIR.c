@@ -3152,13 +3152,31 @@ Bool dis_ARM64_load_store(/*MB_OUT*/DisResult* dres, UInt insn)
                vassert(0); /* NOTREACHED */
          }
 
+         /* Normally rN would be updated after the transfer.  However, in
+            the special case typifed by
+               str x30, [sp,#-16]!
+            it is necessary to update SP before the transfer, (1)
+            because Memcheck will otherwise complain about a write
+            below the stack pointer, and (2) because the segfault
+            stack extension mechanism will otherwise extend the stack
+            only down to SP before the instruction, which might not be
+            far enough, if the -16 bit takes the actual access
+            address to the next page.
+         */
+         Bool earlyWBack
+           = wBack && simm9 < 0 && szB == 8
+             && how == BITS2(1,1) && nn == 31 && !isLoad && tt != nn;
+
+         if (wBack && earlyWBack)
+            putIReg64orSP(nn, mkexpr(tEA));
+
          if (isLoad) {
             putIReg64orZR(tt, mkexpr(gen_zwidening_load(szB, tTA)));
          } else {
             gen_narrowing_store(szB, tTA, getIReg64orZR(tt));
          }
 
-         if (wBack)
+         if (wBack && !earlyWBack)
             putIReg64orSP(nn, mkexpr(tEA));
 
          const HChar* ld_name[4] = { "ldurb", "ldurh", "ldur", "ldur" };
@@ -3683,6 +3701,24 @@ Bool dis_ARM64_load_store(/*MB_OUT*/DisResult* dres, UInt insn)
             default: vassert(0);
          }
 
+         /* Normally rN would be updated after the transfer.  However, in
+            the special case typifed by
+               stp q0, q1, [sp,#-512]!
+            it is necessary to update SP before the transfer, (1)
+            because Memcheck will otherwise complain about a write
+            below the stack pointer, and (2) because the segfault
+            stack extension mechanism will otherwise extend the stack
+            only down to SP before the instruction, which might not be
+            far enough, if the -512 bit takes the actual access
+            address to the next page.
+         */
+         Bool earlyWBack
+           = wBack && simm7 < 0 && szB == 16
+             && INSN(24,23) == BITS2(1,1) && nn == 31 && !isLD;
+
+         if (wBack && earlyWBack)
+            putIReg64orSP(nn, mkexpr(tEA));
+
          if (isLD) {
             if (szB < 16) {
                putQReg128(tt1, mkV128(0x0000));
@@ -3701,7 +3737,7 @@ Bool dis_ARM64_load_store(/*MB_OUT*/DisResult* dres, UInt insn)
                     getQRegLO(tt2, ty));
          }
 
-         if (wBack)
+         if (wBack && !earlyWBack)
             putIReg64orSP(nn, mkexpr(tEA));
 
          const HChar* fmt_str = NULL;
@@ -5401,8 +5437,13 @@ Bool dis_ARM64_simd_and_fp(/*MB_OUT*/DisResult* dres, UInt insn)
       // A bit of ATCery: bounce all cases we haven't seen an example of.
       if (/* F32toI32S */
              (op == Iop_F32toI32S && irrm == Irrm_ZERO)   /* FCVTZS Wd,Sn */
+          || (op == Iop_F32toI32S && irrm == Irrm_NegINF) /* FCVTMS Wd,Sn */
+          || (op == Iop_F32toI32S && irrm == Irrm_PosINF) /* FCVTPS Wd,Sn */
           /* F32toI32U */
+          || (op == Iop_F32toI32U && irrm == Irrm_ZERO)   /* FCVTZU Wd,Sn */
+          || (op == Iop_F32toI32U && irrm == Irrm_NegINF) /* FCVTMU Wd,Sn */
           /* F32toI64S */
+          || (op == Iop_F32toI64S && irrm == Irrm_ZERO)   /* FCVTZS Xd,Sn */
           /* F32toI64U */
           || (op == Iop_F32toI64U && irrm == Irrm_ZERO)   /* FCVTZU Xd,Sn */
           /* F64toI32S */
@@ -5410,12 +5451,16 @@ Bool dis_ARM64_simd_and_fp(/*MB_OUT*/DisResult* dres, UInt insn)
           || (op == Iop_F64toI32S && irrm == Irrm_NegINF) /* FCVTMS Wd,Dn */
           || (op == Iop_F64toI32S && irrm == Irrm_PosINF) /* FCVTPS Wd,Dn */
           /* F64toI32U */
-          || (op == Iop_F64toI32U && irrm == Irrm_NegINF) /* FCVTMU Wd,Dn */
           || (op == Iop_F64toI32U && irrm == Irrm_ZERO)   /* FCVTZU Wd,Dn */
+          || (op == Iop_F64toI32U && irrm == Irrm_NegINF) /* FCVTMU Wd,Dn */
+          || (op == Iop_F64toI32U && irrm == Irrm_PosINF) /* FCVTPU Wd,Dn */
           /* F64toI64S */
           || (op == Iop_F64toI64S && irrm == Irrm_ZERO)   /* FCVTZS Xd,Dn */
+          || (op == Iop_F64toI64S && irrm == Irrm_NegINF) /* FCVTMS Xd,Dn */
+          || (op == Iop_F64toI64S && irrm == Irrm_PosINF) /* FCVTPS Xd,Dn */
           /* F64toI64U */
           || (op == Iop_F64toI64U && irrm == Irrm_ZERO)   /* FCVTZU Xd,Dn */
+          || (op == Iop_F64toI64U && irrm == Irrm_PosINF) /* FCVTPU Xd,Dn */
          ) {
         /* validated */
       } else {
@@ -5433,6 +5478,37 @@ Bool dis_ARM64_simd_and_fp(/*MB_OUT*/DisResult* dres, UInt insn)
       return True;
    }
 
+   /* -------- FCVTAS (KLUDGED) (scalar, integer) -------- */
+   /*   30       23   20 18  15     9 4
+      1 00 11110 0x 1 00 100 000000 n d  FCVTAS Xd, Fn
+      0 00 11110 0x 1 00 100 000000 n d  FCVTAS Wd, Fn
+      Fn is Dn when x==1, Sn when x==0
+   */
+   if (INSN(30,23) == BITS8(0,0,1,1,1,1,0,0)
+       && INSN(21,16) == BITS6(1,0,0,1,0,0)
+       && INSN(15,10) == BITS6(0,0,0,0,0,0)) {
+      Bool isI64 = INSN(31,31) == 1;
+      Bool isF64 = INSN(22,22) == 1;
+      UInt nn    = INSN(9,5);
+      UInt dd    = INSN(4,0);
+      /* Decide on the IR rounding mode to use. */
+      /* KLUDGE: should be Irrm_NEAREST_TIE_AWAY_0 */
+      IRRoundingMode irrm = Irrm_NEAREST;
+      /* Decide on the conversion primop. */
+      IROp   op    = isI64 ? (isF64 ? Iop_F64toI64S :  Iop_F32toI64S)
+                           : (isF64 ? Iop_F64toI32S :  Iop_F32toI32S);
+      IRType srcTy = isF64 ? Ity_F64 : Ity_F32;
+      IRType dstTy = isI64 ? Ity_I64 : Ity_I32;
+      IRTemp src   = newTemp(srcTy);
+      IRTemp dst   = newTemp(dstTy);
+      assign(src, getQRegLO(nn, srcTy));
+      assign(dst, binop(op, mkU32(irrm), mkexpr(src)));
+      putIRegOrZR(isI64, dd, mkexpr(dst));
+      DIP("fcvtas %s, %s (KLUDGED)\n",
+          nameIRegOrZR(isI64, dd), nameQRegLO(nn, srcTy));
+      return True;
+   }
+
    /* ---------------- FRINT{I,M,P,Z} (scalar) ---------------- */
    /* 31        23 21   17  14    9 4
       000 11110 0x 1001 111 10000 n d  FRINTI Fd, Fm (round per FPCR)
@@ -5444,7 +5520,7 @@ Bool dis_ARM64_simd_and_fp(/*MB_OUT*/DisResult* dres, UInt insn)
          010 -inf      (FRINTM)
          011 zero      (FRINTZ)
          000 tieeven
-         100 tieaway
+         100 tieaway   (FRINTA) -- !! FIXME KLUDGED !!
          110 per FPCR + "exact = TRUE"
          101 unallocated
    */
@@ -5461,6 +5537,8 @@ Bool dis_ARM64_simd_and_fp(/*MB_OUT*/DisResult* dres, UInt insn)
          case BITS3(0,1,1): ch = 'z'; irrmE = mkU32(Irrm_ZERO); break;
          case BITS3(0,1,0): ch = 'm'; irrmE = mkU32(Irrm_NegINF); break;
          case BITS3(0,0,1): ch = 'p'; irrmE = mkU32(Irrm_PosINF); break;
+         // The following is a kludge.  Should be: Irrm_NEAREST_TIE_AWAY_0
+         case BITS3(1,0,0): ch = 'a'; irrmE = mkU32(Irrm_NEAREST); break;
          default: break;
       }
       if (irrmE) {
@@ -5483,9 +5561,9 @@ Bool dis_ARM64_simd_and_fp(/*MB_OUT*/DisResult* dres, UInt insn)
       000 11110 11 10001 00 10000 n d   FCVT Sd, Hn (unimp)
       --------- 11 ----- 01 ---------   FCVT Dd, Hn (unimp)
       --------- 00 ----- 11 ---------   FCVT Hd, Sn (unimp)
-      --------- 00 ----- 01 ---------   FCVT Dd, Sn (unimp)
+      --------- 00 ----- 01 ---------   FCVT Dd, Sn
       --------- 01 ----- 11 ---------   FCVT Hd, Dn (unimp)
-      --------- 01 ----- 00 ---------   FCVT Sd, Dn (unimp)
+      --------- 01 ----- 00 ---------   FCVT Sd, Dn
       Rounding, when dst is smaller than src, is per the FPCR.
    */
    if (INSN(31,24) == BITS8(0,0,0,1,1,1,1,0)

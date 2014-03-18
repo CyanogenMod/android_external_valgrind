@@ -416,12 +416,13 @@ static void assign_guest_tls(ThreadId tid, Addr tlsptr)
 #define PRE(name)       DEFN_PRE_TEMPLATE(arm64_linux, name)
 #define POST(name)      DEFN_POST_TEMPLATE(arm64_linux, name)
 
-//ZZ /* Add prototypes for the wrappers declared here, so that gcc doesn't
-//ZZ    harass us for not having prototypes.  Really this is a kludge --
-//ZZ    the right thing to do is to make these wrappers 'static' since they
-//ZZ    aren't visible outside this file, but that requires even more macro
-//ZZ    magic. */
-//ZZ 
+/* Add prototypes for the wrappers declared here, so that gcc doesn't
+   harass us for not having prototypes.  Really this is a kludge --
+   the right thing to do is to make these wrappers 'static' since they
+   aren't visible outside this file, but that requires even more macro
+   magic. */
+
+DECL_TEMPLATE(arm64_linux, sys_fadvise64);
 DECL_TEMPLATE(arm64_linux, sys_mmap);
 //ZZ DECL_TEMPLATE(arm_linux, sys_stat64);
 //ZZ DECL_TEMPLATE(arm_linux, sys_lstat64);
@@ -434,7 +435,7 @@ DECL_TEMPLATE(arm64_linux, sys_rt_sigreturn);
 //ZZ DECL_TEMPLATE(arm_linux, sys_set_tls);
 //ZZ DECL_TEMPLATE(arm_linux, sys_cacheflush);
 //ZZ DECL_TEMPLATE(arm_linux, sys_ptrace);
-//ZZ 
+
 //ZZ PRE(sys_mmap2)
 //ZZ {
 //ZZ    SysRes r;
@@ -457,6 +458,14 @@ DECL_TEMPLATE(arm64_linux, sys_rt_sigreturn);
 //ZZ                                        4096 * (Off64T)ARG6 );
 //ZZ    SET_STATUS_from_SysRes(r);
 //ZZ }
+
+// ARM64 FIXME is this correct?
+PRE(sys_fadvise64)
+{
+   PRINT("sys_fadvise64 ( %ld, %ld, %lu, %ld )", ARG1,ARG2,ARG3,ARG4);
+   PRE_REG_READ4(long, "fadvise64",
+                 int, fd, vki_loff_t, offset, vki_size_t, len, int, advice);
+}
 
 // ARM64 FIXME is this correct?
 PRE(sys_mmap)
@@ -881,6 +890,7 @@ static SyscallTableEntry syscall_main_table[] = {
    LINXY(__NR_getxattr,          sys_getxattr),          // 8
    LINXY(__NR_lgetxattr,         sys_lgetxattr),         // 9
    GENXY(__NR_getcwd,            sys_getcwd),            // 17
+   LINXY(__NR_eventfd2,          sys_eventfd2),          // 19
    LINXY(__NR_epoll_create1,     sys_epoll_create1),     // 20
    LINX_(__NR_epoll_ctl,         sys_epoll_ctl),         // 21
    LINXY(__NR_epoll_pwait,       sys_epoll_pwait),       // 22
@@ -890,21 +900,29 @@ static SyscallTableEntry syscall_main_table[] = {
    // FIXME IS THIS CORRECT?
    LINXY(__NR3264_fcntl,         sys_fcntl),             // 25
 
+   LINXY(__NR_inotify_init1,     sys_inotify_init1),     // 26
+   LINX_(__NR_inotify_add_watch, sys_inotify_add_watch), // 27
+   LINX_(__NR_inotify_rm_watch,  sys_inotify_rm_watch),  // 28
    LINXY(__NR_ioctl,             sys_ioctl),             // 29
    LINX_(__NR_mkdirat,           sys_mkdirat),           // 34
    LINX_(__NR_unlinkat,          sys_unlinkat),          // 35
+   LINX_(__NR_symlinkat,	 sys_symlinkat),         // 36
+   LINX_(__NR_renameat,		 sys_renameat),          // 38
 
    // FIXME IS THIS CORRECT?  it may well not be.
    GENXY(__NR3264_statfs,        sys_statfs),            // 43
+   GENXY(__NR3264_fstatfs,       sys_fstatfs),           // 44
 
    // FIXME IS THIS CORRECT?  it may well not be.
    GENX_(__NR3264_ftruncate,     sys_ftruncate),         // 46
 
+   LINX_(__NR_fallocate,         sys_fallocate),         // 47
    LINX_(__NR_faccessat,         sys_faccessat),         // 48
    GENX_(__NR_chdir,             sys_chdir),             // 49
    LINXY(__NR_openat,            sys_openat),            // 56
    GENXY(__NR_close,             sys_close),             // 57
    LINXY(__NR_pipe2,             sys_pipe2),             // 59
+   LINX_(__NR_quotactl,          sys_quotactl),          // 60
    GENXY(__NR_getdents64,        sys_getdents64),        // 61
 
    // FIXME IS THIS CORRECT?
@@ -913,6 +931,7 @@ static SyscallTableEntry syscall_main_table[] = {
    GENXY(__NR_read,              sys_read),              // 63
    GENX_(__NR_write,             sys_write),             // 64
    GENX_(__NR_writev,            sys_writev),            // 66
+   GENX_(__NR_pwrite64,          sys_pwrite64),          // 68
    LINX_(__NR_pselect6,          sys_pselect6),          // 72
    LINXY(__NR_ppoll,             sys_ppoll),             // 73
    LINX_(__NR_readlinkat,        sys_readlinkat),        // 78
@@ -921,6 +940,7 @@ static SyscallTableEntry syscall_main_table[] = {
    LINXY(__NR3264_fstatat,       sys_newfstatat),        // 79
    GENXY(__NR3264_fstat,         sys_newfstat),          // 80
 
+   GENX_(__NR_fsync,             sys_fsync),             // 82
    GENX_(__NR_exit,              sys_exit),              // 93
    LINX_(__NR_exit_group,        sys_exit_group),        // 94
    LINX_(__NR_set_tid_address,   sys_set_tid_address),   // 96
@@ -929,6 +949,8 @@ static SyscallTableEntry syscall_main_table[] = {
    GENXY(__NR_nanosleep,         sys_nanosleep),         // 101
    GENXY(__NR_setitimer,         sys_setitimer),         // 103
    LINXY(__NR_clock_gettime,     sys_clock_gettime),     // 113
+   LINXY(__NR_clock_getres,      sys_clock_getres),      // 114
+   LINXY(__NR_sched_getaffinity, sys_sched_getaffinity), // 123
    GENX_(__NR_kill,              sys_kill),              // 129
    LINX_(__NR_tgkill,            sys_tgkill),            // 131
    LINX_(__NR_rt_sigsuspend,     sys_rt_sigsuspend),     // 133
@@ -957,12 +979,17 @@ static SyscallTableEntry syscall_main_table[] = {
    GENX_(__NR_getgid,            sys_getgid),            // 176
    GENX_(__NR_getegid,           sys_getegid),           // 177
    LINX_(__NR_gettid,            sys_gettid),            // 178
+   LINXY(__NR_sysinfo,           sys_sysinfo),           // 179
    LINXY(__NR_mq_open,           sys_mq_open),           // 180
    LINX_(__NR_mq_unlink,         sys_mq_unlink),         // 181
    LINX_(__NR_semget,            sys_semget),            // 190
    LINXY(__NR_semctl,            sys_semctl),            // 191
    LINX_(__NR_semtimedop,        sys_semtimedop),        // 192
    LINX_(__NR_semop,             sys_semop),             // 193
+   LINX_(__NR_shmget,            sys_shmget),            // 194
+   LINXY(__NR_shmctl,            sys_shmctl),            // 195
+   LINXY(__NR_shmat,             wrap_sys_shmat),        // 196
+   LINXY(__NR_shmdt,             sys_shmdt),             // 197
    LINXY(__NR_socket,            sys_socket),            // 198
    LINXY(__NR_socketpair,        sys_socketpair),        // 199
    LINX_(__NR_bind,              sys_bind),              // 200
@@ -986,6 +1013,7 @@ static SyscallTableEntry syscall_main_table[] = {
 
    // FIXME IS THIS CORRECT?
    PLAX_(__NR3264_mmap,          sys_mmap),              // 222
+   PLAX_(__NR3264_fadvise64,     sys_fadvise64),         // 223
 
    GENXY(__NR_mprotect,          sys_mprotect),          // 226
    GENX_(__NR_madvise,           sys_madvise),           // 233
@@ -1118,7 +1146,6 @@ static SyscallTableEntry syscall_main_table[] = {
 //ZZ // PLAXY(__NR_vm86old,           sys_vm86old),        // 113 __NR_syscall... weird
 //ZZ //zz 
 //ZZ //zz    //   (__NR_swapoff,           sys_swapoff),        // 115 */Linux 
-//ZZ    LINXY(__NR_sysinfo,           sys_sysinfo),        // 116
 //ZZ //   _____(__NR_ipc,               sys_ipc),            // 117
 //ZZ    GENX_(__NR_fsync,             sys_fsync),          // 118
 //ZZ    PLAX_(__NR_sigreturn,         sys_sigreturn),      // 119 ?/Linux
@@ -1135,7 +1162,6 @@ static SyscallTableEntry syscall_main_table[] = {
 //ZZ //zz 
 //ZZ //zz    // Nb: get_kernel_syms() was removed 2.4-->2.6
 //ZZ //   GENX_(__NR_get_kernel_syms,   sys_ni_syscall),     // 130
-//ZZ    LINX_(__NR_quotactl,          sys_quotactl),       // 131
 //ZZ    GENX_(__NR_getpgid,           sys_getpgid),        // 132
 //ZZ    GENX_(__NR_fchdir,            sys_fchdir),         // 133
 //ZZ //zz    //   (__NR_bdflush,           sys_bdflush),        // 134 */Linux
@@ -1190,7 +1216,6 @@ static SyscallTableEntry syscall_main_table[] = {
 //ZZ    LINXY(__NR_rt_sigqueueinfo,   sys_rt_sigqueueinfo),// 178
 //ZZ 
 //ZZ    GENXY(__NR_pread64,           sys_pread64),        // 180
-//ZZ    GENX_(__NR_pwrite64,          sys_pwrite64),       // 181
 //ZZ    LINX_(__NR_chown,             sys_chown16),        // 182
 //ZZ    LINXY(__NR_capget,            sys_capget),         // 184
 //ZZ 
@@ -1319,8 +1344,6 @@ static SyscallTableEntry syscall_main_table[] = {
 //ZZ 
 //ZZ //   LINX_(__NR_ioprio_get,        sys_ioprio_get),     // 290
 //ZZ    LINX_(__NR_inotify_init,    sys_inotify_init),   // 291
-//ZZ    LINX_(__NR_inotify_add_watch, sys_inotify_add_watch), // 292
-//ZZ    LINX_(__NR_inotify_rm_watch,    sys_inotify_rm_watch), // 293
 //ZZ //   LINX_(__NR_migrate_pages,    sys_migrate_pages),    // 294
 //ZZ 
 //ZZ    LINX_(__NR_mknodat,       sys_mknodat),          // 297
@@ -1333,10 +1356,7 @@ static SyscallTableEntry syscall_main_table[] = {
 //ZZ    LINX_(__NR_symlinkat,    sys_symlinkat),        // 304
 //ZZ 
 //ZZ    LINX_(__NR_fchmodat,       sys_fchmodat),         //
-//ZZ    LINXY(__NR_shmat,         wrap_sys_shmat),       //305
-//ZZ    LINXY(__NR_shmdt,             sys_shmdt),          //306 
 //ZZ    LINX_(__NR_shmget,            sys_shmget),         //307 
-//ZZ    LINXY(__NR_shmctl,            sys_shmctl),         // 308 
 //ZZ //   LINX_(__NR_pselect6,       sys_pselect6),         //
 //ZZ 
 //ZZ //   LINX_(__NR_unshare,       sys_unshare),          // 310
@@ -1370,12 +1390,10 @@ static SyscallTableEntry syscall_main_table[] = {
 //ZZ 
 //ZZ    LINXY(__NR_epoll_pwait,       sys_epoll_pwait),      // 346
 //ZZ 
-//ZZ    LINX_(__NR_fallocate,         sys_fallocate),        // 352
 //ZZ 
 //ZZ    LINXY(__NR_signalfd4,         sys_signalfd4),        // 355
 //ZZ    LINXY(__NR_eventfd2,          sys_eventfd2),         // 356
 //ZZ    LINXY(__NR_epoll_create1,     sys_epoll_create1),    // 357
-//ZZ    LINXY(__NR_inotify_init1,     sys_inotify_init1),    // 360
 //ZZ    LINXY(__NR_preadv,            sys_preadv),           // 361
 //ZZ    LINX_(__NR_pwritev,           sys_pwritev),          // 362
 //ZZ    LINXY(__NR_rt_tgsigqueueinfo, sys_rt_tgsigqueueinfo),// 363

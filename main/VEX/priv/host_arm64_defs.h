@@ -339,6 +339,9 @@ typedef
       ARM64vecb_ORR,
       ARM64vecb_XOR,
       ARM64vecb_CMEQ64x2,
+      ARM64vecb_CMEQ32x4,
+      ARM64vecb_CMEQ16x8,
+      ARM64vecb_CMEQ8x16,
       ARM64vecb_INVALID
    }
    ARM64VecBinOp;
@@ -357,6 +360,7 @@ typedef
 typedef
    enum {
       ARM64vecsh_USHR64x2=350,
+      ARM64vecsh_USHR16x8,
       ARM64vecsh_SSHR64x2,
       ARM64vecsh_SHL32x4,
       ARM64vecsh_INVALID

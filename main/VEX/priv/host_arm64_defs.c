@@ -882,6 +882,9 @@ static void showARM64VecBinOp(/*OUT*/const HChar** nm,
       case ARM64vecb_ORR:      *nm = "orr "; *ar = "all"; return;
       case ARM64vecb_XOR:      *nm = "eor "; *ar = "all"; return;
       case ARM64vecb_CMEQ64x2: *nm = "cmeq"; *ar = "2d";  return;
+      case ARM64vecb_CMEQ32x4: *nm = "cmeq"; *ar = "4s";  return;
+      case ARM64vecb_CMEQ16x8: *nm = "cmeq"; *ar = "8h";  return;
+      case ARM64vecb_CMEQ8x16: *nm = "cmeq"; *ar = "16b"; return;
       default: vpanic("showARM64VecBinOp");
    }
 }
@@ -905,6 +908,7 @@ static void showARM64VecShiftOp(/*OUT*/const HChar** nm,
 {
    switch (op) {
       case ARM64vecsh_USHR64x2: *nm = "ushr  "; *ar = "2d";  return;
+      case ARM64vecsh_USHR16x8: *nm = "ushr  "; *ar = "8h";  return;
       case ARM64vecsh_SSHR64x2: *nm = "sshr  "; *ar = "2d";  return;
       case ARM64vecsh_SHL32x4:  *nm = "shl   "; *ar = "4s";  return;
       default: vpanic("showARM64VecShiftImmOp");
@@ -1620,6 +1624,8 @@ ARM64Instr* ARM64Instr_VShiftImmV ( ARM64VecShiftOp op,
          maxSh = 63; break;
       case ARM64vecsh_SHL32x4:
          maxSh = 31; break;
+      case ARM64vecsh_USHR16x8:
+         maxSh = 15; break;
       default:
          vassert(0);
    }
@@ -3351,6 +3357,7 @@ static inline UChar qregNo ( HReg r )
 #define X111110  BITS8(0,0, 1,1,1,1,1,0)
 #define X111111  BITS8(0,0, 1,1,1,1,1,1)
 
+#define X0010000  BITS8(0, 0,0,1,0,0,0,0)
 #define X0100000  BITS8(0, 0,1,0,0,0,0,0)
 #define X1000000  BITS8(0, 1,0,0,0,0,0,0)
 
@@ -4421,7 +4428,7 @@ Int emit_ARM64Instr ( /*MB_MOD*/Bool* is_profInc,
             //case Ijk_MapFail:     trcval = VEX_TRC_JMP_MAPFAIL;     break;
             case Ijk_NoDecode:    trcval = VEX_TRC_JMP_NODECODE;    break;
             //case Ijk_TInval:      trcval = VEX_TRC_JMP_TINVAL;      break;
-            //case Ijk_NoRedir:     trcval = VEX_TRC_JMP_NOREDIR;     break;
+            case Ijk_NoRedir:     trcval = VEX_TRC_JMP_NOREDIR;     break;
             //case Ijk_SigTRAP:     trcval = VEX_TRC_JMP_SIGTRAP;     break;
             //case Ijk_SigSEGV:     trcval = VEX_TRC_JMP_SIGSEGV;     break;
             case Ijk_Boring:      trcval = VEX_TRC_JMP_BORING;      break;
@@ -4679,7 +4686,9 @@ Int emit_ARM64Instr ( /*MB_MOD*/Bool* is_profInc,
             case ARM64cvt_F64_I64S: /* SCVTF Dd, Xn */
                *p++ = X_3_5_8_6_5_5(X100, X11110, X01100010, X000000, rN, rD);
                break;
-            /* UCVTF Sd, Wn  ATC */
+            case ARM64cvt_F32_I32U: /* UCVTF Sd, Wn */
+               *p++ = X_3_5_8_6_5_5(X000, X11110, X00100011, X000000, rN, rD);
+               break;
             case ARM64cvt_F64_I32U: /* UCVTF Dd, Wn */
                *p++ = X_3_5_8_6_5_5(X000, X11110, X01100011, X000000, rN, rD);
                break;
@@ -4728,12 +4737,18 @@ Int emit_ARM64Instr ( /*MB_MOD*/Bool* is_profInc,
                *p++ = X_3_5_8_6_5_5(X100, X11110, X01100001 | (armRM << 3),
                                     X000000, rN, rD);
                break;
-            /* */
             case ARM64cvt_F32_I32S: /* FCVTxS Wd, Sn */
                *p++ = X_3_5_8_6_5_5(X000, X11110, X00100000 | (armRM << 3),
                                     X000000, rN, rD);
                break;
-            /* */
+            case ARM64cvt_F32_I32U: /* FCVTxU Wd, Sn */
+               *p++ = X_3_5_8_6_5_5(X000, X11110, X00100001 | (armRM << 3),
+                                    X000000, rN, rD);
+               break;
+            case ARM64cvt_F32_I64S: /* FCVTxS Xd, Sn */
+               *p++ = X_3_5_8_6_5_5(X100, X11110, X00100000 | (armRM << 3),
+                                    X000000, rN, rD);
+               break;
             case ARM64cvt_F32_I64U: /* FCVTxU Xd, Sn */
                *p++ = X_3_5_8_6_5_5(X100, X11110, X00100001 | (armRM << 3),
                                     X000000, rN, rD);
@@ -4933,7 +4948,11 @@ Int emit_ARM64Instr ( /*MB_MOD*/Bool* is_profInc,
             010 01110 10 1 m  000111 n d   ORR Vd, Vn, Vm
             011 01110 00 1 m  000111 n d   EOR Vd, Vn, Vm
 
-            011 01110 11 1 m  100011 n d   CMEQ Vd.2d, Vn.2d, Vm.2d
+            011 01110 11 1 m  100011 n d   CMEQ Vd.2d,  Vn.2d,  Vm.2d
+            011 01110 10 1 m  100011 n d   CMEQ Vd.4s,  Vn.4s,  Vm.4s
+            011 01110 01 1 m  100011 n d   CMEQ Vd.8h,  Vn.8h,  Vm.8h
+            011 01110 00 1 m  100011 n d   CMEQ Vd.16b, Vn.16b, Vm.16b
+
             011 01110 11 1 m  001101 n d   CMHI Vd.2d, Vn.2d, Vm.2d  >u, ATC
             010 01110 11 1 m  001101 n d   CMGT Vd.2d, Vn.2d, Vm.2d  >s, ATC
          */
@@ -5043,6 +5062,15 @@ Int emit_ARM64Instr ( /*MB_MOD*/Bool* is_profInc,
             case ARM64vecb_CMEQ64x2:
                *p++ = X_3_8_5_6_5_5(X011, X01110111, vM, X100011, vN, vD);
                break;
+            case ARM64vecb_CMEQ32x4:
+               *p++ = X_3_8_5_6_5_5(X011, X01110101, vM, X100011, vN, vD);
+               break;
+            case ARM64vecb_CMEQ16x8:
+               *p++ = X_3_8_5_6_5_5(X011, X01110011, vM, X100011, vN, vD);
+               break;
+            case ARM64vecb_CMEQ8x16:
+               *p++ = X_3_8_5_6_5_5(X011, X01110001, vM, X100011, vN, vD);
+               break;
 
             default:
                goto bad;
@@ -5127,6 +5155,15 @@ Int emit_ARM64Instr ( /*MB_MOD*/Bool* is_profInc,
                   UInt xxxxx = sh;
                   *p++ = X_3_6_7_6_5_5(X010, X011110,
                                        X0100000 | xxxxx, X010101, vN, vD);
+                  goto done;
+               }
+               break;
+            //case ARM64vecsh_SSHR16x8: syned = True; ATC
+            case ARM64vecsh_USHR16x8: /* fallthrough */
+               if (sh >= 1 && sh <= 15) {
+                  UInt xxxx = 16-sh;
+                  *p++ = X_3_6_7_6_5_5(syned ? X010 : X011, X011110,
+                                       X0010000 | xxxx, X000001, vN, vD);
                   goto done;
                }
                break;
