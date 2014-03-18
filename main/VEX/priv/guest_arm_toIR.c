@@ -2875,6 +2875,31 @@ Bool dis_neon_vext ( UInt theInstr, IRTemp condT )
    return True;
 }
 
+/* Generate specific vector FP binary ops, possibly with a fake
+   rounding mode as required by the primop. */
+static
+IRExpr* binop_w_fake_RM ( IROp op, IRExpr* argL, IRExpr* argR )
+{
+   switch (op) {
+      case Iop_Add32Fx4:
+      case Iop_Sub32Fx4:
+      case Iop_Mul32Fx4:
+         return triop(op, get_FAKE_roundingmode(), argL, argR );
+      case Iop_Add32x4: case Iop_Add16x8:
+      case Iop_Sub32x4: case Iop_Sub16x8:
+      case Iop_Mul32x4: case Iop_Mul16x8:
+      case Iop_Mul32x2: case Iop_Mul16x4:
+      case Iop_Add32Fx2:
+      case Iop_Sub32Fx2:
+      case Iop_Mul32Fx2:
+      case Iop_PwAdd32Fx2:
+         return binop(op, argL, argR);
+      default:
+        ppIROp(op);
+        vassert(0);
+   }
+}
+
 /* VTBL, VTBX */
 static
 Bool dis_neon_vtb ( UInt theInstr, IRTemp condT )
@@ -4601,7 +4626,8 @@ Bool dis_neon_data_3same ( UInt theInstr, IRTemp condT )
                   /* VABD  */
                   if (Q) {
                      assign(res, unop(Iop_Abs32Fx4,
-                                      binop(Iop_Sub32Fx4,
+                                      triop(Iop_Sub32Fx4,
+                                            get_FAKE_roundingmode(),
                                             mkexpr(arg_n),
                                             mkexpr(arg_m))));
                   } else {
@@ -4616,7 +4642,7 @@ Bool dis_neon_data_3same ( UInt theInstr, IRTemp condT )
                   break;
                }
             }
-            assign(res, binop(op, mkexpr(arg_n), mkexpr(arg_m)));
+            assign(res, binop_w_fake_RM(op, mkexpr(arg_n), mkexpr(arg_m)));
          } else {
             if (U == 0) {
                /* VMLA, VMLS  */
@@ -4641,9 +4667,11 @@ Bool dis_neon_data_3same ( UInt theInstr, IRTemp condT )
                      default: vassert(0);
                   }
                }
-               assign(res, binop(op2,
-                                 Q ? getQReg(dreg) : getDRegI64(dreg),
-                                 binop(op, mkexpr(arg_n), mkexpr(arg_m))));
+               assign(res, binop_w_fake_RM(
+                              op2,
+                              Q ? getQReg(dreg) : getDRegI64(dreg),
+                              binop_w_fake_RM(op, mkexpr(arg_n),
+                                                  mkexpr(arg_m))));
 
                DIP("vml%c.f32 %c%u, %c%u, %c%u\n",
                    P ? 's' : 'a', Q ? 'q' : 'd',
@@ -4654,7 +4682,7 @@ Bool dis_neon_data_3same ( UInt theInstr, IRTemp condT )
                if ((C >> 1) != 0)
                   return False;
                op = Q ? Iop_Mul32Fx4 : Iop_Mul32Fx2 ;
-               assign(res, binop(op, mkexpr(arg_n), mkexpr(arg_m)));
+               assign(res, binop_w_fake_RM(op, mkexpr(arg_n), mkexpr(arg_m)));
                DIP("vmul.f32 %c%u, %c%u, %c%u\n",
                    Q ? 'q' : 'd', dreg,
                    Q ? 'q' : 'd', nreg, Q ? 'q' : 'd', mreg);
@@ -5318,10 +5346,10 @@ Bool dis_neon_data_2reg_and_scalar ( UInt theInstr, IRTemp condT )
          }
       }
       op2 = INSN(10,10) ? sub : add;
-      assign(res, binop(op, mkexpr(arg_n), mkexpr(arg_m)));
+      assign(res, binop_w_fake_RM(op, mkexpr(arg_n), mkexpr(arg_m)));
       if (Q)
-         putQReg(dreg, binop(op2, getQReg(dreg), mkexpr(res)),
-               condT);
+         putQReg(dreg, binop_w_fake_RM(op2, getQReg(dreg), mkexpr(res)),
+                 condT);
       else
          putDRegI64(dreg, binop(op2, getDRegI64(dreg), mkexpr(res)),
                     condT);
@@ -5548,7 +5576,7 @@ Bool dis_neon_data_2reg_and_scalar ( UInt theInstr, IRTemp condT )
                vassert(0);
          }
       }
-      assign(res, binop(op, mkexpr(arg_n), mkexpr(arg_m)));
+      assign(res, binop_w_fake_RM(op, mkexpr(arg_n), mkexpr(arg_m)));
       if (Q)
          putQReg(dreg, mkexpr(res), condT);
       else
@@ -18232,38 +18260,29 @@ DisResult disInstr_THUMB_WRK (
       UInt h2 = INSN0(6,6);
       UInt rM = (h2 << 3) | INSN0(5,3);
       UInt rD = (h1 << 3) | INSN0(2,0);
+      //if (h1 == 0 && h2 == 0) { // Original T1 was more restrictive
       if (rD == 15 && rM == 15) {
          // then it's invalid
-      } else if (rD != 15) {
+      } else {
          IRTemp res = newTemp(Ity_I32);
          assign( res, binop(Iop_Add32, getIRegT(rD), getIRegT(rM) ));
-         putIRegT( rD, mkexpr(res), condT );
-      } else {
-            // FIXME: remove after official fix is available.
-            // https://bugs.kde.org/show_bug.cgi?id=332037
+         if (rD != 15) {
+            putIRegT( rD, mkexpr(res), condT );
+         } else {
             /* Only allowed outside or last-in IT block; SIGILL if not so. */
             gen_SIGILL_T_if_in_but_NLI_ITBlock(old_itstate, new_itstate);
             /* jump over insn if not selected */
             mk_skip_over_T16_if_cond_is_false(condT);
             condT = IRTemp_INVALID;
-         IRTemp res = newTemp(Ity_I32);
-         assign( res, binop(Iop_Add32,
-                            mkU32((guest_R15_curr_instr_notENC + 4) | 1),
-                            getIRegT(rM)));
-         llPutIReg(15, mkexpr(res));
-#if 0
             // now uncond
             /* non-interworking branch */
-            irsb->next = binop(Iop_Or32, mkexpr(res), mkU32(1));
-            irsb->jumpkind = Ijk_Boring;
-#else
+            llPutIReg(15, binop(Iop_Or32, mkexpr(res), mkU32(1)));
             dres.jk_StopHere = Ijk_Boring;
-
-#endif
-            dres.whatNext = Dis_StopHere;
+            dres.whatNext    = Dis_StopHere;
+         }
+         DIP("add(hi) r%u, r%u\n", rD, rM);
+         goto decode_success;
       }
-      DIP("add(hi) r%u, r%u\n", rD, rM);
-      goto decode_success;
       break;
    }
 
@@ -20455,7 +20474,7 @@ DisResult disInstr_THUMB_WRK (
 
    /* -------------- LDRD/STRD reg+/-#imm8 -------------- */
    /* Doubleword loads and stores of the form:
-         ldrd/strd  Rt, Rt2, [Rn, #-imm8]      or
+         ldrd/strd  Rt, Rt2, [Rn, #+/-imm8]    or
          ldrd/strd  Rt, Rt2, [Rn], #+/-imm8    or
          ldrd/strd  Rt, Rt2, [Rn, #+/-imm8]!  
    */
@@ -20473,13 +20492,11 @@ DisResult disInstr_THUMB_WRK (
       if (bP == 0 && bW == 0)                 valid = False;
       if (bW == 1 && (rN == rT || rN == rT2)) valid = False;
       if (isBadRegT(rT) || isBadRegT(rT2))    valid = False;
-
-      if (bL == 1 && (rT == 15 || rT == 13 || rT2 == 15 || rT2 == 13 || rT == rT2) ) {
-         valid = False;
-      }
-      if (bL == 0 && (rN == 15 || rT == 15 || rT == 13 || rT2 == 15 || rT2 == 13) ) {
-         valid = False;
-      }
+      if (bL == 1 && rT == rT2)               valid = False;
+      /* It's OK to use PC as the base register only in the
+         following case: ldrd Rt, Rt2, [PC, #+/-imm8] */
+      if (rN == 15 && (bL == 0/*store*/
+                       || bW == 1/*wb*/))     valid = False;
 
       if (valid) {
          IRTemp preAddr = newTemp(Ity_I32);
