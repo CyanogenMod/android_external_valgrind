@@ -23,7 +23,6 @@ common_cflags := \
 	-Wno-pointer-sign -Wno-sign-compare -Wno-unused-parameter -Wno-shadow \
 	-fno-strict-aliasing -fno-stack-protector \
 	-DVGO_linux=1 \
-	-DVG_LIBDIR=\"/system/lib/valgrind\" \
 	-DANDROID_SYMBOLS_DIR=\"/data/local/symbols\"
 
 target_arch_cflags := \
@@ -32,11 +31,21 @@ target_arch_cflags := \
 	-DVGPV_$(TARGET_ARCH)_linux_android=1 \
 	-DVG_PLATFORM=\"$(TARGET_ARCH)-linux\"
 
+ifeq ($(TARGET_IS_64_BIT),true)
+target_arch_cflags += \
+	-DVG_LIBDIR=\"/system/lib64/valgrind\"
+else
+target_arch_cflags += \
+	-DVG_LIBDIR=\"/system/lib/valgrind\"
+
+endif
+
 ifdef TARGET_2ND_ARCH
 target_2nd_arch_cflags := \
 	-DVGA_$(TARGET_2ND_ARCH)=1 \
 	-DVGP_$(TARGET_2ND_ARCH)_linux=1 \
 	-DVGPV_$(TARGET_2ND_ARCH)_linux_android=1 \
+	-DVG_LIBDIR=\"/system/lib/valgrind\" \
 	-DVG_PLATFORM=\"$(TARGET_2ND_ARCH)-linux\"
 endif
 
@@ -295,9 +304,6 @@ LOCAL_CFLAGS_$(TARGET_2ND_ARCH) = $(target_2nd_arch_cflags)
 LOCAL_ASFLAGS := $(common_cflags)
 LOCAL_ASFLAGS_$(TARGET_ARCH) = $(target_arch_cflags)
 LOCAL_ASFLAGS_$(TARGET_2ND_ARCH) = $(target_2nd_arch_cflags)
-
-$(info LOCAL_CFLAGS_$(TARGET_ARCH) = $(target_arch_cflags) )
-$(info LOCAL_CFLAGS_$(TARGET_2ND_ARCH) = $(target_2nd_arch_cflags) )
 
 include $(BUILD_STATIC_LIBRARY)
 
