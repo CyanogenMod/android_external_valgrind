@@ -669,6 +669,13 @@ struct vki_shminfo64 {
 #define VKI_PTRACE_SETREGS            13
 //#define VKI_PTRACE_GETFPREGS          14
 //#define VKI_PTRACE_SETFPREGS          15
+#define VKI_PTRACE_GET_THREAD_AREA   22
+#define VKI_PTRACE_SET_SYSCALL   23
+#define VKI_PTRACE_GETVFPREGS    27
+#define VKI_PTRACE_SETVFPREGS    28
+#define VKI_PTRACE_GETHBPREGS    29
+#define VKI_PTRACE_SETHBPREGS    30
+
 
 //----------------------------------------------------------------------
 // From linux-2.6.8.1/include/asm-generic/errno.h
