@@ -19806,8 +19806,9 @@ DisResult disInstr_THUMB_WRK (
        && INSN1(15,15) == 0) {
       UInt rD = INSN1(11,8);
       UInt rN = INSN1(3,0);
-      if (!isBadRegT(rD) && !isBadRegT(rN)) {
-         UInt bS    = INSN0(4,4);
+      UInt bS    = INSN0(4,4);
+      int badRegs = bS ? (isBadRegT(rD) || isBadRegT(rN)) : (rD == 15 || rN == 15 || (rD == 15 && rN == 15));
+      if (!badRegs) {
          UInt isMVN = INSN0(5,5);
          UInt imm5  = (INSN1(14,12) << 2) | INSN1(7,6);
          UInt how   = INSN1(5,4);
@@ -20503,8 +20504,22 @@ DisResult disInstr_THUMB_WRK (
          assign(preAddr, getIRegT(rN));
 
          IRTemp postAddr = newTemp(Ity_I32);
+
+         UInt offset = imm8 << 2;
+
+         /* See http://www.keil.com/support/man/docs/ARMASM/ARMASM_Cacdbfji.htm
+            "For all other instructions that use labels, the value of the PC is the
+             address of the current instruction plus 4 bytes, with bit[1] of the result
+             cleared to 0 to make it word-aligned"
+
+            getIRegT takes care of +4 but not clearing bit[1], so we adjust offset
+         */
+         if (rN == 15 && (0 != (guest_R15_curr_instr_notENC & 2))) {
+            offset -= 2;
+         }
+
          assign(postAddr, binop(bU == 1 ? Iop_Add32 : Iop_Sub32,
-                                mkexpr(preAddr), mkU32(imm8 << 2)));
+                                mkexpr(preAddr), mkU32(offset)));
 
          IRTemp transAddr = bP == 1 ? postAddr : preAddr;
 
