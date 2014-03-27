@@ -20501,25 +20501,20 @@ DisResult disInstr_THUMB_WRK (
 
       if (valid) {
          IRTemp preAddr = newTemp(Ity_I32);
-         assign(preAddr, getIRegT(rN));
-
-         IRTemp postAddr = newTemp(Ity_I32);
-
-         UInt offset = imm8 << 2;
-
          /* See http://www.keil.com/support/man/docs/ARMASM/ARMASM_Cacdbfji.htm
             "For all other instructions that use labels, the value of the PC is the
              address of the current instruction plus 4 bytes, with bit[1] of the result
              cleared to 0 to make it word-aligned"
-
-            getIRegT takes care of +4 but not clearing bit[1], so we adjust offset
          */
-         if (rN == 15 && (0 != (guest_R15_curr_instr_notENC & 2))) {
-            offset -= 2;
-         }
+         assign(preAddr,
+                15 == rN ?
+                    binop(Iop_And32, getIRegT(15), mkU32(~3U)) :
+                    getIRegT(rN));
+
+         IRTemp postAddr = newTemp(Ity_I32);
 
          assign(postAddr, binop(bU == 1 ? Iop_Add32 : Iop_Sub32,
-                                mkexpr(preAddr), mkU32(offset)));
+                                mkexpr(preAddr), mkU32(imm8 << 2)));
 
          IRTemp transAddr = bP == 1 ? postAddr : preAddr;
 
