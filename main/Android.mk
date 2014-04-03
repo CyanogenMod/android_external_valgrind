@@ -722,8 +722,10 @@ LOCAL_CFLAGS_$(TARGET_2ND_ARCH) = $(target_2nd_arch_cflags)
 include $(BUILD_EXECUTABLE)
 
 # Build tests (some of them)...
+ifeq ($(TARGET_ARCH),arm)
 test := v6intThumb
 include $(LOCAL_PATH)/Android.test.mk
+endif
 
 # Copy prebuilt suppressions
 include $(CLEAR_VARS)
