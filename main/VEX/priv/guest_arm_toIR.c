@@ -18174,8 +18174,10 @@ DisResult disInstr_THUMB_WRK (
       /* Branch to reg, and optionally switch modes.  Reg contains a
          suitably encoded address therefore (w CPSR.T at the bottom).
          Have to special-case r15, as usual. */
-      UInt rM = (INSN0(6,6) << 3) | INSN0(5,3);
-      if (BITS3(0,0,0) == INSN0(2,0)) {
+      UInt rM = INSN0(6,3);
+      // TODO - this is workaround: Apparently nobody cares
+      // about values of lower 3 bits
+//      if (BITS3(0,0,0) == INSN0(2,0)) {
          IRTemp dst = newTemp(Ity_I32);
          gen_SIGILL_T_if_in_but_NLI_ITBlock(old_itstate, new_itstate);
          mk_skip_over_T16_if_cond_is_false(condT);
@@ -18192,7 +18194,7 @@ DisResult disInstr_THUMB_WRK (
          dres.whatNext    = Dis_StopHere;
          DIP("bx r%u (possibly switch to ARM mode)\n", rM);
          goto decode_success;
-      }
+//      }
       break;
    }
 
@@ -20460,9 +20462,8 @@ DisResult disInstr_THUMB_WRK (
                vassert(rT == 15);
                vassert(condT == IRTemp_INVALID); /* due to check above */
                llPutIReg(15, mkexpr(newRt));
-               irsb->next = mkexpr(newRt);
-               irsb->jumpkind = Ijk_Boring;  /* or _Ret ? */
-               dres.whatNext  = Dis_StopHere;
+               dres.jk_StopHere = Ijk_Boring;
+               dres.whatNext    = Dis_StopHere;
             }
          }
 

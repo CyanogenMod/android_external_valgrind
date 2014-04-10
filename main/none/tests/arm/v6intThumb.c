@@ -342,6 +342,54 @@ static int gen_cvin(int cvin)
 ///////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////
 
+void test_ldr_pc() {
+    // special case of ldr PC, [rN, +imm?]
+    printf("tests for instrucitons modifying pc (lrd pc, add pc)\n");
+    {
+        unsigned int out;
+        unsigned int cpsr;
+        unsigned char tmpbuff[512]; // we use tmpbuff+432
+        int cvin = 0;
+
+        __asm__ volatile(
+            ".thumb;\n"
+            ".syntax unified;\n"
+            "msr cpsr_f, %3;\n"
+            "mov r9, %2;\n"
+            "ldr r2, =.ldrwpclabel1;\n"
+            "mov r0, #1;\n"
+            "orr r2, r0;\n" // set thumb bit to 1
+            "str r2, [r9, +#432];\n"
+            "bl .ldrwpclabel_continue;\n"
+            ".align 4;\n"
+            ".ldrwpclabel1: \n"
+            "mov r1, #42;\n"
+            "bl .ldrwpclabel_end;\n"
+            ".ldrwpclabel_continue: \n"
+            "ldr.w pc, [r9, +#432];\n"
+            "mov r1, #0;\n"
+            ".ldrwpclabel_end:\n"
+            "mov %0, r1;\n"
+            "mrs %1,cpsr;\n"
+            : "=r"(out), "=r"(cpsr)
+            : "r"(tmpbuff), "r"(gen_cvin(cvin))
+        );
+
+        // print
+        printf("ldr.w pc, [r9, +#432] :: r1 0x%08x c:v-in %d, cpsr 0x%08x %c%c%c%c\n", \
+            out, \
+            cvin, \
+            cpsr & 0xffff0000, \
+            ((1<<31) & cpsr) ? 'N' : ' ', \
+            ((1<<30) & cpsr) ? 'Z' : ' ', \
+            ((1<<29) & cpsr) ? 'C' : ' ', \
+            ((1<<28) & cpsr) ? 'V' : ' ' \
+            ); \
+
+    }
+}
+
+
 static int old_main(void)
 {
 
@@ -584,10 +632,9 @@ static int old_main(void)
     TESTINSTPCMISSALING("ldrsh r1, label_magic_ldrsh", r1, label_magic_ldrsh, cv);
     // omitting PLD/PLI
     TESTINSTPCMISSALING_DWORDOUT("vldr d0, label_magic_vldr", label_magic_vldr, cv);
-
-
     TESTCARRYEND
 
+    test_ldr_pc();
 #if 0
 	printf("ROR\n");
 	TESTCARRY
