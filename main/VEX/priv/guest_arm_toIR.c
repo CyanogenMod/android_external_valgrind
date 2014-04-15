@@ -18175,9 +18175,7 @@ DisResult disInstr_THUMB_WRK (
          suitably encoded address therefore (w CPSR.T at the bottom).
          Have to special-case r15, as usual. */
       UInt rM = INSN0(6,3);
-      // TODO - this is workaround: Apparently nobody cares
-      // about values of lower 3 bits
-//      if (BITS3(0,0,0) == INSN0(2,0)) {
+      if (BITS3(0,0,0) == INSN0(2,0)) {
          IRTemp dst = newTemp(Ity_I32);
          gen_SIGILL_T_if_in_but_NLI_ITBlock(old_itstate, new_itstate);
          mk_skip_over_T16_if_cond_is_false(condT);
@@ -18194,7 +18192,7 @@ DisResult disInstr_THUMB_WRK (
          dres.whatNext    = Dis_StopHere;
          DIP("bx r%u (possibly switch to ARM mode)\n", rM);
          goto decode_success;
-//      }
+      }
       break;
    }
 
