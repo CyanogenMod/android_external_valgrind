@@ -14,7 +14,6 @@
 
 
 vg_local_module :=
-vg_local_module_relative_path :=
 vg_local_target :=
 vg_local_module_class :=
 vg_local_src_files :=

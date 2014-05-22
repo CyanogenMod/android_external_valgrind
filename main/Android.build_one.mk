@@ -41,7 +41,6 @@ LOCAL_ASFLAGS_$(TARGET_2ND_ARCH) := $(vg_local_2nd_arch_cflags)
 
 LOCAL_LDFLAGS := $(vg_local_ldflags)
 
-LOCAL_MODULE_RELATIVE_PATH:=$(vg_local_module_relative_path)
 LOCAL_MODULE_CLASS := $(vg_local_module_class)
 
 LOCAL_STATIC_LIBRARIES := \
@@ -51,6 +50,10 @@ LOCAL_WHOLE_STATIC_LIBRARIES := \
 
 ifeq ($(vg_local_target),EXECUTABLE)
   LOCAL_FORCE_STATIC_EXECUTABLE := true
+endif
+
+ifneq ($(vg_local_target),STATIC_LIBRARY)
+  LOCAL_MODULE_PATH=$(PRODUCT_OUT)$(vg_module_path)
 endif
 
 ifeq ($(vg_local_without_system_shared_libraries),true)
