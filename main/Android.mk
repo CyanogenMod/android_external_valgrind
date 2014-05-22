@@ -32,10 +32,12 @@ target_arch_cflags := \
 	-DVG_PLATFORM=\"$(TARGET_ARCH)-linux\"
 
 ifeq ($(TARGET_IS_64_BIT),true)
-  vg_libdir=\"/system/lib64/valgrind\"
+  vg_module_path := /system/lib64/valgrind
 else
-  vg_libdir=\"/system/lib/valgrind\"
+  vg_module_path := /system/lib/valgrind
 endif
+
+vg_libdir := \"$(vg_module_path)\"
 
 target_arch_cflags+=-DVG_LIBDIR=$(vg_libdir)
 
@@ -301,7 +303,6 @@ include $(LOCAL_PATH)/Android.build_all.mk
 
 # Build vgpreload_core-$(TARGET_ARCH)-linux.so
 vg_local_module := vgpreload_core
-vg_local_module_relative_path := valgrind
 vg_local_target := SHARED_LIBRARY
 vg_local_module_class := SHARED_LIBRARIES
 
@@ -321,7 +322,6 @@ include $(LOCAL_PATH)/Android.build_all.mk
 
 # Build memcheck-$(TARGET_ARCH)-linux
 vg_local_module := memcheck
-vg_local_module_relative_path := valgrind
 vg_local_target := EXECUTABLE
 vg_local_module_class := SHARED_LIBRARIES
 vg_local_src_files := \
@@ -344,7 +344,6 @@ include $(LOCAL_PATH)/Android.build_all.mk
 # Build vgpreload_memcheck-$(TARGET_ARCH)-linux.so
 vg_local_module := vgpreload_memcheck
 vg_local_module_class := SHARED_LIBRARIES
-vg_local_module_relative_path := valgrind
 vg_local_target := SHARED_LIBRARY
 
 vg_local_src_files := \
@@ -365,7 +364,6 @@ include $(LOCAL_PATH)/Android.build_all.mk
 # Build cachegrind-$(TARGET_ARCH)-linux
 vg_local_module := cachegrind
 vg_local_module_class := SHARED_LIBRARIES
-vg_local_module_relative_path := valgrind
 vg_local_target := EXECUTABLE
 vg_local_no_crt := true
 vg_local_without_system_shared_libraries := true
@@ -387,7 +385,6 @@ include $(LOCAL_PATH)/Android.build_all.mk
 
 vg_local_module := callgrind
 vg_local_module_class := SHARED_LIBRARIES
-vg_local_module_relative_path := valgrind
 vg_local_target := EXECUTABLE
 vg_local_no_crt := true
 vg_local_without_system_shared_libraries := true
@@ -420,7 +417,6 @@ include $(LOCAL_PATH)/Android.build_all.mk
 # Build helgrind-$(TARGET_ARCH)-linux
 vg_local_module := helgrind
 vg_local_module_class := SHARED_LIBRARIES
-vg_local_module_relative_path := valgrind
 vg_local_target := EXECUTABLE
 vg_local_no_crt := true
 vg_local_without_system_shared_libraries := true
@@ -443,7 +439,6 @@ include $(LOCAL_PATH)/Android.build_all.mk
 # Build vgpreload_helgrind-$(TARGET_ARCH)-linux.so
 vg_local_module := vgpreload_helgrind
 vg_local_module_class := SHARED_LIBRARIES
-vg_local_module_relative_path := valgrind
 vg_local_target := SHARED_LIBRARY
 #LOCAL_STRIP_MODULE := false
 vg_local_no_crt := true
@@ -462,7 +457,6 @@ include $(LOCAL_PATH)/Android.build_all.mk
 # Build drd-$(TARGET_ARCH)-linux
 vg_local_module := drd
 vg_local_module_class := SHARED_LIBRARIES
-vg_local_module_relative_path := valgrind
 vg_local_target := EXECUTABLE
 #LOCAL_FORCE_STATIC_EXECUTABLE := true
 vg_local_no_crt := true
@@ -494,7 +488,6 @@ include $(LOCAL_PATH)/Android.build_all.mk
 # Build vgpreload_drd-$(TARGET_ARCH)-linux.so
 vg_local_module := vgpreload_drd
 vg_local_module_class := SHARED_LIBRARIES
-vg_local_module_relative_path := valgrind
 vg_local_target := SHARED_LIBRARY
 #LOCAL_STRIP_MODULE := false
 vg_local_no_crt := true
@@ -515,7 +508,6 @@ include $(LOCAL_PATH)/Android.build_all.mk
 # Build massif-$(TARGET_ARCH)-linux
 vg_local_module := massif
 vg_local_module_class := SHARED_LIBRARIES
-vg_local_module_relative_path := valgrind
 vg_local_target := EXECUTABLE
 #LOCAL_FORCE_STATIC_EXECUTABLE := true
 vg_local_no_crt := true
@@ -534,7 +526,6 @@ include $(LOCAL_PATH)/Android.build_all.mk
 # Build vgpreload_massif-$(TARGET_ARCH)-linux.so
 vg_local_module := vgpreload_massif
 vg_local_module_class := SHARED_LIBRARIES
-vg_local_module_relative_path := valgrind
 vg_local_target := SHARED_LIBRARY
 #LOCAL_STRIP_MODULE := false
 vg_local_no_crt := true
@@ -552,7 +543,6 @@ include $(LOCAL_PATH)/Android.build_all.mk
 # Build none-$(TARGET_ARCH)-linux
 vg_local_module := none
 vg_local_module_class := SHARED_LIBRARIES
-vg_local_module_relative_path := valgrind
 vg_local_target := EXECUTABLE
 
 #LOCAL_FORCE_STATIC_EXECUTABLE := true
@@ -594,7 +584,7 @@ endif
 include $(CLEAR_VARS)
 LOCAL_MODULE := default.supp
 LOCAL_MODULE_CLASS := SHARED_LIBRARIES
-LOCAL_MODULE_RELATIVE_PATH := valgrind
+LOCAL_MODULE_PATH := $(PRODUCT_OUT)$(vg_module_path)
 LOCAL_SRC_FILES := bionic.supp
 
 include $(BUILD_PREBUILT)
