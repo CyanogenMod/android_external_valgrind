@@ -48,7 +48,7 @@ echo "  vex     : $upstream_vex_revision"
 if [ $upstream_valgrind_revision -gt $valgrind_revision ]; then
   echo "Merging valgrind... (in $valgrind_dir)" | tee $current_dir/merge.log
   cd $valgrind_dir
-  svn diff -r$valgrind_revision:$upstream_valgrind_revision $valgrind_svn_url | patch -p0 | tee -f $current_dir/merge.log
+  svn diff -r$valgrind_revision:$upstream_valgrind_revision $valgrind_svn_url | patch -p0 | tee -a $current_dir/merge.log
 fi
 
 if [ $upstream_vex_revision -gt $vex_revision ]; then
@@ -57,7 +57,7 @@ if [ $upstream_vex_revision -gt $vex_revision ]; then
   svn diff -r$vex_revision:$upstream_vex_revision $vex_svn_url | patch -p0 | tee -a $current_dir/merge.log
 fi
 
-echo "valgrind: $upstream_valgrind_revision" > $current_dir/upstream.revs.txt
+echo "val: $upstream_valgrind_revision" > $current_dir/upstream.revs.txt
 echo "vex: $upstream_vex_revision" >> $current_dir/upstream.revs.txt
 
 echo "Done: please do not forget to"
