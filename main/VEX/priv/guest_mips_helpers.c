@@ -105,38 +105,38 @@ void LibVEX_GuestMIPS32_initialise( /*OUT*/ VexGuestMIPS32State * vex_state)
    vex_state->guest_LO = 0;   /* Multiply and divide register lower result */
 
    /* FPU Registers */
-   vex_state->guest_f0 = 0x7ff800007ff80000;   /* Floting point GP registers */
-   vex_state->guest_f1 = 0x7ff800007ff80000;
-   vex_state->guest_f2 = 0x7ff800007ff80000;
-   vex_state->guest_f3 = 0x7ff800007ff80000;
-   vex_state->guest_f4 = 0x7ff800007ff80000;
-   vex_state->guest_f5 = 0x7ff800007ff80000;
-   vex_state->guest_f6 = 0x7ff800007ff80000;
-   vex_state->guest_f7 = 0x7ff800007ff80000;
-   vex_state->guest_f8 = 0x7ff800007ff80000;
-   vex_state->guest_f9 = 0x7ff800007ff80000;
-   vex_state->guest_f10 = 0x7ff800007ff80000;
-   vex_state->guest_f11 = 0x7ff800007ff80000;
-   vex_state->guest_f12 = 0x7ff800007ff80000;
-   vex_state->guest_f13 = 0x7ff800007ff80000;
-   vex_state->guest_f14 = 0x7ff800007ff80000;
-   vex_state->guest_f15 = 0x7ff800007ff80000;
-   vex_state->guest_f16 = 0x7ff800007ff80000;
-   vex_state->guest_f17 = 0x7ff800007ff80000;
-   vex_state->guest_f18 = 0x7ff800007ff80000;
-   vex_state->guest_f19 = 0x7ff800007ff80000;
-   vex_state->guest_f20 = 0x7ff800007ff80000;
-   vex_state->guest_f21 = 0x7ff800007ff80000;
-   vex_state->guest_f22 = 0x7ff800007ff80000;
-   vex_state->guest_f23 = 0x7ff800007ff80000;
-   vex_state->guest_f24 = 0x7ff800007ff80000;
-   vex_state->guest_f25 = 0x7ff800007ff80000;
-   vex_state->guest_f26 = 0x7ff800007ff80000;
-   vex_state->guest_f27 = 0x7ff800007ff80000;
-   vex_state->guest_f28 = 0x7ff800007ff80000;
-   vex_state->guest_f29 = 0x7ff800007ff80000;
-   vex_state->guest_f30 = 0x7ff800007ff80000;
-   vex_state->guest_f31 = 0x7ff800007ff80000;
+   vex_state->guest_f0 = 0x7ff800007ff80000ULL; /* Floting point GP registers */
+   vex_state->guest_f1 = 0x7ff800007ff80000ULL;
+   vex_state->guest_f2 = 0x7ff800007ff80000ULL;
+   vex_state->guest_f3 = 0x7ff800007ff80000ULL;
+   vex_state->guest_f4 = 0x7ff800007ff80000ULL;
+   vex_state->guest_f5 = 0x7ff800007ff80000ULL;
+   vex_state->guest_f6 = 0x7ff800007ff80000ULL;
+   vex_state->guest_f7 = 0x7ff800007ff80000ULL;
+   vex_state->guest_f8 = 0x7ff800007ff80000ULL;
+   vex_state->guest_f9 = 0x7ff800007ff80000ULL;
+   vex_state->guest_f10 = 0x7ff800007ff80000ULL;
+   vex_state->guest_f11 = 0x7ff800007ff80000ULL;
+   vex_state->guest_f12 = 0x7ff800007ff80000ULL;
+   vex_state->guest_f13 = 0x7ff800007ff80000ULL;
+   vex_state->guest_f14 = 0x7ff800007ff80000ULL;
+   vex_state->guest_f15 = 0x7ff800007ff80000ULL;
+   vex_state->guest_f16 = 0x7ff800007ff80000ULL;
+   vex_state->guest_f17 = 0x7ff800007ff80000ULL;
+   vex_state->guest_f18 = 0x7ff800007ff80000ULL;
+   vex_state->guest_f19 = 0x7ff800007ff80000ULL;
+   vex_state->guest_f20 = 0x7ff800007ff80000ULL;
+   vex_state->guest_f21 = 0x7ff800007ff80000ULL;
+   vex_state->guest_f22 = 0x7ff800007ff80000ULL;
+   vex_state->guest_f23 = 0x7ff800007ff80000ULL;
+   vex_state->guest_f24 = 0x7ff800007ff80000ULL;
+   vex_state->guest_f25 = 0x7ff800007ff80000ULL;
+   vex_state->guest_f26 = 0x7ff800007ff80000ULL;
+   vex_state->guest_f27 = 0x7ff800007ff80000ULL;
+   vex_state->guest_f28 = 0x7ff800007ff80000ULL;
+   vex_state->guest_f29 = 0x7ff800007ff80000ULL;
+   vex_state->guest_f30 = 0x7ff800007ff80000ULL;
+   vex_state->guest_f31 = 0x7ff800007ff80000ULL;
 
    vex_state->guest_FIR = 0;  /* FP implementation and revision register */
    vex_state->guest_FCCR = 0; /* FP condition codes register */
@@ -150,8 +150,8 @@ void LibVEX_GuestMIPS32_initialise( /*OUT*/ VexGuestMIPS32State * vex_state)
    vex_state->guest_EMNOTE = 0;
 
    /* For clflush: record start and length of area to invalidate */
-   vex_state->guest_TISTART = 0;
-   vex_state->guest_TILEN = 0;
+   vex_state->guest_CMSTART = 0;
+   vex_state->guest_CMLEN = 0;
    vex_state->host_EvC_COUNTER = 0;
    vex_state->host_EvC_FAILADDR = 0;
 
@@ -258,8 +258,8 @@ void LibVEX_GuestMIPS64_initialise ( /*OUT*/ VexGuestMIPS64State * vex_state )
    vex_state->guest_EMNOTE = 0;
 
    /* For clflush: record start and length of area to invalidate */
-   vex_state->guest_TISTART = 0;
-   vex_state->guest_TILEN = 0;
+   vex_state->guest_CMSTART = 0;
+   vex_state->guest_CMLEN = 0;
    vex_state->host_EvC_COUNTER = 0;
    vex_state->host_EvC_FAILADDR = 0;
 
@@ -375,8 +375,8 @@ VexGuestLayout mips32Guest_layout = {
              /* 0 */ ALWAYSDEFD32(guest_r0),
              /* 1 */ ALWAYSDEFD32(guest_r1),
              /* 2 */ ALWAYSDEFD32(guest_EMNOTE),
-             /* 3 */ ALWAYSDEFD32(guest_TISTART),
-             /* 4 */ ALWAYSDEFD32(guest_TILEN),
+             /* 3 */ ALWAYSDEFD32(guest_CMSTART),
+             /* 4 */ ALWAYSDEFD32(guest_CMLEN),
              /* 5 */ ALWAYSDEFD32(guest_r29),
              /* 6 */ ALWAYSDEFD32(guest_r31),
              /* 7 */ ALWAYSDEFD32(guest_ULR)
@@ -402,8 +402,8 @@ VexGuestLayout mips64Guest_layout = {
    .alwaysDefd = {
                   /* 0 */ ALWAYSDEFD64 (guest_r0),
                   /* 1 */ ALWAYSDEFD64 (guest_EMNOTE),
-                  /* 2 */ ALWAYSDEFD64 (guest_TISTART),
-                  /* 3 */ ALWAYSDEFD64 (guest_TILEN),
+                  /* 2 */ ALWAYSDEFD64 (guest_CMSTART),
+                  /* 3 */ ALWAYSDEFD64 (guest_CMLEN),
                   /* 4 */ ALWAYSDEFD64 (guest_r29),
                   /* 5 */ ALWAYSDEFD64 (guest_r31),
                   /* 6 */ ALWAYSDEFD64 (guest_ULR)

@@ -750,16 +750,22 @@ Bool VG_(machine_get_hwcaps)( void )
      if (!have_cx8)
         return False;
 
-     /* Figure out if this is an AMD that can do mmxext and/or LZCNT. */
+     /* Figure out if this is an AMD that can do MMXEXT. */
      have_mmxext = False;
-     have_lzcnt = False;
      if (0 == VG_(strcmp)(vstr, "AuthenticAMD")
          && max_extended >= 0x80000001) {
         VG_(cpuid)(0x80000001, 0, &eax, &ebx, &ecx, &edx);
-        have_lzcnt = (ecx & (1<<5)) != 0; /* True => have LZCNT */
-
         /* Some older AMD processors support a sse1 subset (Integer SSE). */
         have_mmxext = !have_sse1 && ((edx & (1<<22)) != 0);
+     }
+
+     /* Figure out if this is an AMD or Intel that can do LZCNT. */
+     have_lzcnt = False;
+     if ((0 == VG_(strcmp)(vstr, "AuthenticAMD")
+          || 0 == VG_(strcmp)(vstr, "GenuineIntel"))
+         && max_extended >= 0x80000001) {
+        VG_(cpuid)(0x80000001, 0, &eax, &ebx, &ecx, &edx);
+        have_lzcnt = (ecx & (1<<5)) != 0; /* True => have LZCNT */
      }
 
      /* Intel processors don't define the mmxext extension, but since it
@@ -851,7 +857,6 @@ Bool VG_(machine_get_hwcaps)( void )
               unusedness. &*/
         }
      }
-
 
      /* cmpxchg8b is a minimum requirement now; if we don't have it we
         must simply give up.  But all CPUs since Pentium-I have it, so
@@ -1453,6 +1458,19 @@ Bool VG_(machine_get_hwcaps)( void )
      vai.hwcaps = 0;
 
      VG_(machine_get_cache_info)(&vai);
+
+     /* 0 denotes 'not set'.  The range of legitimate values here,
+        after being set that is, is 2 though 17 inclusive. */
+     vg_assert(vai.arm64_dMinLine_lg2_szB == 0);
+     vg_assert(vai.arm64_iMinLine_lg2_szB == 0);
+     ULong ctr_el0;
+     __asm__ __volatile__("mrs %0, ctr_el0" : "=r"(ctr_el0));
+     vai.arm64_dMinLine_lg2_szB = ((ctr_el0 >> 16) & 0xF) + 2;
+     vai.arm64_iMinLine_lg2_szB = ((ctr_el0 >>  0) & 0xF) + 2;
+     VG_(debugLog)(1, "machine", "ARM64: ctr_el0.dMinLine_szB = %d, "
+                      "ctr_el0.iMinLine_szB = %d\n",
+                   1 << vai.arm64_dMinLine_lg2_szB,
+                   1 << vai.arm64_iMinLine_lg2_szB);
 
      return True;
    }

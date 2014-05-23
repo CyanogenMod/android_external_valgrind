@@ -69,6 +69,12 @@
        unconditional calls and returns (bl, blr).  They should also be
        emitted for conditional calls and returns, but we don't have a 
        way to express that right now.  Ah well.
+
+   - Uses of Iop_{Add,Sub,Mul}32Fx4: the backend (host_ppc_isel.c)
+       ignores the rounding mode, and generates code that assumes
+       round-to-nearest.  This means V will compute incorrect results
+       for uses of these IROps when the rounding mode (first) arg is
+       not mkU32(Irrm_NEAREST).
 */
 
 /* "Special" instructions.
@@ -228,8 +234,8 @@ static void* fnptr_to_fnentry( VexAbiInfo* vbi, void* f )
 #define OFFB_VRSAVE      offsetofPPCGuestState(guest_VRSAVE)
 #define OFFB_VSCR        offsetofPPCGuestState(guest_VSCR)
 #define OFFB_EMNOTE      offsetofPPCGuestState(guest_EMNOTE)
-#define OFFB_TISTART     offsetofPPCGuestState(guest_TISTART)
-#define OFFB_TILEN       offsetofPPCGuestState(guest_TILEN)
+#define OFFB_CMSTART     offsetofPPCGuestState(guest_CMSTART)
+#define OFFB_CMLEN       offsetofPPCGuestState(guest_CMLEN)
 #define OFFB_NRADDR      offsetofPPCGuestState(guest_NRADDR)
 #define OFFB_NRADDR_GPR2 offsetofPPCGuestState(guest_NRADDR_GPR2)
 #define OFFB_TFHAR       offsetofPPCGuestState(guest_TFHAR)
@@ -377,8 +383,8 @@ typedef enum {
     PPC_GST_VRSAVE, // Vector Save/Restore Register
     PPC_GST_VSCR,   // Vector Status and Control Register
     PPC_GST_EMWARN, // Emulation warnings
-    PPC_GST_TISTART,// For icbi: start of area to invalidate
-    PPC_GST_TILEN,  // For icbi: length of area to invalidate
+    PPC_GST_CMSTART,// For icbi: start of area to invalidate
+    PPC_GST_CMLEN,  // For icbi: length of area to invalidate
     PPC_GST_IP_AT_SYSCALL, // the CIA of the most recently executed SC insn
     PPC_GST_SPRG3_RO, // SPRG3
     PPC_GST_TFHAR,  // Transactional Failure Handler Address Register
@@ -2781,14 +2787,14 @@ static void putGST ( PPC_GST reg, IRExpr* src )
       stmt( IRStmt_Put( OFFB_EMNOTE,src) );
       break;
       
-   case PPC_GST_TISTART: 
+   case PPC_GST_CMSTART: 
       vassert( ty_src == ty );
-      stmt( IRStmt_Put( OFFB_TISTART, src) );
+      stmt( IRStmt_Put( OFFB_CMSTART, src) );
       break;
       
-   case PPC_GST_TILEN: 
+   case PPC_GST_CMLEN: 
       vassert( ty_src == ty );
-      stmt( IRStmt_Put( OFFB_TILEN, src) );
+      stmt( IRStmt_Put( OFFB_CMLEN, src) );
       break;
       
    case PPC_GST_TEXASR:
@@ -7257,14 +7263,14 @@ static Bool dis_cache_manage ( UInt         theInstr,
       assign( addr, binop( mkSzOp(ty, Iop_And8),
                            mkexpr(EA),
                            mkSzImm(ty, ~(((ULong)lineszB)-1) )) );
-      putGST( PPC_GST_TISTART, mkexpr(addr) );
-      putGST( PPC_GST_TILEN, mkSzImm(ty, lineszB) );
+      putGST( PPC_GST_CMSTART, mkexpr(addr) );
+      putGST( PPC_GST_CMLEN, mkSzImm(ty, lineszB) );
 
       /* be paranoid ... */
       stmt( IRStmt_MBE(Imbe_Fence) );
 
       putGST( PPC_GST_CIA, mkSzImm(ty, nextInsnAddr()));
-      dres->jk_StopHere = Ijk_TInval;
+      dres->jk_StopHere = Ijk_InvalICache;
       dres->whatNext    = Dis_StopHere;
       break;
    }
@@ -12981,17 +12987,23 @@ dis_vxv_sp_arith ( UInt theInstr, UInt opc2 )
    switch (opc2) {
       case 0x100: // xvaddsp (VSX Vector Add Single-Precision)
          DIP("xvaddsp v%d,v%d,v%d\n", (UInt)XT, (UInt)XA, (UInt)XB);
-         putVSReg( XT, binop(Iop_Add32Fx4, getVSReg( XA ), getVSReg( XB )) );
+         // WARNING: BOGUS! The backend ignores rm on Iop_Add32Fx4
+         putVSReg( XT, triop(Iop_Add32Fx4, rm,
+                             getVSReg( XA ), getVSReg( XB )) );
          break;
 
       case 0x140: // xvmulsp (VSX Vector Multiply Single-Precision)
          DIP("xvmulsp v%d,v%d,v%d\n", (UInt)XT, (UInt)XA, (UInt)XB);
-         putVSReg( XT, binop(Iop_Mul32Fx4, getVSReg( XA ), getVSReg( XB )) );
+         // WARNING: BOGUS! The backend ignores rm on Iop_Mul32Fx4
+         putVSReg( XT, triop(Iop_Mul32Fx4, rm,
+                             getVSReg( XA ), getVSReg( XB )) );
          break;
 
       case 0x120: // xvsubsp (VSX Vector Subtract Single-Precision)
          DIP("xvsubsp v%d,v%d,v%d\n", (UInt)XT, (UInt)XA, (UInt)XB);
-         putVSReg( XT, binop(Iop_Sub32Fx4, getVSReg( XA ), getVSReg( XB )) );
+         // WARNING: BOGUS! The backend ignores rm on Iop_Sub32Fx4
+         putVSReg( XT, triop(Iop_Sub32Fx4, rm,
+                             getVSReg( XA ), getVSReg( XB )) );
          break;
 
       case 0x160: // xvdivsp (VSX Vector Divide Single-Precision)
@@ -17775,23 +17787,29 @@ static Bool dis_av_fp_arith ( UInt theInstr )
       return False;
    }
 
+   IRTemp rm = newTemp(Ity_I32);
+   assign(rm, get_IR_roundingmode());
+
    opc2 = IFIELD( theInstr, 0, 6 );
    switch (opc2) {
    case 0x2E: // vmaddfp (Multiply Add FP, AV p177)
       DIP("vmaddfp v%d,v%d,v%d,v%d\n",
           vD_addr, vA_addr, vC_addr, vB_addr);
       putVReg( vD_addr,
-               binop(Iop_Add32Fx4, mkexpr(vB),
-                     binop(Iop_Mul32Fx4, mkexpr(vA), mkexpr(vC))) );
+               triop(Iop_Add32Fx4, mkU32(Irrm_NEAREST),
+                     mkexpr(vB),
+                     triop(Iop_Mul32Fx4, mkU32(Irrm_NEAREST),
+                           mkexpr(vA), mkexpr(vC))) );
       return True;
 
    case 0x2F: { // vnmsubfp (Negative Multiply-Subtract FP, AV p215)
       DIP("vnmsubfp v%d,v%d,v%d,v%d\n",
           vD_addr, vA_addr, vC_addr, vB_addr);
       putVReg( vD_addr,
-               binop(Iop_Sub32Fx4,
+               triop(Iop_Sub32Fx4, mkU32(Irrm_NEAREST),
                      mkexpr(vB),
-                     binop(Iop_Mul32Fx4, mkexpr(vA), mkexpr(vC))) );
+                     triop(Iop_Mul32Fx4, mkU32(Irrm_NEAREST),
+                           mkexpr(vA), mkexpr(vC))) );
       return True;
    }
 
@@ -17803,12 +17821,14 @@ static Bool dis_av_fp_arith ( UInt theInstr )
    switch (opc2) {
    case 0x00A: // vaddfp (Add FP, AV p137)
       DIP("vaddfp v%d,v%d,v%d\n", vD_addr, vA_addr, vB_addr);
-      putVReg( vD_addr, binop(Iop_Add32Fx4, mkexpr(vA), mkexpr(vB)) );
+      putVReg( vD_addr, triop(Iop_Add32Fx4,
+                              mkU32(Irrm_NEAREST), mkexpr(vA), mkexpr(vB)) );
       return True;
 
   case 0x04A: // vsubfp (Subtract FP, AV p261)
       DIP("vsubfp v%d,v%d,v%d\n", vD_addr, vA_addr, vB_addr);
-      putVReg( vD_addr, binop(Iop_Sub32Fx4, mkexpr(vA), mkexpr(vB)) );
+      putVReg( vD_addr, triop(Iop_Sub32Fx4,
+                              mkU32(Irrm_NEAREST), mkexpr(vA), mkexpr(vB)) );
       return True;
 
    case 0x40A: // vmaxfp (Maximum FP, AV p178)
@@ -17925,8 +17945,9 @@ static Bool dis_av_fp_cmp ( UInt theInstr )
                        binop(Iop_CmpLE32Fx4, mkexpr(vA), mkexpr(vB))) );
       assign( lt, unop(Iop_NotV128,
                        binop(Iop_CmpGE32Fx4, mkexpr(vA),
-                             binop(Iop_Sub32Fx4, mkexpr(zeros),
-                                                 mkexpr(vB)))) );
+                             triop(Iop_Sub32Fx4, mkU32(Irrm_NEAREST),
+                                   mkexpr(zeros),
+                                   mkexpr(vB)))) );
 
       // finally, just shift gt,lt to correct position
       assign( vD, binop(Iop_ShlN32x4,
@@ -17987,7 +18008,7 @@ static Bool dis_av_fp_convert ( UInt theInstr )
    switch (opc2) {
    case 0x30A: // vcfux (Convert from Unsigned Fixed-Point W, AV p156)
       DIP("vcfux v%d,v%d,%d\n", vD_addr, vB_addr, UIMM_5);
-      putVReg( vD_addr, binop(Iop_Mul32Fx4,
+      putVReg( vD_addr, triop(Iop_Mul32Fx4, mkU32(Irrm_NEAREST),
                               unop(Iop_I32UtoFx4, mkexpr(vB)),
                               mkexpr(vInvScale)) );
       return True;
@@ -17995,7 +18016,7 @@ static Bool dis_av_fp_convert ( UInt theInstr )
    case 0x34A: // vcfsx (Convert from Signed Fixed-Point W, AV p155)
       DIP("vcfsx v%d,v%d,%d\n", vD_addr, vB_addr, UIMM_5);
 
-      putVReg( vD_addr, binop(Iop_Mul32Fx4,
+      putVReg( vD_addr, triop(Iop_Mul32Fx4, mkU32(Irrm_NEAREST),
                               unop(Iop_I32StoFx4, mkexpr(vB)),
                               mkexpr(vInvScale)) );
       return True;
@@ -18004,14 +18025,16 @@ static Bool dis_av_fp_convert ( UInt theInstr )
       DIP("vctuxs v%d,v%d,%d\n", vD_addr, vB_addr, UIMM_5);
       putVReg( vD_addr,
                unop(Iop_QFtoI32Ux4_RZ, 
-                    binop(Iop_Mul32Fx4, mkexpr(vB), mkexpr(vScale))) );
+                    triop(Iop_Mul32Fx4, mkU32(Irrm_NEAREST),
+                          mkexpr(vB), mkexpr(vScale))) );
       return True;
 
    case 0x3CA: // vctsxs (Convert to Signed Fixed-Point W Saturate, AV p171)
       DIP("vctsxs v%d,v%d,%d\n", vD_addr, vB_addr, UIMM_5);
       putVReg( vD_addr, 
                unop(Iop_QFtoI32Sx4_RZ, 
-                     binop(Iop_Mul32Fx4, mkexpr(vB), mkexpr(vScale))) );
+                     triop(Iop_Mul32Fx4, mkU32(Irrm_NEAREST),
+                           mkexpr(vB), mkexpr(vScale))) );
       return True;
 
    default:
@@ -18594,12 +18617,12 @@ DisResult disInstr_PPC_WRK (
             // be redone. For ease of handling, we simply invalidate all the
             // time.
 
-            stmt(IRStmt_Put(OFFB_TISTART, mkSzImm(ty, guest_CIA_curr_instr)));
-            stmt(IRStmt_Put(OFFB_TILEN,   mkSzImm(ty, 20)));
+            stmt(IRStmt_Put(OFFB_CMSTART, mkSzImm(ty, guest_CIA_curr_instr)));
+            stmt(IRStmt_Put(OFFB_CMLEN,   mkSzImm(ty, 20)));
    
             putGST( PPC_GST_CIA, mkSzImm( ty, guest_CIA_bbstart + delta ));
             dres.whatNext    = Dis_StopHere;
-            dres.jk_StopHere = Ijk_TInval;
+            dres.jk_StopHere = Ijk_InvalICache;
             goto decode_success;
          }
          /* We don't know what it is.  Set opc1/opc2 so decode_failure

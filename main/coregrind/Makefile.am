@@ -61,18 +61,11 @@ endif
 
 
 vgdb_SOURCES = vgdb.c
-if VGCONF_PLATFORMS_INCLUDE_ARM64_LINUX
-# vgdb-invoker-ptrace.c isn't buildable on arm64-linux yet
-# so skip it.  Unfortunately this also causes it to be skipped
-# for 32-bit ARM builds which are part of a bi-arch ARM build.
-vgdb_SOURCES += vgdb-invoker-none.c
-else
 if VGCONF_OS_IS_LINUX
 if VGCONF_PLATVARIANT_IS_ANDROID
 vgdb_SOURCES += vgdb-invoker-none.c
 else
 vgdb_SOURCES += vgdb-invoker-ptrace.c
-endif
 endif
 endif
 if VGCONF_OS_IS_DARWIN
@@ -158,6 +151,7 @@ $(mach_hdrs): $(mach_defs) $(mach_user_srcs) $(abs_builddir)/m_mach
 #----------------------------------------------------------------------------
 
 noinst_HEADERS = \
+	pub_core_addrinfo.h	\
 	pub_core_aspacehl.h	\
 	pub_core_aspacemgr.h	\
 	pub_core_basics.h	\
@@ -191,6 +185,7 @@ noinst_HEADERS = \
 	pub_core_mallocfree.h	\
 	pub_core_options.h	\
 	pub_core_oset.h		\
+	pub_core_rangemap.h	\
 	pub_core_redir.h	\
 	pub_core_poolalloc.h	\
 	pub_core_replacemalloc.h\
@@ -270,6 +265,7 @@ pkglib_LIBRARIES += libcoregrind-@VGCONF_ARCH_SEC@-@VGCONF_OS@.a
 endif
 
 COREGRIND_SOURCES_COMMON = \
+	m_addrinfo.c \
 	m_cache.c \
 	m_commandline.c \
 	m_clientstate.c \
@@ -292,6 +288,7 @@ COREGRIND_SOURCES_COMMON = \
 	m_mallocfree.c \
 	m_options.c \
 	m_oset.c \
+	m_rangemap.c \
 	m_redir.c \
 	m_sbprofile.c \
 	m_seqmatch.c \
@@ -630,6 +627,8 @@ clean-local: clean-noinst_DSYMS
 
 install-exec-local: install-noinst_PROGRAMS install-noinst_DSYMS
 
+uninstall-local: uninstall-noinst_PROGRAMS uninstall-noinst_DSYMS
+
 #----------------------------------------------------------------------------
 # Darwin linker kludges
 #----------------------------------------------------------------------------
@@ -638,7 +637,7 @@ if VGCONF_OS_IS_DARWIN
 
 BUILT_SOURCES += fixup_macho_loadcmds
 fixup_macho_loadcmds: fixup_macho_loadcmds.c
-	$(CC) -g -Wall -o fixup_macho_loadcmds fixup_macho_loadcmds.c
+	$(CC) -g -Wall -o $@ $<
 
 CLEANFILES += fixup_macho_loadcmds
 
