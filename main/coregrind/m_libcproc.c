@@ -820,8 +820,8 @@ void VG_(invalidate_icache) ( void *ptr, SizeT nbytes )
    const UInt icache_line_size_power_of_two =
        (cache_type_register & kICacheLineSizeMask) >> kICacheLineSizeShift;
 
-   const UInt dcache_line_size_ = 1 << dcache_line_size_power_of_two;
-   const UInt icache_line_size_ = 1 << icache_line_size_power_of_two;
+   const UInt dcache_line_size_ = 4 * (1 << dcache_line_size_power_of_two);
+   const UInt icache_line_size_ = 4 * (1 << icache_line_size_power_of_two);
 
    Addr start = (Addr)ptr;
    // Sizes will be used to generate a mask big enough to cover a pointer.
@@ -892,6 +892,34 @@ void VG_(invalidate_icache) ( void *ptr, SizeT nbytes )
 #  endif
 }
 
+
+/* ---------------------------------------------------------------------
+   dcache flushing
+   ------------------------------------------------------------------ */
+
+void VG_(flush_dcache) ( void *ptr, SizeT nbytes )
+{
+   /* Currently this is only required on ARM64. */
+#  if defined(VGA_arm64)
+   Addr startaddr = (Addr) ptr;
+   Addr endaddr   = startaddr + nbytes;
+   Addr cls;
+   Addr addr;
+
+   ULong ctr_el0;
+   __asm__ __volatile__ ("mrs %0, ctr_el0" : "=r"(ctr_el0));
+   cls = 4 * (1ULL << (0xF & (ctr_el0 >> 16)));
+
+   /* Stay sane .. */
+   vg_assert(cls == 64);
+
+   startaddr &= ~(cls - 1);
+   for (addr = startaddr; addr < endaddr; addr += cls) {
+      __asm__ __volatile__("dc cvau, %0" : : "r" (addr));
+   }
+   __asm__ __volatile__("dsb ish");
+#  endif
+}
 
 /*--------------------------------------------------------------------*/
 /*--- end                                                          ---*/

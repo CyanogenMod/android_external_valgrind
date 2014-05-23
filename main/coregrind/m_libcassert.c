@@ -33,6 +33,8 @@
 #include "pub_core_vkiscnums.h"
 #include "pub_core_libcsetjmp.h"    // to keep threadstate.h happy
 #include "pub_core_threadstate.h"
+#include "pub_core_gdbserver.h"
+#include "pub_core_aspacemgr.h"
 #include "pub_core_libcbase.h"
 #include "pub_core_libcassert.h"
 #include "pub_core_libcprint.h"
@@ -227,9 +229,33 @@
 
 #define BACKTRACE_DEPTH    100         // nice and deep!
 
-/* Pull down the entire world */
-void VG_(exit)( Int status )
+__attribute__ ((__noreturn__))
+static void exit_wrk( Int status, Bool gdbserver_call_allowed)
 {
+   static Bool exit_called = False;
+   // avoid recursive exit during gdbserver call.
+
+   if (gdbserver_call_allowed && !exit_called) {
+      const ThreadId atid = 1; // Arbitrary tid used to call/terminate gdbsrv.
+      exit_called = True;
+      if (status != 0 && VG_(gdbserver_stop_at) (VgdbStopAt_ValgrindAbExit)) {
+         if (VG_(gdbserver_init_done)()) {
+            VG_(umsg)("(action at valgrind abnormal exit) vgdb me ... \n");
+            VG_(gdbserver) (atid);
+         } else {
+            VG_(umsg)("(action at valgrind abnormal exit) "
+                      "Early valgrind exit : vgdb not yet usable\n");
+         }
+      }
+      if (VG_(gdbserver_init_done)()) {
+         // Always terminate the gdbserver when Valgrind exits, so as
+         // to e.g. cleanup the FIFOs.
+         VG_(gdbserver_exit) (atid,
+                              status == 0 ? VgSrc_ExitProcess : VgSrc_FatalSig);
+      }
+   }
+   exit_called = True;
+
 #if defined(VGO_linux)
    (void)VG_(do_syscall1)(__NR_exit_group, status );
 #elif defined(VGO_darwin)
@@ -244,57 +270,104 @@ void VG_(exit)( Int status )
    *(volatile Int*)0 = 'x';
 }
 
+/* Pull down the entire world */
+void VG_(exit)( Int status )
+{
+   exit_wrk (status, True);
+}
+
+/* Pull down the entire world */
+void VG_(client_exit)( Int status )
+{
+   exit_wrk (status, False);
+}
+
+
 // Print the scheduler status.
-void VG_(show_sched_status) ( void )
+static void show_sched_status_wrk ( Bool host_stacktrace,
+                                    Bool valgrind_stack_usage,
+                                    Bool exited_threads,
+                                    UnwindStartRegs* startRegsIN)
 {
    Int i; 
+   if (host_stacktrace) {
+      const Bool save_clo_xml = VG_(clo_xml);
+      Addr stacktop;
+      Addr ips[BACKTRACE_DEPTH];
+      Int  n_ips;
+      ThreadState *tst 
+         = VG_(get_ThreadState)( VG_(lwpid_to_vgtid)( VG_(gettid)() ) );
+ 
+      // If necessary, fake up an ExeContext which is of our actual real CPU
+      // state.  Could cause problems if we got the panic/exception within the
+      // execontext/stack dump/symtab code.  But it's better than nothing.
+      UnwindStartRegs startRegs;
+      VG_(memset)(&startRegs, 0, sizeof(startRegs));
+      
+      if (startRegsIN == NULL) {
+         GET_STARTREGS(&startRegs);
+      } else {
+         startRegs = *startRegsIN;
+      }
+ 
+      stacktop = tst->os_state.valgrind_stack_init_SP;
+
+      n_ips = 
+         VG_(get_StackTrace_wrk)(
+            0/*tid is unknown*/, 
+            ips, BACKTRACE_DEPTH, 
+            NULL/*array to dump SP values in*/,
+            NULL/*array to dump FP values in*/,
+            &startRegs, stacktop
+         );
+      VG_(printf)("\nhost stacktrace:\n"); 
+      VG_(clo_xml) = False;
+      VG_(pp_StackTrace) (ips, n_ips);
+      VG_(clo_xml) = save_clo_xml;
+   }
+
    VG_(printf)("\nsched status:\n"); 
    VG_(printf)("  running_tid=%d\n", VG_(get_running_tid)());
    for (i = 1; i < VG_N_THREADS; i++) {
-      if (VG_(threads)[i].status == VgTs_Empty) continue;
-      VG_(printf)( "\nThread %d: status = %s\n", i, 
-                   VG_(name_of_ThreadStatus)(VG_(threads)[i].status) );
-      VG_(get_and_pp_StackTrace)( i, BACKTRACE_DEPTH );
+      VgStack* stack 
+         = (VgStack*)VG_(threads)[i].os_state.valgrind_stack_base;
+      /* If a thread slot was never used (yet), valgrind_stack_base is 0.
+         If a thread slot is used by a thread or was used by a thread which
+         has exited, then valgrind_stack_base points to the stack base. */
+      if (VG_(threads)[i].status == VgTs_Empty
+          && (!exited_threads || stack == 0)) continue;
+      VG_(printf)("\nThread %d: status = %s\n", i, 
+                  VG_(name_of_ThreadStatus)(VG_(threads)[i].status) );
+      if (VG_(threads)[i].status != VgTs_Empty)
+         VG_(get_and_pp_StackTrace)( i, BACKTRACE_DEPTH );
+      if (valgrind_stack_usage && stack != 0)
+          VG_(printf)("valgrind stack top usage: %ld of %ld\n",
+                      VG_STACK_ACTIVE_SZB 
+                      - VG_(am_get_VgStack_unused_szB)(stack,
+                                                       VG_STACK_ACTIVE_SZB),
+                      (SizeT) VG_STACK_ACTIVE_SZB);
    }
    VG_(printf)("\n");
+}
+
+void VG_(show_sched_status) ( Bool host_stacktrace,
+                              Bool valgrind_stack_usage,
+                              Bool exited_threads)
+{
+   show_sched_status_wrk (host_stacktrace,
+                          valgrind_stack_usage,
+                          exited_threads,
+                          NULL);
 }
 
 __attribute__ ((noreturn))
 static void report_and_quit ( const HChar* report,
                               UnwindStartRegs* startRegsIN )
 {
-   Addr stacktop;
-   Addr ips[BACKTRACE_DEPTH];
-   Int  n_ips;
-   ThreadState *tst 
-      = VG_(get_ThreadState)( VG_(lwpid_to_vgtid)( VG_(gettid)() ) );
- 
-   // If necessary, fake up an ExeContext which is of our actual real CPU
-   // state.  Could cause problems if we got the panic/exception within the
-   // execontext/stack dump/symtab code.  But it's better than nothing.
-   UnwindStartRegs startRegs;
-   VG_(memset)(&startRegs, 0, sizeof(startRegs));
-
-   if (startRegsIN == NULL) {
-      GET_STARTREGS(&startRegs);
-   } else {
-      startRegs = *startRegsIN;
-   }
- 
-   stacktop = tst->os_state.valgrind_stack_init_SP;
-
-   n_ips = 
-      VG_(get_StackTrace_wrk)(
-         0/*tid is unknown*/, 
-         ips, BACKTRACE_DEPTH, 
-         NULL/*array to dump SP values in*/,
-         NULL/*array to dump FP values in*/,
-         &startRegs, stacktop
-      );
-   VG_(clo_xml) = False;
-   VG_(pp_StackTrace) (ips, n_ips);
- 
-   VG_(show_sched_status)();
+   show_sched_status_wrk (True,  // host_stacktrace
+                          False, // valgrind_stack_usage
+                          False, // exited_threads
+                          startRegsIN);
    VG_(printf)(
       "\n"
       "Note: see also the FAQ in the source distribution.\n"
@@ -402,7 +475,9 @@ void VG_(unimplemented) ( const HChar* msg )
    VG_(umsg)("\n");
    VG_(umsg)("Valgrind has to exit now.  Sorry.  Bye!\n");
    VG_(umsg)("\n");
-   VG_(show_sched_status)();
+   VG_(show_sched_status)(False,  // host_stacktrace
+                          False,  // valgrind_stack_usage
+                          False); // exited_threads
    VG_(exit)(1);
 }
 

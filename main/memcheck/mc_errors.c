@@ -44,6 +44,7 @@
 #include "pub_tool_threadstate.h"
 #include "pub_tool_debuginfo.h"     // VG_(get_dataname_and_offset)
 #include "pub_tool_xarray.h"
+#include "pub_tool_addrinfo.h"
 
 #include "mc_include.h"
 
@@ -55,81 +56,6 @@
 /* See comment in mc_include.h */
 Bool MC_(any_value_errors) = False;
 
-
-// Different kinds of blocks.
-typedef enum {
-   Block_Mallocd = 111,
-   Block_Freed,
-   Block_MempoolChunk,
-   Block_UserG
-} BlockKind;
-
-/* ------------------ Addresses -------------------- */
-
-/* The classification of a faulting address. */
-typedef 
-   enum { 
-      Addr_Undescribed, // as-yet unclassified
-      Addr_Unknown,     // classification yielded nothing useful
-      Addr_Block,       // in malloc'd/free'd block
-      Addr_Stack,       // on a thread's stack       
-      Addr_DataSym,     // in a global data sym
-      Addr_Variable,    // variable described by the debug info
-      Addr_SectKind     // last-ditch classification attempt
-   }
-   AddrTag;
-
-typedef
-   struct _AddrInfo
-   AddrInfo;
-
-struct _AddrInfo {
-   AddrTag tag;
-   union {
-      // As-yet unclassified.
-      struct { } Undescribed;
-
-      // On a stack.
-      struct {
-         ThreadId tid;        // Which thread's stack?
-      } Stack;
-
-      // This covers heap blocks (normal and from mempools) and user-defined
-      // blocks.
-      struct {
-         BlockKind   block_kind;
-         const HChar* block_desc;    // "block", "mempool" or user-defined
-         SizeT       block_szB;
-         PtrdiffT    rwoffset;
-         ExeContext* allocated_at;  // might be null_ExeContext.
-         ExeContext* freed_at;      // might be null_ExeContext.
-      } Block;
-
-      // In a global .data symbol.  This holds the first 127 chars of
-      // the variable's name (zero terminated), plus a (memory) offset.
-      struct {
-         HChar    name[128];
-         PtrdiffT offset;
-      } DataSym;
-
-      // Is described by Dwarf debug info.  XArray*s of HChar.
-      struct {
-         XArray* /* of HChar */ descr1;
-         XArray* /* of HChar */ descr2;
-      } Variable;
-
-      // Could only narrow it down to be the PLT/GOT/etc of a given
-      // object.  Better than nothing, perhaps.
-      struct {
-         HChar      objname[128];
-         VgSectKind kind;
-      } SectKind;
-
-      // Classification yielded nothing useful.
-      struct { } Unknown;
-
-   } Addr;
-};
 
 /* ------------------ Errors ----------------------- */
 
@@ -286,127 +212,7 @@ static void emit ( const HChar* format, ... )
    emit_WRK(format, vargs);
    va_end(vargs);
 }
-static void emiN ( const HChar* format, ... ) /* NO FORMAT CHECK */
-{
-   va_list vargs;
-   va_start(vargs, format);
-   emit_WRK(format, vargs);
-   va_end(vargs);
-}
 
-
-static void mc_pp_AddrInfo ( Addr a, AddrInfo* ai, Bool maybe_gcc )
-{
-   const HChar* xpre  = VG_(clo_xml) ? "  <auxwhat>" : " ";
-   const HChar* xpost = VG_(clo_xml) ? "</auxwhat>"  : "";
-
-   switch (ai->tag) {
-      case Addr_Unknown:
-         if (maybe_gcc) {
-            emit( "%sAddress 0x%llx is just below the stack ptr.  "
-                  "To suppress, use: --workaround-gcc296-bugs=yes%s\n",
-                  xpre, (ULong)a, xpost );
-	 } else {
-            emit( "%sAddress 0x%llx "
-                  "is not stack'd, malloc'd or (recently) free'd%s\n",
-                  xpre, (ULong)a, xpost );
-         }
-         break;
-
-      case Addr_Stack: 
-         emit( "%sAddress 0x%llx is on thread %d's stack%s\n", 
-               xpre, (ULong)a, ai->Addr.Stack.tid, xpost );
-         break;
-
-      case Addr_Block: {
-         SizeT    block_szB = ai->Addr.Block.block_szB;
-         PtrdiffT rwoffset  = ai->Addr.Block.rwoffset;
-         SizeT    delta;
-         const    HChar* relative;
-
-         if (rwoffset < 0) {
-            delta    = (SizeT)(-rwoffset);
-            relative = "before";
-         } else if (rwoffset >= block_szB) {
-            delta    = rwoffset - block_szB;
-            relative = "after";
-         } else {
-            delta    = rwoffset;
-            relative = "inside";
-         }
-         emit(
-            "%sAddress 0x%lx is %'lu bytes %s a %s of size %'lu %s%s\n",
-            xpre,
-            a, delta, relative, ai->Addr.Block.block_desc,
-            block_szB,
-            ai->Addr.Block.block_kind==Block_Mallocd ? "alloc'd" 
-            : ai->Addr.Block.block_kind==Block_Freed ? "free'd" 
-                                                     : "client-defined",
-            xpost
-         );
-         if (ai->Addr.Block.block_kind==Block_Mallocd) {
-            VG_(pp_ExeContext)(ai->Addr.Block.allocated_at);
-            tl_assert (ai->Addr.Block.freed_at == VG_(null_ExeContext)());
-         }
-         else if (ai->Addr.Block.block_kind==Block_Freed) {
-            VG_(pp_ExeContext)(ai->Addr.Block.freed_at);
-            if (ai->Addr.Block.allocated_at != VG_(null_ExeContext)()) {
-               emit(
-                  "%s block was alloc'd at%s\n",
-                  xpre,
-                  xpost
-               );
-               VG_(pp_ExeContext)(ai->Addr.Block.allocated_at);
-            }
-         }
-         else {
-            // client-defined
-            VG_(pp_ExeContext)(ai->Addr.Block.allocated_at);
-            tl_assert (ai->Addr.Block.freed_at == VG_(null_ExeContext)());
-            /* Nb: cannot have a freed_at, as a freed client-defined block
-               has a Block_Freed block_kind. */
-         }
-         
-         break;
-      }
-
-      case Addr_DataSym:
-         emiN( "%sAddress 0x%llx is %llu bytes "
-               "inside data symbol \"%pS\"%s\n",
-               xpre,
-               (ULong)a,
-               (ULong)ai->Addr.DataSym.offset,
-               ai->Addr.DataSym.name,
-               xpost );
-         break;
-
-      case Addr_Variable:
-         /* Note, no need for XML tags here, because descr1/2 will
-            already have <auxwhat> or <xauxwhat>s on them, in XML
-            mode. */
-         if (ai->Addr.Variable.descr1)
-            emit( "%s%s\n",
-                  VG_(clo_xml) ? "  " : " ",
-                  (HChar*)VG_(indexXA)(ai->Addr.Variable.descr1, 0) );
-         if (ai->Addr.Variable.descr2)
-            emit( "%s%s\n",
-                  VG_(clo_xml) ? "  " : " ",
-                  (HChar*)VG_(indexXA)(ai->Addr.Variable.descr2, 0) );
-         break;
-
-      case Addr_SectKind:
-         emiN( "%sAddress 0x%llx is in the %pS segment of %pS%s\n",
-               xpre,
-               (ULong)a,
-               VG_(pp_SectKind)(ai->Addr.SectKind.kind),
-               ai->Addr.SectKind.objname,
-               xpost );
-         break;
-
-      default:
-         VG_(tool_panic)("mc_pp_AddrInfo");
-   }
-}
 
 static const HChar* str_leak_lossmode ( Reachedness lossmode )
 {
@@ -434,50 +240,8 @@ static const HChar* xml_leak_kind ( Reachedness lossmode )
 
 Bool MC_(parse_leak_kinds) ( const HChar* str0, UInt* lks )
 {
-   HChar  tok_str0[VG_(strlen)(str0)+1];
-   HChar* saveptr;
-   HChar* token;
-
-   Bool seen_all_kw = False;
-   Bool seen_none_kw = False;
-
-   VG_(strcpy) (tok_str0, str0);
-   *lks = 0;
-
-   for (token = VG_(strtok_r)(tok_str0, ",", &saveptr);
-        token;
-        token = VG_(strtok_r)(NULL, ",", &saveptr)) {
-      if      (0 == VG_(strcmp)(token, "reachable"))
-         *lks |= R2S(Reachable);
-      else if (0 == VG_(strcmp)(token, "possible"))
-         *lks |= R2S(Possible);
-      else if (0 == VG_(strcmp)(token, "indirect"))
-         *lks |= R2S(IndirectLeak);
-      else if (0 == VG_(strcmp)(token, "definite"))
-         *lks |= R2S(Unreached);
-      else if (0 == VG_(strcmp)(token, "all"))
-         seen_all_kw = True;
-      else if (0 == VG_(strcmp)(token, "none"))
-         seen_none_kw = True;
-      else
-         return False;
-   }
-
-   if (seen_all_kw) {
-      if (seen_none_kw || *lks)
-         return False; // mixing all with either none or a specific value.
-      *lks = RallS;
-   } else if (seen_none_kw) {
-      if (seen_all_kw || *lks)
-         return False; // mixing none with either all or a specific value.
-      *lks = 0;
-   } else {
-      // seen neither all or none, we must see at least one value
-      if (*lks == 0)
-         return False;
-   }
-
-   return True;
+   return VG_(parse_enum_set)("reachable,possible,indirect,definite",
+                              str0, lks);
 }
 
 static const HChar* pp_Reachedness_for_leak_kinds(Reachedness r)
@@ -631,7 +395,7 @@ void MC_(pp_Error) ( Error* err )
          // the following code is untested.  Bad.
          if (xml) {
             emit( "  <kind>CoreMemError</kind>\n" );
-            emiN( "  <what>%pS contains unaddressable byte(s)</what>\n",
+            emit( "  <what>%pS contains unaddressable byte(s)</what>\n",
                   VG_(get_error_string)(err));
             VG_(pp_ExeContext)( VG_(get_error_where)(err) );
          } else {
@@ -689,7 +453,7 @@ void MC_(pp_Error) ( Error* err )
          MC_(any_value_errors) = True;
          if (xml) {
             emit( "  <kind>SyscallParam</kind>\n" );
-            emiN( "  <what>Syscall param %pS contains "
+            emit( "  <what>Syscall param %pS contains "
                   "uninitialised byte(s)</what>\n",
                   VG_(get_error_string)(err) );
             VG_(pp_ExeContext)( VG_(get_error_where)(err) );
@@ -711,13 +475,13 @@ void MC_(pp_Error) ( Error* err )
             MC_(any_value_errors) = True;
          if (xml) {
             emit( "  <kind>SyscallParam</kind>\n" );
-            emiN( "  <what>Syscall param %pS points to %s byte(s)</what>\n",
+            emit( "  <what>Syscall param %pS points to %s byte(s)</what>\n",
                   VG_(get_error_string)(err),
                   extra->Err.MemParam.isAddrErr 
                      ? "unaddressable" : "uninitialised" );
             VG_(pp_ExeContext)( VG_(get_error_where)(err) );
-            mc_pp_AddrInfo(VG_(get_error_address)(err),
-                           &extra->Err.MemParam.ai, False);
+            VG_(pp_addrinfo_mc)(VG_(get_error_address)(err),
+                                &extra->Err.MemParam.ai, False);
             if (extra->Err.MemParam.origin_ec 
                 && !extra->Err.MemParam.isAddrErr)
                mc_pp_origin( extra->Err.MemParam.origin_ec,
@@ -728,8 +492,8 @@ void MC_(pp_Error) ( Error* err )
                   extra->Err.MemParam.isAddrErr 
                      ? "unaddressable" : "uninitialised" );
             VG_(pp_ExeContext)( VG_(get_error_where)(err) );
-            mc_pp_AddrInfo(VG_(get_error_address)(err),
-                           &extra->Err.MemParam.ai, False);
+            VG_(pp_addrinfo_mc)(VG_(get_error_address)(err),
+                                &extra->Err.MemParam.ai, False);
             if (extra->Err.MemParam.origin_ec 
                 && !extra->Err.MemParam.isAddrErr)
                mc_pp_origin( extra->Err.MemParam.origin_ec,
@@ -747,8 +511,8 @@ void MC_(pp_Error) ( Error* err )
                    extra->Err.User.isAddrErr
                       ? "Unaddressable" : "Uninitialised" );
             VG_(pp_ExeContext)( VG_(get_error_where)(err) );
-            mc_pp_AddrInfo(VG_(get_error_address)(err), &extra->Err.User.ai,
-                           False);
+            VG_(pp_addrinfo_mc)(VG_(get_error_address)(err), &extra->Err.User.ai,
+                                False);
             if (extra->Err.User.origin_ec && !extra->Err.User.isAddrErr)
                mc_pp_origin( extra->Err.User.origin_ec,
                              extra->Err.User.otag & 3 );
@@ -757,8 +521,8 @@ void MC_(pp_Error) ( Error* err )
                    extra->Err.User.isAddrErr
                       ? "Unaddressable" : "Uninitialised" );
             VG_(pp_ExeContext)( VG_(get_error_where)(err) );
-            mc_pp_AddrInfo(VG_(get_error_address)(err), &extra->Err.User.ai,
-                           False);
+            VG_(pp_addrinfo_mc)(VG_(get_error_address)(err), &extra->Err.User.ai,
+                                False);
             if (extra->Err.User.origin_ec && !extra->Err.User.isAddrErr)
                mc_pp_origin( extra->Err.User.origin_ec,
                              extra->Err.User.otag & 3 );
@@ -771,13 +535,13 @@ void MC_(pp_Error) ( Error* err )
             emit( "  <what>Invalid free() / delete / delete[]"
                   " / realloc()</what>\n" );
             VG_(pp_ExeContext)( VG_(get_error_where)(err) );
-            mc_pp_AddrInfo( VG_(get_error_address)(err),
-                            &extra->Err.Free.ai, False );
+            VG_(pp_addrinfo_mc)( VG_(get_error_address)(err),
+                                 &extra->Err.Free.ai, False );
          } else {
             emit( "Invalid free() / delete / delete[] / realloc()\n" );
             VG_(pp_ExeContext)( VG_(get_error_where)(err) );
-            mc_pp_AddrInfo( VG_(get_error_address)(err),
-                            &extra->Err.Free.ai, False );
+            VG_(pp_addrinfo_mc)( VG_(get_error_address)(err),
+                                 &extra->Err.Free.ai, False );
          }
          break;
 
@@ -786,13 +550,13 @@ void MC_(pp_Error) ( Error* err )
             emit( "  <kind>MismatchedFree</kind>\n" );
             emit( "  <what>Mismatched free() / delete / delete []</what>\n" );
             VG_(pp_ExeContext)( VG_(get_error_where)(err) );
-            mc_pp_AddrInfo(VG_(get_error_address)(err),
-                           &extra->Err.FreeMismatch.ai, False);
+            VG_(pp_addrinfo_mc)(VG_(get_error_address)(err),
+                                &extra->Err.FreeMismatch.ai, False);
          } else {
             emit( "Mismatched free() / delete / delete []\n" );
             VG_(pp_ExeContext)( VG_(get_error_where)(err) );
-            mc_pp_AddrInfo(VG_(get_error_address)(err),
-                           &extra->Err.FreeMismatch.ai, False);
+            VG_(pp_addrinfo_mc)(VG_(get_error_address)(err),
+                                &extra->Err.FreeMismatch.ai, False);
          }
          break;
 
@@ -804,18 +568,18 @@ void MC_(pp_Error) ( Error* err )
                   extra->Err.Addr.isWrite ? "write" : "read",
                   extra->Err.Addr.szB );
             VG_(pp_ExeContext)( VG_(get_error_where)(err) );
-            mc_pp_AddrInfo( VG_(get_error_address)(err),
-                            &extra->Err.Addr.ai,
-                            extra->Err.Addr.maybe_gcc );
+            VG_(pp_addrinfo_mc)( VG_(get_error_address)(err),
+                                 &extra->Err.Addr.ai,
+                                 extra->Err.Addr.maybe_gcc );
          } else {
             emit( "Invalid %s of size %ld\n",
                   extra->Err.Addr.isWrite ? "write" : "read",
                   extra->Err.Addr.szB );
             VG_(pp_ExeContext)( VG_(get_error_where)(err) );
 
-            mc_pp_AddrInfo( VG_(get_error_address)(err),
-                            &extra->Err.Addr.ai,
-                            extra->Err.Addr.maybe_gcc );
+            VG_(pp_addrinfo_mc)( VG_(get_error_address)(err),
+                                 &extra->Err.Addr.ai,
+                                 extra->Err.Addr.maybe_gcc );
          }
          break;
 
@@ -825,13 +589,13 @@ void MC_(pp_Error) ( Error* err )
             emit( "  <what>Jump to the invalid address stated "
                   "on the next line</what>\n" );
             VG_(pp_ExeContext)( VG_(get_error_where)(err) );
-            mc_pp_AddrInfo( VG_(get_error_address)(err), &extra->Err.Jump.ai,
-                            False );
+            VG_(pp_addrinfo_mc)( VG_(get_error_address)(err), &extra->Err.Jump.ai,
+                                 False );
          } else {
             emit( "Jump to the invalid address stated on the next line\n" );
             VG_(pp_ExeContext)( VG_(get_error_where)(err) );
-            mc_pp_AddrInfo( VG_(get_error_address)(err), &extra->Err.Jump.ai,
-                            False );
+            VG_(pp_addrinfo_mc)( VG_(get_error_address)(err), &extra->Err.Jump.ai,
+                                 False );
          }
          break;
 
@@ -839,7 +603,7 @@ void MC_(pp_Error) ( Error* err )
          if (xml) {
             emit( "  <kind>Overlap</kind>\n" );
             if (extra->Err.Overlap.szB == 0) {
-               emiN( "  <what>Source and destination overlap "
+               emit( "  <what>Source and destination overlap "
                      "in %pS(%#lx, %#lx)\n</what>\n",
                      VG_(get_error_string)(err),
                      extra->Err.Overlap.dst, extra->Err.Overlap.src );
@@ -853,7 +617,7 @@ void MC_(pp_Error) ( Error* err )
             VG_(pp_ExeContext)( VG_(get_error_where)(err) );
          } else {
             if (extra->Err.Overlap.szB == 0) {
-               emiN( "Source and destination overlap in %pS(%#lx, %#lx)\n",
+               emit( "Source and destination overlap in %pS(%#lx, %#lx)\n",
                      VG_(get_error_string)(err),
                      extra->Err.Overlap.dst, extra->Err.Overlap.src );
             } else {
@@ -873,13 +637,13 @@ void MC_(pp_Error) ( Error* err )
             emit( "  <kind>InvalidMemPool</kind>\n" );
             emit( "  <what>Illegal memory pool address</what>\n" );
             VG_(pp_ExeContext)( VG_(get_error_where)(err) );
-            mc_pp_AddrInfo( VG_(get_error_address)(err),
-                            &extra->Err.IllegalMempool.ai, False );
+            VG_(pp_addrinfo_mc)( VG_(get_error_address)(err),
+                                 &extra->Err.IllegalMempool.ai, False );
          } else {
             emit( "Illegal memory pool address\n" );
             VG_(pp_ExeContext)( VG_(get_error_where)(err) );
-            mc_pp_AddrInfo( VG_(get_error_address)(err),
-                            &extra->Err.IllegalMempool.ai, False );
+            VG_(pp_addrinfo_mc)( VG_(get_error_address)(err),
+                                 &extra->Err.IllegalMempool.ai, False );
          }
          break;
 
@@ -1183,9 +947,6 @@ static Bool mempool_block_maybe_describe( Addr a, AddrInfo* ai );
 static void describe_addr ( Addr a, /*OUT*/AddrInfo* ai )
 {
    MC_Chunk*  mc;
-   ThreadId   tid;
-   Addr       stack_min, stack_max;
-   VgSectKind sect;
 
    tl_assert(Addr_Undescribed == ai->tag);
 
@@ -1234,78 +995,9 @@ static void describe_addr ( Addr a, /*OUT*/AddrInfo* ai )
       ai->Addr.Block.freed_at = MC_(freed_at)(mc);
       return;
    }
-   /* -- Perhaps the variable type/location data describes it? -- */
-   ai->Addr.Variable.descr1
-      = VG_(newXA)( VG_(malloc), "mc.da.descr1",
-                    VG_(free), sizeof(HChar) );
-   ai->Addr.Variable.descr2
-      = VG_(newXA)( VG_(malloc), "mc.da.descr2",
-                    VG_(free), sizeof(HChar) );
 
-   (void) VG_(get_data_description)( ai->Addr.Variable.descr1,
-                                     ai->Addr.Variable.descr2, a );
-   /* If there's nothing in descr1/2, free them.  Why is it safe to to
-      VG_(indexXA) at zero here?  Because VG_(get_data_description)
-      guarantees to zero terminate descr1/2 regardless of the outcome
-      of the call.  So there's always at least one element in each XA
-      after the call.
-   */
-   if (0 == VG_(strlen)( VG_(indexXA)( ai->Addr.Variable.descr1, 0 ))) {
-      VG_(deleteXA)( ai->Addr.Variable.descr1 );
-      ai->Addr.Variable.descr1 = NULL;
-   }
-   if (0 == VG_(strlen)( VG_(indexXA)( ai->Addr.Variable.descr2, 0 ))) {
-      VG_(deleteXA)( ai->Addr.Variable.descr2 );
-      ai->Addr.Variable.descr2 = NULL;
-   }
-   /* Assume (assert) that VG_(get_data_description) fills in descr1
-      before it fills in descr2 */
-   if (ai->Addr.Variable.descr1 == NULL)
-      tl_assert(ai->Addr.Variable.descr2 == NULL);
-   /* So did we get lucky? */
-   if (ai->Addr.Variable.descr1 != NULL) {
-      ai->tag = Addr_Variable;
-      return;
-   }
-   /* -- Have a look at the low level data symbols - perhaps it's in
-      there. -- */
-   VG_(memset)( &ai->Addr.DataSym.name,
-                0, sizeof(ai->Addr.DataSym.name));
-   if (VG_(get_datasym_and_offset)(
-             a, &ai->Addr.DataSym.name[0],
-             sizeof(ai->Addr.DataSym.name)-1,
-             &ai->Addr.DataSym.offset )) {
-      ai->tag = Addr_DataSym;
-      tl_assert( ai->Addr.DataSym.name
-                    [ sizeof(ai->Addr.DataSym.name)-1 ] == 0);
-      return;
-   }
-   /* -- Perhaps it's on a thread's stack? -- */
-   VG_(thread_stack_reset_iter)(&tid);
-   while ( VG_(thread_stack_next)(&tid, &stack_min, &stack_max) ) {
-      if (stack_min - VG_STACK_REDZONE_SZB <= a && a <= stack_max) {
-         ai->tag            = Addr_Stack;
-         ai->Addr.Stack.tid = tid;
-         return;
-      }
-   }
-   /* -- last ditch attempt at classification -- */
-   tl_assert( sizeof(ai->Addr.SectKind.objname) > 4 );
-   VG_(memset)( &ai->Addr.SectKind.objname, 
-                0, sizeof(ai->Addr.SectKind.objname));
-   VG_(strcpy)( ai->Addr.SectKind.objname, "???" );
-   sect = VG_(DebugInfo_sect_kind)( &ai->Addr.SectKind.objname[0],
-                                    sizeof(ai->Addr.SectKind.objname)-1, a);
-   if (sect != Vg_SectUnknown) {
-      ai->tag = Addr_SectKind;
-      ai->Addr.SectKind.kind = sect;
-      tl_assert( ai->Addr.SectKind.objname
-                    [ sizeof(ai->Addr.SectKind.objname)-1 ] == 0);
-      return;
-   }
-   /* -- Clueless ... -- */
-   ai->tag = Addr_Unknown;
-   return;
+   /* No block found. Search a non-heap block description. */
+   VG_(describe_addr) (a, ai);
 }
 
 void MC_(pp_describe_addr) ( Addr a )
@@ -1314,7 +1006,7 @@ void MC_(pp_describe_addr) ( Addr a )
 
    ai.tag = Addr_Undescribed;
    describe_addr (a, &ai);
-   mc_pp_AddrInfo (a, &ai, /* maybe_gcc */ False);
+   VG_(pp_addrinfo_mc) (a, &ai, /* maybe_gcc */ False);
 }
 
 /* Fill in *origin_ec as specified by otag, or NULL it out if otag

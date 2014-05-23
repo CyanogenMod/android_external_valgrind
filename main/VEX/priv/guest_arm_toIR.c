@@ -485,8 +485,8 @@ static IRExpr* align4if ( IRExpr* e, Bool b )
 #define OFFB_GEFLAG2  offsetof(VexGuestARMState,guest_GEFLAG2)
 #define OFFB_GEFLAG3  offsetof(VexGuestARMState,guest_GEFLAG3)
 
-#define OFFB_TISTART  offsetof(VexGuestARMState,guest_TISTART)
-#define OFFB_TILEN    offsetof(VexGuestARMState,guest_TILEN)
+#define OFFB_CMSTART  offsetof(VexGuestARMState,guest_CMSTART)
+#define OFFB_CMLEN    offsetof(VexGuestARMState,guest_CMLEN)
 
 
 /* ---------------- Integer registers ---------------- */
@@ -13527,6 +13527,27 @@ static Bool decode_CP10_CP11_instruction (
                         condT);
             DIP("fdivd%s d%u, d%u, d%u\n", nCC(conq), dD, dN, dM);
             goto decode_success_vfp;
+         case BITS4(1,1,0,0): /* VFMA: d + n * m (fused) */
+            /* XXXROUNDINGFIXME look up ARM reference for fused
+               multiply-add rounding */
+            putDReg(dD, triop(Iop_AddF64, rm,
+                              getDReg(dD),
+                              triop(Iop_MulF64, rm, getDReg(dN),
+                                                    getDReg(dM))),
+                        condT);
+            DIP("vfmad%s d%u, d%u, d%u\n", nCC(conq), dD, dN, dM);
+            goto decode_success_vfp;
+         case BITS4(1,1,0,1): /* VFMS: d + (-n * m) (fused) */
+            /* XXXROUNDINGFIXME look up ARM reference for fused
+               multiply-add rounding */
+            putDReg(dD, triop(Iop_AddF64, rm,
+                              getDReg(dD),
+                              triop(Iop_MulF64, rm,
+                                    unop(Iop_NegF64, getDReg(dN)),
+                                    getDReg(dM))),
+                        condT);
+            DIP("vfmsd%s d%u, d%u, d%u\n", nCC(conq), dD, dN, dM);
+            goto decode_success_vfp;
          default:
             break;
       }
@@ -13991,6 +14012,27 @@ static Bool decode_CP10_CP11_instruction (
                         condT);
             DIP("fdivs%s s%u, s%u, s%u\n", nCC(conq), fD, fN, fM);
             goto decode_success_vfp;
+         case BITS4(1,1,0,0): /* VFMA: d + n * m (fused) */
+            /* XXXROUNDINGFIXME look up ARM reference for fused
+               multiply-add rounding */
+            putFReg(fD, triop(Iop_AddF32, rm,
+                              getFReg(fD),
+                              triop(Iop_MulF32, rm, getFReg(fN),
+                                                    getFReg(fM))),
+                        condT);
+            DIP("vfmas%s s%u, s%u, s%u\n", nCC(conq), fD, fN, fM);
+            goto decode_success_vfp;
+         case BITS4(1,1,0,1): /* VFMS: d + (-n * m) (fused) */
+            /* XXXROUNDINGFIXME look up ARM reference for fused
+               multiply-add rounding */
+            putFReg(fD, triop(Iop_AddF32, rm,
+                              getFReg(fD),
+                              triop(Iop_MulF32, rm,
+                                    unop(Iop_NegF32, getFReg(fN)),
+                                    getFReg(fM))),
+                        condT);
+            DIP("vfmss%s s%u, s%u, s%u\n", nCC(conq), fD, fN, fM);
+            goto decode_success_vfp;
          default:
             break;
       }
@@ -14250,30 +14292,15 @@ static Bool decode_CP10_CP11_instruction (
       UInt size      = bSX == 0 ? 16 : 32;
       Int  frac_bits = size - ((imm4 << 1) | bI);
       UInt d         = dp_op  ? ((bD << 4) | Vd)  : ((Vd << 1) | bD);
-      if (frac_bits >= 1 && frac_bits <= 32 && !to_fixed && size == 32) {
-         /* dp_op == 0 : VCVT.F32.{S,U}32 S[d], S[d], #frac_bits */
-         /* dp_op == 1 : VCVT.F64.{S,U}32 D[d], D[d], #frac_bits */
+      if (frac_bits >= 1 && frac_bits <= 32 && !to_fixed && !dp_op
+                                            && size == 32) {
+         /* VCVT.F32.{S,U}32 S[d], S[d], #frac_bits */
          /* This generates really horrible code.  We could potentially
             do much better. */
          IRTemp rmode = newTemp(Ity_I32);
          assign(rmode, mkU32(Irrm_NEAREST)); // per the spec
          IRTemp src32 = newTemp(Ity_I32);
-         if (dp_op == 0) {
-            assign(src32,  unop(Iop_ReinterpF32asI32, getFReg(d)));
-         } else {
-            /* Example code sequence of using vcvt.f64.s32. The s32 value is
-               initialized in s14 but loaded via d7 (s14 is the low half of
-               d7), so we need to decode the register using getDReg instead of
-               getFReg. Since the conversion size is from s32 to f64, we also
-               need to explicitly extract the low half of i64 here.
-
-               81a0:       ee07 2a10       vmov            s14, r2
-               81a4:       eeba 7bef       vcvt.f64.s32    d7, d7, #1
-             */
-            IRTemp src64 = newTemp(Ity_I64);
-            assign(src64,  unop(Iop_ReinterpF64asI64, getDReg(d)));
-            assign(src32, unop(Iop_64to32, mkexpr(src64)));
-         }
+         assign(src32,  unop(Iop_ReinterpF32asI32, getFReg(d)));
          IRExpr* as_F64 = unop( unsyned ? Iop_I32UtoF64 : Iop_I32StoF64,
                                 mkexpr(src32 ) );
          IRTemp scale = newTemp(Ity_F64);
@@ -14283,16 +14310,10 @@ static Bool decode_CP10_CP11_instruction (
                                 rm, as_F64, 
                                 triop(Iop_AddF64, rm, mkexpr(scale),
                                                       mkexpr(scale)));
-         if (dp_op == 0) {
-            IRExpr* resF32 = binop(Iop_F64toF32, mkexpr(rmode), resF64);
-            putFReg(d, resF32, condT);
-            DIP("vcvt.f32.%c32, s%u, s%u, #%d\n",
-                unsyned ? 'u' : 's', d, d, frac_bits);
-         } else {
-            putDReg(d, resF64, condT);
-            DIP("vcvt.f64.%c32, d%u, d%u, #%d\n",
-                unsyned ? 'u' : 's', d, d, frac_bits);
-         }
+         IRExpr* resF32 = binop(Iop_F64toF32, mkexpr(rmode), resF64);
+         putFReg(d, resF32, condT);
+         DIP("vcvt.f32.%c32, s%u, s%u, #%d\n",
+             unsyned ? 'u' : 's', d, d, frac_bits);
          goto decode_success_vfp;
       }
       if (frac_bits >= 1 && frac_bits <= 32 && !to_fixed && dp_op
@@ -14626,11 +14647,11 @@ DisResult disInstr_ARM_WRK (
             // injecting here can change. In which case the translation has to
             // be redone. For ease of handling, we simply invalidate all the
             // time.
-            stmt(IRStmt_Put(OFFB_TISTART, mkU32(guest_R15_curr_instr_notENC)));
-            stmt(IRStmt_Put(OFFB_TILEN,   mkU32(20)));
+            stmt(IRStmt_Put(OFFB_CMSTART, mkU32(guest_R15_curr_instr_notENC)));
+            stmt(IRStmt_Put(OFFB_CMLEN,   mkU32(20)));
             llPutIReg(15, mkU32( guest_R15_curr_instr_notENC + 20 ));
             dres.whatNext    = Dis_StopHere;
-            dres.jk_StopHere = Ijk_TInval;
+            dres.jk_StopHere = Ijk_InvalICache;
             goto decode_success;
          }
          /* We don't know what it is.  Set opc1/opc2 so decode_failure
@@ -16696,30 +16717,6 @@ DisResult disInstr_ARM_WRK (
       }
    }
 
-   /* ------------------- smmla ------------------ */
-   if (INSN(27,20) == BITS8(0,1,1,1,0,1,0,1)
-       && INSN(15,12) != BITS4(1,1,1,1)
-       && (INSN(7,4) & BITS4(1,1,0,1)) == BITS4(0,0,0,1)) {
-      UInt bitR = INSN(5,5);
-      UInt rD = INSN(19,16);
-      UInt rA = INSN(15,12);
-      UInt rM = INSN(11,8);
-      UInt rN = INSN(3,0);
-      if (rD != 15 && rM != 15 && rN != 15) {
-         IRExpr* res
-         = unop(Iop_64HIto32,
-                binop(Iop_Add64,
-                      binop(Iop_Add64,
-                            binop(Iop_32HLto64, getIRegA(rA), mkU32(0)),
-                            binop(Iop_MullS32, getIRegA(rN), getIRegA(rM))),
-                      mkU64(bitR ? 0x80000000ULL : 0ULL)));
-         putIRegA(rD, res, condT, Ijk_Boring);
-         DIP("smmla%s%s r%u, r%u, r%u, r%u\n",
-             nCC(INSN_COND), bitR ? "r" : "", rD, rN, rM, rA);
-         goto decode_success;
-      }
-   }
-
    /* ------------------- NOP ------------------ */
    if (0x0320F000 == (insn & 0x0FFFFFFF)) {
       DIP("nop%s\n", nCC(INSN_COND));
@@ -17495,11 +17492,11 @@ DisResult disInstr_THUMB_WRK (
             // injecting here can change. In which case the translation has to
             // be redone. For ease of handling, we simply invalidate all the
             // time.
-            stmt(IRStmt_Put(OFFB_TISTART, mkU32(guest_R15_curr_instr_notENC)));
-            stmt(IRStmt_Put(OFFB_TILEN,   mkU32(20)));
+            stmt(IRStmt_Put(OFFB_CMSTART, mkU32(guest_R15_curr_instr_notENC)));
+            stmt(IRStmt_Put(OFFB_CMLEN,   mkU32(20)));
             llPutIReg(15, mkU32( (guest_R15_curr_instr_notENC + 20) | 1 ));
             dres.whatNext    = Dis_StopHere;
-            dres.jk_StopHere = Ijk_TInval;
+            dres.jk_StopHere = Ijk_InvalICache;
             goto decode_success;
          }
          /* We don't know what it is.  Set insn0 so decode_failure
@@ -18174,7 +18171,7 @@ DisResult disInstr_THUMB_WRK (
       /* Branch to reg, and optionally switch modes.  Reg contains a
          suitably encoded address therefore (w CPSR.T at the bottom).
          Have to special-case r15, as usual. */
-      UInt rM = INSN0(6,3);
+      UInt rM = (INSN0(6,6) << 3) | INSN0(5,3);
       if (BITS3(0,0,0) == INSN0(2,0)) {
          IRTemp dst = newTemp(Ity_I32);
          gen_SIGILL_T_if_in_but_NLI_ITBlock(old_itstate, new_itstate);
@@ -18789,7 +18786,7 @@ DisResult disInstr_THUMB_WRK (
 
       assign(ea, binop(Iop_Add32, 
                        binop(Iop_And32, getIRegT(15), mkU32(~3U)),
-                       mkU32(imm8 << 2)));
+                       mkU32(imm8 * 4)));
       put_ITSTATE(old_itstate); // backout
       IRTemp tD = newTemp(Ity_I32);
       loadGuardedLE( tD, ILGop_Ident32, mkexpr(ea), llGetIReg(rD), condT );
@@ -19806,9 +19803,8 @@ DisResult disInstr_THUMB_WRK (
        && INSN1(15,15) == 0) {
       UInt rD = INSN1(11,8);
       UInt rN = INSN1(3,0);
-      UInt bS    = INSN0(4,4);
-      int badRegs = bS ? (isBadRegT(rD) || isBadRegT(rN)) : (rD == 15 || rN == 15 || (rD == 15 && rN == 15));
-      if (!badRegs) {
+      if (!isBadRegT(rD) && !isBadRegT(rN)) {
+         UInt bS    = INSN0(4,4);
          UInt isMVN = INSN0(5,5);
          UInt imm5  = (INSN1(14,12) << 2) | INSN1(7,6);
          UInt how   = INSN1(5,4);
@@ -20331,10 +20327,11 @@ DisResult disInstr_THUMB_WRK (
    */
    if (INSN0(15,9) == BITS7(1,1,1,1,1,0,0)) {
       Bool   valid  = True;
-      Bool   syned  = INSN0(8,8);
+      Bool   syned  = INSN0(8,8) == 1;
       Bool   isST   = False;
       IRType ty     = Ity_I8;
-      Bool   bU     = INSN0(7,7); // + or - ( - is only supported by literal versions)
+      UInt   bU     = INSN0(7,7); // 1: +imm   0: -imm
+                                  // -imm is only supported by literal versions
       const HChar* nm = "???";
 
       switch (INSN0(6,4)) {
@@ -20369,7 +20366,7 @@ DisResult disInstr_THUMB_WRK (
          if (rN == 15 || rT == 15)
             valid = False;
       } else {
-         /* For a 32-bit load, rT == 15 is only allowable if we not
+         /* For a 32-bit load, rT == 15 is only allowable if we are not
             in an IT block, or are the last in it.  Need to insert
             a dynamic check for that.  Also, in this particular
             case, rN == 15 is allowable.  In this case however, the
@@ -20405,7 +20402,8 @@ DisResult disInstr_THUMB_WRK (
 
          IRTemp transAddr = newTemp(Ity_I32);
          assign(transAddr,
-                binop( bU == 1 ? Iop_Add32 : Iop_Sub32, mkexpr(rNt), mkU32(imm12) ));
+                binop(bU == 1 ? Iop_Add32 : Iop_Sub32,
+                      mkexpr(rNt), mkU32(imm12)));
 
          IRTemp oldRt = newTemp(Ity_I32);
          assign(oldRt, getIRegT(rT));
@@ -20499,18 +20497,11 @@ DisResult disInstr_THUMB_WRK (
 
       if (valid) {
          IRTemp preAddr = newTemp(Ity_I32);
-         /* See http://www.keil.com/support/man/docs/ARMASM/ARMASM_Cacdbfji.htm
-            "For all other instructions that use labels, the value of the PC is the
-             address of the current instruction plus 4 bytes, with bit[1] of the result
-             cleared to 0 to make it word-aligned"
-         */
-         assign(preAddr,
-                15 == rN 
-                    ? binop(Iop_And32, getIRegT(15), mkU32(~3U)) 
-                    : getIRegT(rN));
+         assign(preAddr, 15 == rN
+                           ? binop(Iop_And32, getIRegT(15), mkU32(~3U))
+                           : getIRegT(rN));
 
          IRTemp postAddr = newTemp(Ity_I32);
-
          assign(postAddr, binop(bU == 1 ? Iop_Add32 : Iop_Sub32,
                                 mkexpr(preAddr), mkU32(imm8 << 2)));
 
@@ -21785,30 +21776,6 @@ DisResult disInstr_THUMB_WRK (
       UInt bU    = INSN0(7,7);
       DIP("pli [pc, #%c%u]\n", bU == 1 ? '+' : '-', imm12);
       goto decode_success;
-   }
-
-   /* ------------------- (T1) SMMLA{R} ------------------ */
-   if (INSN0(15,7) == BITS9(1,1,1,1,1,0,1,1,0)
-       && INSN0(6,4) == BITS3(1,0,1)
-       && INSN1(7,5) == BITS3(0,0,0)) {
-      UInt bitR = INSN1(4,4);
-      UInt rA = INSN1(15,12);
-      UInt rD = INSN1(11,8);
-      UInt rM = INSN1(3,0);
-      UInt rN = INSN0(3,0);
-      if (!isBadRegT(rD) && !isBadRegT(rN) && !isBadRegT(rM) && (rA != 13)) {
-         IRExpr* res
-         = unop(Iop_64HIto32,
-                binop(Iop_Add64,
-                      binop(Iop_Add64,
-                            binop(Iop_32HLto64, getIRegT(rA), mkU32(0)),
-                            binop(Iop_MullS32, getIRegT(rN), getIRegT(rM))),
-                      mkU64(bitR ? 0x80000000ULL : 0ULL)));
-         putIRegT(rD, res, condT);
-         DIP("smmla%s r%u, r%u, r%u, r%u\n",
-             bitR ? "r" : "", rD, rN, rM, rA);
-         goto decode_success;
-      }
    }
 
    /* ----------------------------------------------------------- */

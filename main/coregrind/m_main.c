@@ -73,31 +73,6 @@
 
 
 /*====================================================================*/
-/*=== Counters, for profiling purposes only                        ===*/
-/*====================================================================*/
-
-static void print_all_stats ( void )
-{
-   VG_(print_translation_stats)();
-   VG_(print_tt_tc_stats)();
-   VG_(print_scheduler_stats)();
-   VG_(print_ExeContext_stats)( False /* with_stacktraces */ );
-   VG_(print_errormgr_stats)();
-
-   // Memory stats
-   if (VG_(clo_verbosity) > 2) {
-      VG_(message)(Vg_DebugMsg, "\n");
-      VG_(message)(Vg_DebugMsg, 
-         "------ Valgrind's internal memory use stats follow ------\n" );
-      VG_(sanity_check_malloc_all)();
-      VG_(message)(Vg_DebugMsg, "------\n" );
-      VG_(print_all_arena_stats)();
-      VG_(message)(Vg_DebugMsg, "\n");
-   }
-}
-
-
-/*====================================================================*/
 /*=== Command-line: variables, processing, etc                     ===*/
 /*====================================================================*/
 
@@ -133,6 +108,8 @@ static void usage_NORETURN ( Bool debug_help )
 "    --vgdb-error=<number>     invoke gdbserver after <number> errors [%d]\n"
 "                              to get started quickly, use --vgdb-error=0\n"
 "                              and follow the on-screen directions\n"
+"    --vgdb-stop-at=event1,event2,... invoke gdbserver for given events [none]\n"
+"         where event is one of startup exit valgrindabexit all none\n"
 "    --track-fds=no|yes        track open file descriptors? [no]\n"
 "    --time-stamp=no|yes       add timestamps to log messages? [no]\n"
 "    --log-fd=<number>         log messages to file descriptor [2=stderr]\n"
@@ -202,6 +179,7 @@ static void usage_NORETURN ( Bool debug_help )
 "           program counters in max <number> frames) [0]\n"
 "    --num-transtab-sectors=<number> size of translated code cache [%d]\n"
 "           more sectors may increase performance, but use more memory.\n"
+"    --aspace-minaddr=0xPP     avoid mapping memory below 0xPP [guessed]\n"
 "    --show-emwarns=no|yes     show warnings about emulation limits? [no]\n"
 "    --require-text-symbol=:sonamepattern:symbolpattern    abort run if the\n"
 "                              stated shared object doesn't have the stated\n"
@@ -516,10 +494,11 @@ void main_process_cmd_line_options ( /*OUT*/Bool* logging_to_fd,
       else if VG_STREQ(     arg, "-d")                   {}
       else if VG_STREQN(17, arg, "--max-stackframe=")    {}
       else if VG_STREQN(17, arg, "--main-stacksize=")    {}
-      else if VG_STREQN(12, arg,  "--sim-hints=")        {}
+      else if VG_STREQN(12, arg, "--sim-hints=")         {}
       else if VG_STREQN(15, arg, "--profile-heap=")      {}
       else if VG_STREQN(20, arg, "--core-redzone-size=") {}
       else if VG_STREQN(15, arg, "--redzone-size=")      {}
+      else if VG_STREQN(17, arg, "--aspace-minaddr=")    {}
 
       /* Obsolete options. Report an error and exit */
       else if VG_STREQN(34, arg, "--vex-iropt-precise-memory-exns=no") {
@@ -562,6 +541,11 @@ void main_process_cmd_line_options ( /*OUT*/Bool* logging_to_fd,
       }
       else if VG_INT_CLO (arg, "--vgdb-poll",      VG_(clo_vgdb_poll)) {}
       else if VG_INT_CLO (arg, "--vgdb-error",     VG_(clo_vgdb_error)) {}
+      else if VG_STR_CLO (arg, "--vgdb-stop-at", tmp_str) {
+         if (!VG_(parse_enum_set)("startup,exit,valgrindabexit", tmp_str,
+                                  &VG_(clo_vgdb_stop_at)))
+            VG_(fmsg_bad_option)(arg, "");
+      }
       else if VG_STR_CLO (arg, "--vgdb-prefix",    VG_(clo_vgdb_prefix)) {
          VG_(arg_vgdb_prefix) = arg;
       }
@@ -1560,10 +1544,12 @@ Int valgrind_main ( Int argc, HChar **argv, HChar **envp )
    //--------------------------------------------------------------
    /* Start the debugging-log system ASAP.  First find out how many 
       "-d"s were specified.  This is a pre-scan of the command line.  Also
-      get --profile-heap=yes, --core-redzone-size, --redzone-size which are
-      needed by the time we start up dynamic memory management.  */
+      get --profile-heap=yes, --core-redzone-size, --redzone-size
+      --aspace-minaddr which are needed by the time we start up dynamic
+      memory management.  */
    loglevel = 0;
    for (i = 1; i < argc; i++) {
+      const HChar* tmp_str;
       if (argv[i][0] != '-') break;
       if VG_STREQ(argv[i], "--") break;
       if VG_STREQ(argv[i], "-d") loglevel++;
@@ -1572,6 +1558,23 @@ Int valgrind_main ( Int argc, HChar **argv, HChar **envp )
                      0, MAX_CLO_REDZONE_SZB) {}
       if VG_BINT_CLO(argv[i], "--redzone-size", VG_(clo_redzone_size),
                      0, MAX_CLO_REDZONE_SZB) {}
+      if VG_STR_CLO(argv[i], "--aspace-minaddr", tmp_str) {
+#        if VG_WORDSIZE == 4
+         const Addr max = (Addr) 0x40000000; // 1Gb
+#        else
+         const Addr max = (Addr) 0x200000000; // 8Gb
+#        endif
+         Bool ok = VG_(parse_Addr) (&tmp_str, &VG_(clo_aspacem_minAddr));
+         if (!ok)
+            VG_(fmsg_bad_option)(argv[i], "Invalid address\n");
+
+         if (!VG_IS_PAGE_ALIGNED(VG_(clo_aspacem_minAddr))
+             || VG_(clo_aspacem_minAddr) < (Addr) 0x1000
+             || VG_(clo_aspacem_minAddr) > max) // 1Gb
+            VG_(fmsg_bad_option)(argv[i], 
+                                 "Must be a page aligned address between "
+                                 "0x1000 and 0x%lx\n", max);
+      }
    }
 
    /* ... and start the debug logger.  Now we can safely emit logging
@@ -2439,7 +2442,13 @@ void shutdown_actions_NORETURN( ThreadId tid,
       vg_assert(VG_(count_living_threads)() >= 1);
    }
 
+   /* Final call to gdbserver, if requested. */
+   if (VG_(gdbserver_stop_at) (VgdbStopAt_Exit)) {
+      VG_(umsg)("(action at exit) vgdb me ... \n");
+      VG_(gdbserver) (tid);
+   }
    VG_(threads)[tid].status = VgTs_Empty;
+
    //--------------------------------------------------------------
    // Finalisation: cleanup, messages, etc.  Order not so important, only
    // affects what order the messages come.
@@ -2489,7 +2498,8 @@ void shutdown_actions_NORETURN( ThreadId tid,
    VG_(sanity_check_general)( True /*include expensive checks*/ );
 
    if (VG_(clo_stats))
-      print_all_stats();
+      VG_(print_all_stats)(VG_(clo_verbosity) > 2, /* Memory stats */
+                           False /* tool prints stats in the tool fini */);
 
    /* Show a profile of the heap(s) at shutdown.  Optionally, first
       throw away all the debug info, as that makes it easy to spot
@@ -2513,7 +2523,7 @@ void shutdown_actions_NORETURN( ThreadId tid,
    /* Flush any output cached by previous calls to VG_(message). */
    VG_(message_flush)();
 
-   /* terminate gdbserver if ever it was started. We terminate it here
+   /* Terminate gdbserver if ever it was started. We terminate it here
       so that it get the output above if output was redirected to
       gdb */
    VG_(gdbserver_exit) (tid, tids_schedretcode);
@@ -2532,11 +2542,11 @@ void shutdown_actions_NORETURN( ThreadId tid,
          if an error was found */
       if (VG_(clo_error_exitcode) > 0 
           && VG_(get_n_errs_found)() > 0) {
-         VG_(exit)( VG_(clo_error_exitcode) );
+         VG_(client_exit)( VG_(clo_error_exitcode) );
       } else {
          /* otherwise, return the client's exit code, in the normal
             way. */
-         VG_(exit)( VG_(threads)[tid].os_state.exitcode );
+         VG_(client_exit)( VG_(threads)[tid].os_state.exitcode );
       }
       /* NOT ALIVE HERE! */
       VG_(core_panic)("entered the afterlife in main() -- ExitT/P");

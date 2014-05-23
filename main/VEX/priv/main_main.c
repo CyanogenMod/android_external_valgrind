@@ -92,6 +92,7 @@ static  Int sdiv32 (  Int x,  Int y ) { return x/y; }
 
 void LibVEX_default_VexControl ( /*OUT*/ VexControl* vcon )
 {
+   vex_bzero(vcon, sizeof(*vcon));
    vcon->iropt_verbosity            = 0;
    vcon->iropt_level                = 2;
    vcon->iropt_register_updates     = VexRegUpdUnwindregsAtMemAccess;
@@ -236,7 +237,7 @@ VexTranslateResult LibVEX_Translate ( VexTranslateArgs* vta )
    HInstrArray*    vcode;
    HInstrArray*    rcode;
    Int             i, j, k, out_used, guest_sizeB;
-   Int             offB_TISTART, offB_TILEN, offB_GUEST_IP, szB_GUEST_IP;
+   Int             offB_CMSTART, offB_CMLEN, offB_GUEST_IP, szB_GUEST_IP;
    Int             offB_HOST_EvC_COUNTER, offB_HOST_EvC_FAILADDR;
    UChar           insn_bytes[128];
    IRType          guest_word_type;
@@ -262,8 +263,8 @@ VexTranslateResult LibVEX_Translate ( VexTranslateArgs* vta )
    disInstrFn             = NULL;
    guest_word_type        = Ity_INVALID;
    host_word_type         = Ity_INVALID;
-   offB_TISTART           = 0;
-   offB_TILEN             = 0;
+   offB_CMSTART           = 0;
+   offB_CMLEN             = 0;
    offB_GUEST_IP          = 0;
    szB_GUEST_IP           = 0;
    offB_HOST_EvC_COUNTER  = 0;
@@ -506,16 +507,16 @@ VexTranslateResult LibVEX_Translate ( VexTranslateArgs* vta )
          guest_sizeB            = sizeof(VexGuestX86State);
          guest_word_type        = Ity_I32;
          guest_layout           = &x86guest_layout;
-         offB_TISTART           = offsetof(VexGuestX86State,guest_TISTART);
-         offB_TILEN             = offsetof(VexGuestX86State,guest_TILEN);
+         offB_CMSTART           = offsetof(VexGuestX86State,guest_CMSTART);
+         offB_CMLEN             = offsetof(VexGuestX86State,guest_CMLEN);
          offB_GUEST_IP          = offsetof(VexGuestX86State,guest_EIP);
          szB_GUEST_IP           = sizeof( ((VexGuestX86State*)0)->guest_EIP );
          offB_HOST_EvC_COUNTER  = offsetof(VexGuestX86State,host_EvC_COUNTER);
          offB_HOST_EvC_FAILADDR = offsetof(VexGuestX86State,host_EvC_FAILADDR);
          vassert(are_valid_hwcaps(VexArchX86, vta->archinfo_guest.hwcaps));
          vassert(0 == sizeof(VexGuestX86State) % 16);
-         vassert(sizeof( ((VexGuestX86State*)0)->guest_TISTART) == 4);
-         vassert(sizeof( ((VexGuestX86State*)0)->guest_TILEN  ) == 4);
+         vassert(sizeof( ((VexGuestX86State*)0)->guest_CMSTART) == 4);
+         vassert(sizeof( ((VexGuestX86State*)0)->guest_CMLEN  ) == 4);
          vassert(sizeof( ((VexGuestX86State*)0)->guest_NRADDR ) == 4);
          break;
 
@@ -526,16 +527,16 @@ VexTranslateResult LibVEX_Translate ( VexTranslateArgs* vta )
          guest_sizeB            = sizeof(VexGuestAMD64State);
          guest_word_type        = Ity_I64;
          guest_layout           = &amd64guest_layout;
-         offB_TISTART           = offsetof(VexGuestAMD64State,guest_TISTART);
-         offB_TILEN             = offsetof(VexGuestAMD64State,guest_TILEN);
+         offB_CMSTART           = offsetof(VexGuestAMD64State,guest_CMSTART);
+         offB_CMLEN             = offsetof(VexGuestAMD64State,guest_CMLEN);
          offB_GUEST_IP          = offsetof(VexGuestAMD64State,guest_RIP);
          szB_GUEST_IP           = sizeof( ((VexGuestAMD64State*)0)->guest_RIP );
          offB_HOST_EvC_COUNTER  = offsetof(VexGuestAMD64State,host_EvC_COUNTER);
          offB_HOST_EvC_FAILADDR = offsetof(VexGuestAMD64State,host_EvC_FAILADDR);
          vassert(are_valid_hwcaps(VexArchAMD64, vta->archinfo_guest.hwcaps));
          vassert(0 == sizeof(VexGuestAMD64State) % 16);
-         vassert(sizeof( ((VexGuestAMD64State*)0)->guest_TISTART ) == 8);
-         vassert(sizeof( ((VexGuestAMD64State*)0)->guest_TILEN   ) == 8);
+         vassert(sizeof( ((VexGuestAMD64State*)0)->guest_CMSTART ) == 8);
+         vassert(sizeof( ((VexGuestAMD64State*)0)->guest_CMLEN   ) == 8);
          vassert(sizeof( ((VexGuestAMD64State*)0)->guest_NRADDR  ) == 8);
          break;
 
@@ -546,16 +547,16 @@ VexTranslateResult LibVEX_Translate ( VexTranslateArgs* vta )
          guest_sizeB            = sizeof(VexGuestPPC32State);
          guest_word_type        = Ity_I32;
          guest_layout           = &ppc32Guest_layout;
-         offB_TISTART           = offsetof(VexGuestPPC32State,guest_TISTART);
-         offB_TILEN             = offsetof(VexGuestPPC32State,guest_TILEN);
+         offB_CMSTART           = offsetof(VexGuestPPC32State,guest_CMSTART);
+         offB_CMLEN             = offsetof(VexGuestPPC32State,guest_CMLEN);
          offB_GUEST_IP          = offsetof(VexGuestPPC32State,guest_CIA);
          szB_GUEST_IP           = sizeof( ((VexGuestPPC32State*)0)->guest_CIA );
          offB_HOST_EvC_COUNTER  = offsetof(VexGuestPPC32State,host_EvC_COUNTER);
          offB_HOST_EvC_FAILADDR = offsetof(VexGuestPPC32State,host_EvC_FAILADDR);
          vassert(are_valid_hwcaps(VexArchPPC32, vta->archinfo_guest.hwcaps));
          vassert(0 == sizeof(VexGuestPPC32State) % 16);
-         vassert(sizeof( ((VexGuestPPC32State*)0)->guest_TISTART ) == 4);
-         vassert(sizeof( ((VexGuestPPC32State*)0)->guest_TILEN   ) == 4);
+         vassert(sizeof( ((VexGuestPPC32State*)0)->guest_CMSTART ) == 4);
+         vassert(sizeof( ((VexGuestPPC32State*)0)->guest_CMLEN   ) == 4);
          vassert(sizeof( ((VexGuestPPC32State*)0)->guest_NRADDR  ) == 4);
          break;
 
@@ -566,16 +567,16 @@ VexTranslateResult LibVEX_Translate ( VexTranslateArgs* vta )
          guest_sizeB            = sizeof(VexGuestPPC64State);
          guest_word_type        = Ity_I64;
          guest_layout           = &ppc64Guest_layout;
-         offB_TISTART           = offsetof(VexGuestPPC64State,guest_TISTART);
-         offB_TILEN             = offsetof(VexGuestPPC64State,guest_TILEN);
+         offB_CMSTART           = offsetof(VexGuestPPC64State,guest_CMSTART);
+         offB_CMLEN             = offsetof(VexGuestPPC64State,guest_CMLEN);
          offB_GUEST_IP          = offsetof(VexGuestPPC64State,guest_CIA);
          szB_GUEST_IP           = sizeof( ((VexGuestPPC64State*)0)->guest_CIA );
          offB_HOST_EvC_COUNTER  = offsetof(VexGuestPPC64State,host_EvC_COUNTER);
          offB_HOST_EvC_FAILADDR = offsetof(VexGuestPPC64State,host_EvC_FAILADDR);
          vassert(are_valid_hwcaps(VexArchPPC64, vta->archinfo_guest.hwcaps));
          vassert(0 == sizeof(VexGuestPPC64State) % 16);
-         vassert(sizeof( ((VexGuestPPC64State*)0)->guest_TISTART    ) == 8);
-         vassert(sizeof( ((VexGuestPPC64State*)0)->guest_TILEN      ) == 8);
+         vassert(sizeof( ((VexGuestPPC64State*)0)->guest_CMSTART    ) == 8);
+         vassert(sizeof( ((VexGuestPPC64State*)0)->guest_CMLEN      ) == 8);
          vassert(sizeof( ((VexGuestPPC64State*)0)->guest_NRADDR     ) == 8);
          vassert(sizeof( ((VexGuestPPC64State*)0)->guest_NRADDR_GPR2) == 8);
          break;
@@ -587,16 +588,16 @@ VexTranslateResult LibVEX_Translate ( VexTranslateArgs* vta )
          guest_sizeB      = sizeof(VexGuestS390XState);
          guest_word_type  = Ity_I64;
          guest_layout     = &s390xGuest_layout;
-         offB_TISTART     = offsetof(VexGuestS390XState,guest_TISTART);
-         offB_TILEN       = offsetof(VexGuestS390XState,guest_TILEN);
+         offB_CMSTART     = offsetof(VexGuestS390XState,guest_CMSTART);
+         offB_CMLEN       = offsetof(VexGuestS390XState,guest_CMLEN);
          offB_GUEST_IP          = offsetof(VexGuestS390XState,guest_IA);
          szB_GUEST_IP           = sizeof( ((VexGuestS390XState*)0)->guest_IA);
          offB_HOST_EvC_COUNTER  = offsetof(VexGuestS390XState,host_EvC_COUNTER);
          offB_HOST_EvC_FAILADDR = offsetof(VexGuestS390XState,host_EvC_FAILADDR);
          vassert(are_valid_hwcaps(VexArchS390X, vta->archinfo_guest.hwcaps));
          vassert(0 == sizeof(VexGuestS390XState) % 16);
-         vassert(sizeof( ((VexGuestS390XState*)0)->guest_TISTART    ) == 8);
-         vassert(sizeof( ((VexGuestS390XState*)0)->guest_TILEN      ) == 8);
+         vassert(sizeof( ((VexGuestS390XState*)0)->guest_CMSTART    ) == 8);
+         vassert(sizeof( ((VexGuestS390XState*)0)->guest_CMLEN      ) == 8);
          vassert(sizeof( ((VexGuestS390XState*)0)->guest_NRADDR     ) == 8);
          break;
 
@@ -607,16 +608,16 @@ VexTranslateResult LibVEX_Translate ( VexTranslateArgs* vta )
          guest_sizeB            = sizeof(VexGuestARMState);
          guest_word_type        = Ity_I32;
          guest_layout           = &armGuest_layout;
-         offB_TISTART           = offsetof(VexGuestARMState,guest_TISTART);
-         offB_TILEN             = offsetof(VexGuestARMState,guest_TILEN);
+         offB_CMSTART           = offsetof(VexGuestARMState,guest_CMSTART);
+         offB_CMLEN             = offsetof(VexGuestARMState,guest_CMLEN);
          offB_GUEST_IP          = offsetof(VexGuestARMState,guest_R15T);
          szB_GUEST_IP           = sizeof( ((VexGuestARMState*)0)->guest_R15T );
          offB_HOST_EvC_COUNTER  = offsetof(VexGuestARMState,host_EvC_COUNTER);
          offB_HOST_EvC_FAILADDR = offsetof(VexGuestARMState,host_EvC_FAILADDR);
          vassert(are_valid_hwcaps(VexArchARM, vta->archinfo_guest.hwcaps));
          vassert(0 == sizeof(VexGuestARMState) % 16);
-         vassert(sizeof( ((VexGuestARMState*)0)->guest_TISTART) == 4);
-         vassert(sizeof( ((VexGuestARMState*)0)->guest_TILEN  ) == 4);
+         vassert(sizeof( ((VexGuestARMState*)0)->guest_CMSTART) == 4);
+         vassert(sizeof( ((VexGuestARMState*)0)->guest_CMLEN  ) == 4);
          vassert(sizeof( ((VexGuestARMState*)0)->guest_NRADDR ) == 4);
          break;
 
@@ -627,16 +628,16 @@ VexTranslateResult LibVEX_Translate ( VexTranslateArgs* vta )
          guest_sizeB          = sizeof(VexGuestARM64State);
          guest_word_type      = Ity_I64;
          guest_layout         = &arm64Guest_layout;
-         offB_TISTART         = offsetof(VexGuestARM64State,guest_TISTART);
-         offB_TILEN           = offsetof(VexGuestARM64State,guest_TILEN);
+         offB_CMSTART         = offsetof(VexGuestARM64State,guest_CMSTART);
+         offB_CMLEN           = offsetof(VexGuestARM64State,guest_CMLEN);
          offB_GUEST_IP        = offsetof(VexGuestARM64State,guest_PC);
          szB_GUEST_IP         = sizeof( ((VexGuestARM64State*)0)->guest_PC );
          offB_HOST_EvC_COUNTER  = offsetof(VexGuestARM64State,host_EvC_COUNTER);
          offB_HOST_EvC_FAILADDR = offsetof(VexGuestARM64State,host_EvC_FAILADDR);
          vassert(are_valid_hwcaps(VexArchARM64, vta->archinfo_guest.hwcaps));
          vassert(0 == sizeof(VexGuestARM64State) % 16);
-         vassert(sizeof( ((VexGuestARM64State*)0)->guest_TISTART) == 8);
-         vassert(sizeof( ((VexGuestARM64State*)0)->guest_TILEN  ) == 8);
+         vassert(sizeof( ((VexGuestARM64State*)0)->guest_CMSTART) == 8);
+         vassert(sizeof( ((VexGuestARM64State*)0)->guest_CMLEN  ) == 8);
          vassert(sizeof( ((VexGuestARM64State*)0)->guest_NRADDR ) == 8);
          break;
 
@@ -647,16 +648,16 @@ VexTranslateResult LibVEX_Translate ( VexTranslateArgs* vta )
          guest_sizeB            = sizeof(VexGuestMIPS32State);
          guest_word_type        = Ity_I32;
          guest_layout           = &mips32Guest_layout;
-         offB_TISTART           = offsetof(VexGuestMIPS32State,guest_TISTART);
-         offB_TILEN             = offsetof(VexGuestMIPS32State,guest_TILEN);
+         offB_CMSTART           = offsetof(VexGuestMIPS32State,guest_CMSTART);
+         offB_CMLEN             = offsetof(VexGuestMIPS32State,guest_CMLEN);
          offB_GUEST_IP          = offsetof(VexGuestMIPS32State,guest_PC);
          szB_GUEST_IP           = sizeof( ((VexGuestMIPS32State*)0)->guest_PC );
          offB_HOST_EvC_COUNTER  = offsetof(VexGuestMIPS32State,host_EvC_COUNTER);
          offB_HOST_EvC_FAILADDR = offsetof(VexGuestMIPS32State,host_EvC_FAILADDR);
          vassert(are_valid_hwcaps(VexArchMIPS32, vta->archinfo_guest.hwcaps));
          vassert(0 == sizeof(VexGuestMIPS32State) % 16);
-         vassert(sizeof( ((VexGuestMIPS32State*)0)->guest_TISTART) == 4);
-         vassert(sizeof( ((VexGuestMIPS32State*)0)->guest_TILEN  ) == 4);
+         vassert(sizeof( ((VexGuestMIPS32State*)0)->guest_CMSTART) == 4);
+         vassert(sizeof( ((VexGuestMIPS32State*)0)->guest_CMLEN  ) == 4);
          vassert(sizeof( ((VexGuestMIPS32State*)0)->guest_NRADDR ) == 4);
          break;
 
@@ -667,16 +668,16 @@ VexTranslateResult LibVEX_Translate ( VexTranslateArgs* vta )
          guest_sizeB            = sizeof(VexGuestMIPS64State);
          guest_word_type        = Ity_I64;
          guest_layout           = &mips64Guest_layout;
-         offB_TISTART           = offsetof(VexGuestMIPS64State,guest_TISTART);
-         offB_TILEN             = offsetof(VexGuestMIPS64State,guest_TILEN);
+         offB_CMSTART           = offsetof(VexGuestMIPS64State,guest_CMSTART);
+         offB_CMLEN             = offsetof(VexGuestMIPS64State,guest_CMLEN);
          offB_GUEST_IP          = offsetof(VexGuestMIPS64State,guest_PC);
          szB_GUEST_IP           = sizeof( ((VexGuestMIPS64State*)0)->guest_PC );
          offB_HOST_EvC_COUNTER  = offsetof(VexGuestMIPS64State,host_EvC_COUNTER);
          offB_HOST_EvC_FAILADDR = offsetof(VexGuestMIPS64State,host_EvC_FAILADDR);
          vassert(are_valid_hwcaps(VexArchMIPS64, vta->archinfo_guest.hwcaps));
          vassert(0 == sizeof(VexGuestMIPS64State) % 16);
-         vassert(sizeof( ((VexGuestMIPS64State*)0)->guest_TISTART) == 8);
-         vassert(sizeof( ((VexGuestMIPS64State*)0)->guest_TILEN  ) == 8);
+         vassert(sizeof( ((VexGuestMIPS64State*)0)->guest_CMSTART) == 8);
+         vassert(sizeof( ((VexGuestMIPS64State*)0)->guest_CMLEN  ) == 8);
          vassert(sizeof( ((VexGuestMIPS64State*)0)->guest_NRADDR ) == 8);
          break;
 
@@ -722,8 +723,8 @@ VexTranslateResult LibVEX_Translate ( VexTranslateArgs* vta )
                      guest_word_type,
                      vta->needs_self_check,
                      vta->preamble_function,
-                     offB_TISTART,
-                     offB_TILEN,
+                     offB_CMSTART,
+                     offB_CMLEN,
                      offB_GUEST_IP,
                      szB_GUEST_IP );
 
@@ -1225,20 +1226,23 @@ const HChar* LibVEX_ppVexHwCaps ( VexArch arch, UInt hwcaps )
 /* Write default settings info *vai. */
 void LibVEX_default_VexArchInfo ( /*OUT*/VexArchInfo* vai )
 {
+   vex_bzero(vai, sizeof(*vai));
    vai->hwcaps              = 0;
    vai->ppc_icache_line_szB = 0;
    vai->ppc_dcbz_szB        = 0;
    vai->ppc_dcbzl_szB       = 0;
-
+   vai->arm64_dMinLine_lg2_szB  = 0;
+   vai->arm64_iMinLine_lg2_szB  = 0;
    vai->hwcache_info.num_levels = 0;
    vai->hwcache_info.num_caches = 0;
-   vai->hwcache_info.caches = NULL;
+   vai->hwcache_info.caches     = NULL;
    vai->hwcache_info.icaches_maintain_coherence = True;  // whatever
 }
 
 /* Write default settings info *vbi. */
 void LibVEX_default_VexAbiInfo ( /*OUT*/VexAbiInfo* vbi )
 {
+   vex_bzero(vbi, sizeof(*vbi));
    vbi->guest_stack_redzone_size       = 0;
    vbi->guest_amd64_assume_fs_is_zero  = False;
    vbi->guest_amd64_assume_gs_is_0x60  = False;
