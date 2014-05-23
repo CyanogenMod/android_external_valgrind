@@ -40,6 +40,7 @@
 #include "pub_core_options.h"
 #include "pub_core_libcsetjmp.h"    // to keep _threadstate.h happy
 #include "pub_core_threadstate.h"   // For VG_INVALID_THREADID
+#include "pub_core_gdbserver.h"
 #include "pub_core_transtab.h"
 #include "pub_core_tooliface.h"
 
@@ -742,11 +743,18 @@ void VG_(out_of_memory_NORETURN) ( const HChar* who, SizeT szB )
    if (outputTrial <= 1) {
       if (outputTrial == 0) {
          outputTrial++;
+         // First print the memory stats with the aspacemgr data.
          VG_(am_show_nsegments) (0, "out_of_memory");
          VG_(print_all_arena_stats) ();
          if (VG_(clo_profile_heap))
             VG_(print_arena_cc_analysis) ();
-         /* In case we are an inner valgrind, asks the outer to report
+         // And then print some other information that might help.
+         VG_(print_all_stats) (False, /* Memory stats */
+                               True /* Tool stats */);
+         VG_(show_sched_status) (True,  // host_stacktrace
+                                 True,  // valgrind_stack_usage
+                                 True); // exited_threads
+        /* In case we are an inner valgrind, asks the outer to report
             its memory state in its log output. */
          INNER_REQUEST(VALGRIND_MONITOR_COMMAND("v.set log_output"));
          INNER_REQUEST(VALGRIND_MONITOR_COMMAND("v.info memory aspacemgr"));
@@ -807,12 +815,8 @@ Superblock* newSuperblock ( Arena* a, SizeT cszB )
 
    if (a->clientmem) {
       // client allocation -- return 0 to client if it fails
-      if (unsplittable)
-         sres = VG_(am_mmap_anon_float_client)
-                   ( cszB, VKI_PROT_READ|VKI_PROT_WRITE|VKI_PROT_EXEC );
-      else
-         sres = VG_(am_sbrk_anon_float_client)
-                   ( cszB, VKI_PROT_READ|VKI_PROT_WRITE|VKI_PROT_EXEC );
+      sres = VG_(am_mmap_anon_float_client)
+         ( cszB, VKI_PROT_READ|VKI_PROT_WRITE|VKI_PROT_EXEC );
       if (sr_isError(sres))
          return 0;
       sb = (Superblock*)(AddrH)sr_Res(sres);
@@ -822,10 +826,7 @@ Superblock* newSuperblock ( Arena* a, SizeT cszB )
       VG_(am_set_segment_isCH_if_SkAnonC)( VG_(am_find_nsegment)( (Addr)sb ) );
    } else {
       // non-client allocation -- abort if it fails
-      if (unsplittable)
-         sres = VG_(am_mmap_anon_float_valgrind)( cszB );
-      else
-         sres = VG_(am_sbrk_anon_float_valgrind)( cszB );
+      sres = VG_(am_mmap_anon_float_valgrind)( cszB );
       if (sr_isError(sres)) {
          VG_(out_of_memory_NORETURN)("newSuperblock", cszB);
          /* NOTREACHED */
@@ -939,6 +940,33 @@ Superblock* findSb ( Arena* a, Block* b )
                 b, a->name );
    VG_(core_panic)("findSb: VG_(arena_free)() in wrong arena?");
    return NULL; /*NOTREACHED*/
+}
+
+
+// Find the superblock containing the given address.
+// If superblock not found, return NULL.
+static
+Superblock* maybe_findSb ( Arena* a, Addr ad )
+{
+   SizeT min = 0;
+   SizeT max = a->sblocks_used;
+
+   while (min <= max) {
+      Superblock * sb; 
+      SizeT pos = min + (max - min)/2;
+      if (pos < 0 || pos >= a->sblocks_used)
+         return NULL;
+      sb = a->sblocks[pos];
+      if ((Addr)&sb->payload_bytes[0] <= ad
+          && ad < (Addr)&sb->payload_bytes[sb->n_payload_bytes]) {
+         return sb;
+      } else if ((Addr)&sb->payload_bytes[0] <= ad) {
+         min = pos + 1;
+      } else {
+         max = pos - 1;
+      }
+   }
+   return NULL;
 }
 
 
@@ -1289,11 +1317,13 @@ typedef struct {
 
 static AnCC anCCs[N_AN_CCS];
 
+/* Sorting by decreasing cost center nBytes, to have the biggest
+   cost centres at the top. */
 static Int cmp_AnCC_by_vol ( const void* v1, const void* v2 ) {
    const AnCC* ancc1 = v1;
    const AnCC* ancc2 = v2;
-   if (ancc1->nBytes < ancc2->nBytes) return -1;
-   if (ancc1->nBytes > ancc2->nBytes) return 1;
+   if (ancc1->nBytes < ancc2->nBytes) return 1;
+   if (ancc1->nBytes > ancc2->nBytes) return -1;
    return 0;
 }
 
@@ -1410,6 +1440,43 @@ void VG_(sanity_check_malloc_all) ( void )
    }
 }
 
+void VG_(describe_arena_addr) ( Addr a, AddrArenaInfo* aai )
+{
+   UInt i;
+   Superblock *sb;
+   Arena      *arena;
+
+   for (i = 0; i < VG_N_ARENAS; i++) {
+      if (i == VG_AR_CLIENT && !client_inited)
+         continue;
+      arena = arenaId_to_ArenaP(i);
+      sb = maybe_findSb( arena, a );
+      if (sb != NULL) {
+         Word   j;
+         SizeT  b_bszB;
+         Block *b = NULL;
+
+         aai->aid = i;
+         aai->name = arena->name;
+         for (j = 0; j < sb->n_payload_bytes; j += mk_plain_bszB(b_bszB)) {
+            b     = (Block*)&sb->payload_bytes[j];
+            b_bszB = get_bszB_as_is(b);
+            if (a < (Addr)b + mk_plain_bszB(b_bszB))
+               break;
+         }
+         vg_assert (b);
+         aai->block_szB = get_pszB(arena, b);
+         aai->rwoffset = a - (Addr)get_block_payload(arena, b);
+         aai->free = !is_inuse_block(b);
+         return;
+      }
+   }
+   aai->aid = 0;
+   aai->name = NULL;
+   aai->block_szB = 0;
+   aai->rwoffset = 0;
+   aai->free = False;
+}
 
 /*------------------------------------------------------------*/
 /*--- Creating and deleting blocks.                        ---*/
@@ -1600,7 +1667,7 @@ void* VG_(arena_malloc) ( ArenaId aid, const HChar* cc, SizeT req_pszB )
    vg_assert(a->sblocks_used <= a->sblocks_size);
    if (a->sblocks_used == a->sblocks_size) {
       Superblock ** array;
-      SysRes sres = VG_(am_sbrk_anon_float_valgrind)(sizeof(Superblock *) *
+      SysRes sres = VG_(am_mmap_anon_float_valgrind)(sizeof(Superblock *) *
                                                      a->sblocks_size * 2);
       if (sr_isError(sres)) {
          VG_(out_of_memory_NORETURN)("arena_init", sizeof(Superblock *) * 

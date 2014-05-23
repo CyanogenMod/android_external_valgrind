@@ -102,6 +102,7 @@ EXTRA_DIST = \
 	err_disable2.vgtest err_disable2.stderr.exp \
 	err_disable3.vgtest err_disable3.stderr.exp \
 	err_disable4.vgtest err_disable4.stderr.exp \
+	err_disable_arange1.vgtest err_disable_arange1.stderr.exp \
 	erringfds.stderr.exp erringfds.stdout.exp erringfds.vgtest \
 	error_counts.stderr.exp error_counts.vgtest \
 	errs1.stderr.exp errs1.vgtest \
@@ -109,7 +110,8 @@ EXTRA_DIST = \
 	execve1.stderr.exp execve1.vgtest execve1.stderr.exp-kfail \
 	execve2.stderr.exp execve2.vgtest execve2.stderr.exp-kfail \
 	file_locking.stderr.exp file_locking.vgtest \
-	fprw.stderr.exp fprw.vgtest \
+	fprw.stderr.exp fprw.stderr.exp-mips32-be fprw.stderr.exp-mips32-le \
+		fprw.vgtest \
 	fwrite.stderr.exp fwrite.vgtest fwrite.stderr.exp-kfail \
 	holey_buffer_too_small.vgtest holey_buffer_too_small.stdout.exp \
 	holey_buffer_too_small.stderr.exp \
@@ -178,6 +180,7 @@ EXTRA_DIST = \
 	origin5-bz2.stderr.exp-glibc27-ppc64 \
 	origin5-bz2.stderr.exp-glibc212-s390x \
 	origin5-bz2.stderr.exp-glibc234-s390x \
+	origin5-bz2.stderr.exp-glibc218-mips32 \
 	origin6-fp.vgtest origin6-fp.stdout.exp \
 	origin6-fp.stderr.exp-glibc25-amd64 \
 	origin6-fp.stderr.exp-glibc27-ppc64 \
@@ -227,6 +230,7 @@ EXTRA_DIST = \
 	supp2.stderr.exp supp2.vgtest \
 	supp.supp \
 	suppfree.stderr.exp suppfree.supp suppfree.vgtest \
+	suppfreecollision.stderr.exp suppfreecollision.supp suppfreecollision.vgtest \
 	test-plo-no.vgtest test-plo-no.stdout.exp \
 	    test-plo-no.stderr.exp-le64 test-plo-no.stderr.exp-le32 \
 	test-plo-yes.vgtest test-plo-yes.stdout.exp \
@@ -293,6 +297,7 @@ check_PROGRAMS = \
 	describe-block \
 	doublefree error_counts errs1 exitprog execve1 execve2 erringfds \
 	err_disable1 err_disable2 err_disable3 err_disable4 \
+	err_disable_arange1 \
 	file_locking \
 	fprw fwrite inits inline \
 	holey_buffer_too_small \

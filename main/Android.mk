@@ -100,7 +100,7 @@ vg_local_src_files := \
 	VEX/priv/ir_defs.c \
 	VEX/priv/ir_match.c \
 	VEX/priv/ir_opt.c \
-    VEX/priv/ir_inject.c \
+	VEX/priv/ir_inject.c \
 	VEX/priv/guest_generic_bb_to_IR.c \
 	VEX/priv/guest_generic_x87.c \
 	VEX/priv/guest_mips_helpers.c \
@@ -117,7 +117,7 @@ vg_local_src_files := \
 	VEX/priv/guest_arm64_toIR.c \
 	VEX/priv/guest_s390_helpers.c \
 	VEX/priv/guest_s390_toIR.c \
-    VEX/priv/host_generic_maddf.c \
+	VEX/priv/host_generic_maddf.c \
 	VEX/priv/host_generic_regs.c \
 	VEX/priv/host_generic_simd64.c \
 	VEX/priv/host_generic_simd128.c \
@@ -147,6 +147,7 @@ vg_local_module := libcoregrind
 vg_local_target := STATIC_LIBRARY
 
 vg_local_src_files := \
+	coregrind/m_addrinfo.c \
 	coregrind/m_cache.c \
 	coregrind/m_commandline.c \
 	coregrind/m_clientstate.c \
@@ -169,6 +170,7 @@ vg_local_src_files := \
 	coregrind/m_options.c \
 	coregrind/m_oset.c \
 	coregrind/m_poolalloc.c \
+	coregrind/m_rangemap.c \
 	coregrind/m_redir.c \
 	coregrind/m_seqmatch.c \
 	coregrind/m_signals.c \
@@ -421,6 +423,7 @@ vg_local_target := EXECUTABLE
 vg_local_no_crt := true
 vg_local_without_system_shared_libraries := true
 vg_local_src_files := \
+    helgrind/hg_addrdescr.c \
     helgrind/hg_basics.c \
     helgrind/hg_errors.c \
     helgrind/hg_lock_n_thread.c \

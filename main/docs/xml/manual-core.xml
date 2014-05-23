@@ -584,7 +584,8 @@ in most cases.  We group the available options by rough categories.</para>
     </term>
     <listitem>
       <para>Run the Valgrind tool called <varname>toolname</varname>,
-      e.g. Memcheck, Cachegrind, etc.</para>
+      e.g. memcheck, cachegrind, callgrind, helgrind, drd, massif,
+      lackey, none, exp-sgcheck, exp-bbv, exp-dhat, etc.</para>
     </listitem>
   </varlistentry>
 
@@ -777,6 +778,46 @@ in most cases.  We group the available options by rough categories.</para>
     </listitem>
   </varlistentry>
 
+  <varlistentry id="opt.vgdb-stop-at" xreflabel="--vgdb-stop-at">
+    <term>
+      <option><![CDATA[--vgdb-stop-at=<set> [default: none] ]]></option>
+    </term>
+    <listitem>
+      <para> Use this option when the Valgrind gdbserver is enabled with
+      <option>--vgdb=yes</option> or <option>--vgdb=full</option>.
+      The Valgrind gdbserver will be invoked for each error after
+      <option>--vgdb-error</option> have been reported.
+      You can additionally ask the Valgrind gdbserver to be invoked
+      for other events, specified in one of the following ways:  </para>
+      <itemizedlist>
+        <listitem><para>a comma separated list of one or more of
+            <option>startup exit valgrindabexit</option>.</para>
+
+          <para>The values <option>startup</option> <option>exit</option>
+          <option>valgrindabexit</option> respectively indicate to
+          invoke gdbserver before your program is executed, after the
+          last instruction of your program, on Valgrind abnormal exit
+          (e.g. internal error, out of memory, ...).</para>
+
+          <para>Note: <option>startup</option> and
+          <option>--vgdb-error=0</option> will both cause Valgrind
+          gdbserver to be invoked before your program is executed. The
+          <option>--vgdb-error=0</option> will in addition cause your 
+          program to stop on all subsequent errors.</para>
+
+        </listitem>
+        
+        <listitem><para><option>all</option> to specify the complete set.
+            It is equivalent to
+            <option>--vgdb-stop-at=startup,exit,valgrindabexit</option>.</para>
+        </listitem>
+        
+        <listitem><para><option>none</option> for the empty set.</para>
+        </listitem>
+      </itemizedlist>
+    </listitem>
+  </varlistentry>
+
   <varlistentry id="opt.track-fds" xreflabel="--track-fds">
     <term>
       <option><![CDATA[--track-fds=<yes|no> [default: no] ]]></option>
@@ -851,6 +892,13 @@ in most cases.  We group the available options by rough categories.</para>
       
       <para>If an <option>%</option> is followed by any other character, it
       causes an abort.</para>
+
+      <para>If the file name specifies a relative file name, it is put
+      in the program's initial working directory : this is the current
+      directory when the program started its execution after the fork
+      or after the exec.  If it specifies an absolute file name (ie.
+      starts with '/') then it is put there.
+      </para>
     </listitem>
   </varlistentry>
 
@@ -2019,6 +2067,35 @@ need to use them.</para>
       option <option>--stats=yes</option> to obtain precise
       information about the memory used by a sector and the allocation
       and recycling of sectors.</para>
+   </listitem>
+  </varlistentry>
+
+  <varlistentry id="opt.aspace-minaddr" xreflabel="----aspace-minaddr">
+    <term>
+      <option><![CDATA[--aspace-minaddr=<address> [default: depends
+      on the platform] ]]></option>
+    </term>
+    <listitem>
+      <para>To avoid potential conflicts with some system libraries,
+      Valgrind does not use the address space
+      below <option>--aspace-minaddr</option> value, keeping it
+      reserved in case a library specifically requests memory in this
+      region.  So, some "pessimistic" value is guessed by Valgrind
+      depending on the platform. On linux, by default, Valgrind avoids
+      using the first 64MB even if typically there is no conflict in
+      this complete zone.  You can use the
+      option <option>--aspace-minaddr</option> to have your memory
+      hungry application benefitting from more of this lower memory.
+      On the other hand, if you encounter a conflict, increasing
+      aspace-minaddr value might solve it. Conflicts will typically
+      manifest themselves with mmap failures in the low range of the
+      address space. The
+      provided <computeroutput>address</computeroutput> must be page
+      aligned and must be equal or bigger to 0x1000 (4KB). To find the
+      default value on your platform, do something such as
+      <computeroutput>valgrind -d -d date 2&gt;&amp;1 | grep -i minaddr</computeroutput>. Values lower than 0x10000 (64KB) are known to create problems
+      on some distributions.
+      </para>
    </listitem>
   </varlistentry>
 

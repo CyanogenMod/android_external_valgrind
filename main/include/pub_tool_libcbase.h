@@ -111,6 +111,24 @@ extern HChar* VG_(strtok)         (HChar* s, const HChar* delim);
    False. */
 extern Bool VG_(parse_Addr) ( const HChar** ppc, Addr* result );
 
+/* Parse an "enum set" made of one or more words comma separated.
+   The allowed word values are given in 'tokens', separated by comma.
+   If a word in 'tokens' is found in 'input', the corresponding bit
+   will be set in *enum_set (words in 'tokens' are numbered starting from 0).
+   Using in 'tokens' the special token "-" (a minus character) indicates that
+   the corresponding bit position cannot be set.
+   In addition to the words specified in 'tokens', VG_(parse_enum_set)
+   automatically accept the words "none" and "all" to indicate respectively
+   an empty enum_set (0) or an enum_set with all bits corresponding
+   to the words in tokens set.
+   If "none" or "all" is present in 'input', no other word can be given
+   in 'input'.
+   If parsing is successful, returns True and sets *enum_set.
+   If parsing fails, returns False. */
+extern Bool VG_(parse_enum_set) ( const HChar *tokens,
+                                  const HChar *input,
+                                  UInt *enum_set);
+
 /* Like strncpy(), but if 'src' is longer than 'ndest' inserts a '\0' as the
    last character. */
 extern void  VG_(strncpy_safely) ( HChar* dest, const HChar* src, SizeT ndest );

@@ -592,6 +592,7 @@ PRE(domctl)
    case VKI_XEN_DOMCTL_gettscinfo:
    case VKI_XEN_DOMCTL_getdomaininfo:
    case VKI_XEN_DOMCTL_unpausedomain:
+   case VKI_XEN_DOMCTL_resumedomain:
       /* No input fields. */
       break;
 
@@ -636,6 +637,10 @@ PRE(domctl)
    case VKI_XEN_DOMCTL_hypercall_init:
       PRE_XEN_DOMCTL_READ(hypercall_init, gmfn);
       break;
+
+   case VKI_XEN_DOMCTL_settimeoffset:
+       PRE_XEN_DOMCTL_READ(settimeoffset, time_offset_seconds);
+       break;
 
    case VKI_XEN_DOMCTL_getvcpuinfo:
       PRE_XEN_DOMCTL_READ(getvcpuinfo, vcpu);
@@ -763,6 +768,11 @@ PRE(domctl)
       PRE_XEN_DOMCTL_READ(set_max_evtchn, max_port);
       break;
 
+   case VKI_XEN_DOMCTL_cacheflush:
+      PRE_XEN_DOMCTL_READ(cacheflush, start_pfn);
+      PRE_XEN_DOMCTL_READ(cacheflush, nr_pfns);
+      break;
+
    default:
       bad_subop(tid, layout, arrghs, status, flags,
                 "__HYPERVISOR_domctl", domctl->cmd);
@@ -784,7 +794,7 @@ PRE(hvm_op)
                 (Addr)&((_type*)arg)->_field,           \
                 sizeof(((_type*)arg)->_field))
 #define PRE_XEN_HVMOP_READ(_hvm_op, _field)                             \
-   __PRE_XEN_HVMOP_READ(_hvm_op, "xen_hvm_" # _hvm_op "_t", _field)
+   __PRE_XEN_HVMOP_READ(_hvm_op, vki_xen_hvm_ ## _hvm_op ## _t, _field)
 
    switch (op) {
    case VKI_XEN_HVMOP_set_param:
@@ -797,6 +807,25 @@ PRE(hvm_op)
       __PRE_XEN_HVMOP_READ(get_param, struct vki_xen_hvm_param, domid);
       __PRE_XEN_HVMOP_READ(get_param, struct vki_xen_hvm_param, index);
       break;
+
+   case VKI_XEN_HVMOP_set_isa_irq_level:
+       PRE_XEN_HVMOP_READ(set_isa_irq_level, domid);
+       PRE_XEN_HVMOP_READ(set_isa_irq_level, isa_irq);
+       PRE_XEN_HVMOP_READ(set_isa_irq_level, level);
+       break;
+
+   case VKI_XEN_HVMOP_set_pci_link_route:
+       PRE_XEN_HVMOP_READ(set_pci_link_route, domid);
+       PRE_XEN_HVMOP_READ(set_pci_link_route, link);
+       PRE_XEN_HVMOP_READ(set_pci_link_route, isa_irq);
+       break;
+
+   case VKI_XEN_HVMOP_set_mem_type:
+       PRE_XEN_HVMOP_READ(set_mem_type, domid);
+       PRE_XEN_HVMOP_READ(set_mem_type, hvmmem_type);
+       PRE_XEN_HVMOP_READ(set_mem_type, nr);
+       PRE_XEN_HVMOP_READ(set_mem_type, first_pfn);
+       break;
 
    default:
       bad_subop(tid, layout, arrghs, status, flags,
@@ -1154,6 +1183,8 @@ POST(domctl){
    case VKI_XEN_DOMCTL_unpausedomain:
    case VKI_XEN_DOMCTL_sethvmcontext:
    case VKI_XEN_DOMCTL_set_max_evtchn:
+   case VKI_XEN_DOMCTL_cacheflush:
+   case VKI_XEN_DOMCTL_resumedomain:
       /* No output fields */
       break;
 
@@ -1324,10 +1355,13 @@ POST(hvm_op)
       POST_MEM_WRITE((Addr)&((_type*)arg)->_field,      \
                      sizeof(((_type*)arg)->_field))
 #define POST_XEN_HVMOP_WRITE(_hvm_op, _field) \
-      __PRE_XEN_HVMOP_READ(_hvm_op, "xen_hvm_" # _hvm_op "_t", _field)
+      __PRE_XEN_HVMOP_READ(_hvm_op, vki_xen_hvm_ ## _hvm_op ## _t, _field)
 
    switch (op) {
    case VKI_XEN_HVMOP_set_param:
+   case VKI_XEN_HVMOP_set_isa_irq_level:
+   case VKI_XEN_HVMOP_set_pci_link_route:
+   case VKI_XEN_HVMOP_set_mem_type:
       /* No output paramters */
       break;
 

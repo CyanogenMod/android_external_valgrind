@@ -4,6 +4,7 @@
 nobase_pkginclude_HEADERS = \
 	pub_tool_basics.h 		\
 	pub_tool_basics_asm.h 		\
+	pub_tool_addrinfo.h 		\
 	pub_tool_aspacehl.h 		\
 	pub_tool_aspacemgr.h 		\
 	pub_tool_clientstate.h		\
@@ -25,6 +26,7 @@ nobase_pkginclude_HEADERS = \
 	pub_tool_mallocfree.h 		\
 	pub_tool_options.h 		\
 	pub_tool_oset.h 		\
+	pub_tool_rangemap.h		\
 	pub_tool_redir.h		\
 	pub_tool_replacemalloc.h	\
 	pub_tool_seqmatch.h		\

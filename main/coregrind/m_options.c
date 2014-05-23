@@ -48,14 +48,14 @@ Bool   VG_(clo_error_limit)    = True;
 Int    VG_(clo_error_exitcode) = 0;
 
 #if defined(VGPV_arm_linux_android) || defined(VGPV_x86_linux_android) \
-    || defined(VGPV_mips32_linux_android) \
-    || defined(VGP_arm64_linux) // temporarily disabled on arm64-linux
+    || defined(VGPV_mips32_linux_android)
 VgVgdb VG_(clo_vgdb)           = Vg_VgdbNo; // currently disabled on Android
 #else
 VgVgdb VG_(clo_vgdb)           = Vg_VgdbYes;
 #endif
 Int    VG_(clo_vgdb_poll)      = 5000; 
 Int    VG_(clo_vgdb_error)     = 999999999;
+UInt   VG_(clo_vgdb_stop_at)   = 0;
 const HChar *VG_(clo_vgdb_prefix)    = NULL;
 const HChar *VG_(arg_vgdb_prefix)    = NULL;
 Bool   VG_(clo_vgdb_shadow_registers) = False;
