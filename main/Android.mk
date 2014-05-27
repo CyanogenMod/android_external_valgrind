@@ -583,6 +583,13 @@ test := v6intThumb
 include $(LOCAL_PATH)/Android.test.mk
 endif
 
+ifeq ($(TARGET_ARCH),arm64)
+test := integer
+include $(LOCAL_PATH)/Android.test.mk
+test := fp_and_simd
+include $(LOCAL_PATH)/Android.test.mk
+endif
+
 # Copy prebuilt suppressions
 include $(CLEAR_VARS)
 LOCAL_MODULE := default.supp
