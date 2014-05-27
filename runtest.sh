@@ -19,7 +19,12 @@ if [ -z "$ANDROID_SERIAL" ]; then
   exit -1
 fi
 
-test_name=v6intThumb
+if [ -z "$1" ]; then
+  echo "Usage runtest.sh test-name"
+  exit -1;
+fi
+
+test_name=$1
 test_local=out/target/product/hammerhead/data/nativetest/$test_name/$test_name
 test_target=/data/nativetest/$test_name/$test_name
 
