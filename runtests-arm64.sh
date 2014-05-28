@@ -14,4 +14,4 @@
 
 dir=`dirname $0`
 $dir/runtest.sh vg-integer
-$dir/runtest.sh vg-fp_and_simd
+#$dir/runtest.sh vg-fp_and_simd
