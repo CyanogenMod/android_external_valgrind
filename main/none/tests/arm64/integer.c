@@ -11172,6 +11172,18 @@ printf("LDR (literal, SIMD&FP) (entirely MISSING)\n");
 
 ////////////////////////////////////////////////////////////////
 printf("LD1/ST1 (single structure, no offset)\n");
+MEM_TEST("st1 {v17.b}[13], [x5]", 0, 0)
+MEM_TEST("st1 {v17.h}[3], [x5]", 0, 0)
+MEM_TEST("st1 {v17.s}[1], [x5]", 0, 0)
+MEM_TEST("st1 {v17.d}[0], [x5]", 0, 0)
+
+MEM_TEST("ld1 {v17.b}[13], [x5]", 0, 0)
+MEM_TEST("ld1 {v17.h}[3], [x5]", 0, 0)
+MEM_TEST("ld1 {v17.s}[1], [x5]", 0, 0)
+MEM_TEST("ld1 {v17.d}[0], [x5]", 0, 0)
+
+////////////////////////////////////////////////////////////////
+printf("LD1/ST1 (multiple structure, one register variant, no offset)\n");
 MEM_TEST("st1 {v17.2d},  [x5]", 3, 0)
 MEM_TEST("st1 {v17.4s},  [x5]", 5, 0)
 MEM_TEST("st1 {v17.8h},  [x5]", 7, 0)
@@ -11192,7 +11204,7 @@ MEM_TEST("ld1 {v17.8b},  [x5]", 13, 0)
 
 
 ////////////////////////////////////////////////////////////////
-printf("LD1/ST1 (single structure, post index)\n");
+printf("LD1/ST1 (multiple structure, one register variant, post index)\n");
 MEM_TEST("st1 {v17.2d},  [x5], #16", 3, 0)
 MEM_TEST("st1 {v17.4s},  [x5], #16", 5, 0)
 MEM_TEST("st1 {v17.8h},  [x5], #16", 7, 0)
