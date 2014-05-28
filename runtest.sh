@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+source $ANDROID_BUILD_TOP/build/envsetup.sh
+
 root_dir=`realpath \`dirname $0\`/../../`
 
 if [ -z "$ANDROID_SERIAL" ]; then
@@ -25,7 +27,8 @@ if [ -z "$1" ]; then
 fi
 
 test_name=$1
-test_local=out/target/product/hammerhead/data/nativetest/$test_name/$test_name
+product_out=$(cd $ANDROID_BUILD_TOP;get_build_var PRODUCT_OUT 2>/dev/null)
+test_local=$product_out/data/nativetest/$test_name/$test_name
 test_target=/data/nativetest/$test_name/$test_name
 
 cd $root_dir
