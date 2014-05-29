@@ -243,6 +243,18 @@ printf("misc ad-hoc tests\n");
 TESTINST3("add x3, x4, x5", 12345, 6789, x3, x4, x5, 0);
 TESTINST3("add w3, w4, w5", 12345, 6789, x3, x4, x5, 0);
 
+TESTINST3("adc x3, x4, x5", 12345, 6789, x3, x4, x5, 0);
+TESTINST3("adc x3, x4, x5", 12345, 6789, x3, x4, x5, 1);
+
+TESTINST3("adc w3, w4, w5", 12345, 6789, x3, x4, x5, 0);
+TESTINST3("adc w3, w4, w5", 12345, 6789, x3, x4, x5, 1);
+
+TESTINST3("sbc x3, x4, x5", 12345, 6789, x3, x4, x5, 0);
+TESTINST3("sbc x3, x4, x5", 12345, 6789, x3, x4, x5, 1);
+
+TESTINST3("sbc w3, w4, w5", 12345, 6789, x3, x4, x5, 0);
+TESTINST3("sbc w3, w4, w5", 12345, 6789, x3, x4, x5, 1);
+
 TESTINST2("bfm x2, x4, #0, #63", 0x5555555555555555, x2, x4, 0);
 TESTINST2("bfm x2, x4, #0, #63", 0xaaaaaaaaaaaaaaaa, x2, x4, 0);
 
