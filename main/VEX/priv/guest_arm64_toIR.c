@@ -5910,6 +5910,7 @@ Bool dis_ARM64_simd_and_fp(/*MB_OUT*/DisResult* dres, UInt insn)
           || (op == Iop_F32toI64S && irrm == Irrm_ZERO)   /* FCVTZS Xd,Sn */
           /* F32toI64U */
           || (op == Iop_F32toI64U && irrm == Irrm_ZERO)   /* FCVTZU Xd,Sn */
+          || (op == Iop_F32toI64U && irrm == Irrm_PosINF) /* FCVTPU Xd,Sn */
           /* F64toI32S */
           || (op == Iop_F64toI32S && irrm == Irrm_ZERO)   /* FCVTZS Wd,Dn */
           || (op == Iop_F64toI32S && irrm == Irrm_NegINF) /* FCVTMS Wd,Dn */
