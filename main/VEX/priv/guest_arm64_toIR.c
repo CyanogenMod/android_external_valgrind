@@ -4533,6 +4533,17 @@ Bool dis_ARM64_load_store(/*MB_OUT*/DisResult* dres, UInt insn)
       return True;
    }
 
+   /* ------------------ PRFM (immediate) ------------------ */
+   /* 31 29        21    9 4
+      11 11100110  imm12 n t PRFM <option>, [Xn|SP{, #pimm}]
+   */
+
+   if (INSN(31, 22) == BITS10(1,1,1,1,1,0,0,1,1,0)) {
+      /* TODO: decode */
+      DIP("prfm ??? (imm)");
+      return True;
+   }
+
    vex_printf("ARM64 front end: load_store\n");
    return False;
 #  undef INSN
