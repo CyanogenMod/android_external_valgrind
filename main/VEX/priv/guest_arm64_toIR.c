@@ -6923,6 +6923,32 @@ Bool dis_ARM64_simd_and_fp(/*MB_OUT*/DisResult* dres, UInt insn)
       /* else fall through */
    }
 
+   /* ---------------- CNT (vector) ---------------- */
+   /* 31 29     23 21           9 4
+      0q 001110 00 100000010110 n d  CNT Vd.T, Vn.T
+   */
+
+  if (INSN(31,31) == 0 && INSN(29,24) == BITS6(0,0,1,1,1,0)
+      && INSN(23,22) == BITS2(0,0)
+      && INSN(21,10) == BITS12(1,0,0,0,0,0,0,1,0,1,1,0) ) {
+     Bool isQ = INSN(30,30) == 1;
+     UInt nn  = INSN(9,5);
+     UInt dd  = INSN(4,0);
+     const HChar* name = "???";
+
+     if (isQ) {
+        name = "16b";
+        putQReg128(dd, unop(Iop_Cnt8x16, getQReg128(nn)));
+     } else {
+        name = "8b";
+        putQRegLO(dd, unop(Iop_Cnt8x8, getQRegLO(nn, Ity_I64)));
+     }
+
+     DIP("cnt %s.%s, %s.%s\n", nameQReg128(dd), name, nameQReg128(nn), name);
+     return True;
+  }
+
+
    /* ---------------- DUP (element, vector) ---------------- */
    /* 31  28       20   15     9 4
       0q0 01110000 imm5 000001 n d  DUP Vd.T, Vn.Ts[index]
