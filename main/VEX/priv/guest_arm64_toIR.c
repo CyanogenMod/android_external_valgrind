@@ -6934,15 +6934,10 @@ Bool dis_ARM64_simd_and_fp(/*MB_OUT*/DisResult* dres, UInt insn)
      Bool isQ = INSN(30,30) == 1;
      UInt nn  = INSN(9,5);
      UInt dd  = INSN(4,0);
-     const HChar* name = "???";
+     const HChar* name = isQ ? "16b" : "8b";
 
-     if (isQ) {
-        name = "16b";
-        putQReg128(dd, unop(Iop_Cnt8x16, getQReg128(nn)));
-     } else {
-        name = "8b";
-        putQRegLO(dd, unop(Iop_Cnt8x8, getQRegLO(nn, Ity_I64)));
-     }
+     IRExpr* res = unop(Iop_Cnt8x16, getQReg128(nn));
+     putQReg128(dd, isQ ? res : unop(Iop_ZeroHI64ofV128, res));
 
      DIP("cnt %s.%s, %s.%s\n", nameQReg128(dd), name, nameQReg128(nn), name);
      return True;

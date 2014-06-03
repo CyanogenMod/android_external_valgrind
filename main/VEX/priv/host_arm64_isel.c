@@ -4397,6 +4397,7 @@ static HReg iselV128Expr_wrk ( ISelEnv* env, IRExpr* e )
 
       /* Other cases */
       switch (e->Iex.Unop.op) {
+         case Iop_Cnt8x16:
          case Iop_NotV128:
          case Iop_Abs64Fx2:
          case Iop_Abs32Fx4:
@@ -4407,6 +4408,7 @@ static HReg iselV128Expr_wrk ( ISelEnv* env, IRExpr* e )
             ARM64VecUnaryOp op = ARM64vecu_INVALID;
             switch (e->Iex.Unop.op) {
                case Iop_NotV128:  op = ARM64vecu_NOT;      break;
+               case Iop_Cnt8x16:  op = ARM64vecu_CNT;      break;
                case Iop_Abs64Fx2: op = ARM64vecu_FABS64x2; break;
                case Iop_Abs32Fx4: op = ARM64vecu_FABS32x4; break;
                case Iop_Neg64Fx2: op = ARM64vecu_FNEG64x2; break;
