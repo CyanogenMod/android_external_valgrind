@@ -916,6 +916,7 @@ static void showARM64VecUnaryOp(/*OUT*/const HChar** nm,
       case ARM64vecu_FABS64x2: *nm = "fabs "; *ar = "2d";  return;
       case ARM64vecu_FABS32x4: *nm = "fabs "; *ar = "4s";  return;
       case ARM64vecu_NOT:      *nm = "not  "; *ar = "all"; return;
+      case ARM64vecu_CNT:      *nm = "cnt  "; *ar = "16b"; return;
       default: vpanic("showARM64VecUnaryOp");
    }
 }
@@ -5200,6 +5201,7 @@ Int emit_ARM64Instr ( /*MB_MOD*/Bool* is_profInc,
             010 01110 10 1 00000 111110 n d  FABS Vd.4s,  Vn.4s
             011 01110 11 1 00000 111110 n d  FNEG Vd.2d,  Vn.2d
             011 01110 10 1 00000 111110 n d  FNEG Vd.4s,  Vn.4s
+            010 01110 00 1 00000 010110 n d  CNT  Vd.16b, Vn.16b
             011 01110 00 1 00000 010110 n d  NOT  Vd.16b, Vn.16b
          */
          UInt vD = qregNo(i->ARM64in.VUnaryV.dst);
@@ -5219,6 +5221,9 @@ Int emit_ARM64Instr ( /*MB_MOD*/Bool* is_profInc,
                break;
             case ARM64vecu_NOT:
                *p++ = X_3_8_5_6_5_5(X011, X01110001, X00000, X010110, vN, vD);
+               break;
+            case ARM64vecu_CNT:
+               *p++ = X_3_8_5_6_5_5(X010, X01110001, X00000, X010110, vN, vD);
                break;
             default:
                goto bad;
