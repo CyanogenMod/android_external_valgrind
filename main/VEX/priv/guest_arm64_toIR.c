@@ -7057,6 +7057,55 @@ Bool dis_ARM64_simd_and_fp(/*MB_OUT*/DisResult* dres, UInt insn)
       /* else fall through */
    }
 
+   /* --------------------- {S,U}ADDLV --------------------- */
+   /* 31  28    23 21           9 4
+      0qu 01110 sz 110000001110 n d  {U,S}ADDLV Vd, Vn.T
+
+      sz V T(q=1/0)
+      -- - ----
+      00 h 16/8b
+      01 s 8/4h
+      10 d 4s (q can't be 0)
+      11 invalid
+   */
+   if (INSN(31,31) == 0 && INSN(28, 24) == BITS5(0,1,1,1,0)
+       && INSN(21, 10) == BITS12(1,1,0,0,0,0,0,0,1,1,1,0)) {
+      UInt bitQ = INSN(30,30);
+      UInt bitU = INSN(29,29);
+      UInt sz   = INSN(23,22);
+      UInt nn   = INSN(9,5);
+      UInt dd   = INSN(4,0);
+
+      Bool valid = !((sz == BITS2(1,1)) || (bitQ == 0 && sz == BITS2(1,0)));
+      if (valid) {
+        const IRType ddTypes[3] = { Ity_I16, Ity_I32, Ity_I64 };
+        const HChar* suffixesQ[3] = { "16b", "8h", "4s" };
+        const HChar* suffixesq[3] = { "8b", "4h", "invalid" };
+
+        IRTemp src = newTemp(Ity_V128);
+        IRExpr* half = mkU64(0xFFFFFFFFFFFFFFFFULL);
+        IRExpr* zero = mkU64(0x0);
+
+        IRExpr* mask = binop(Iop_64HLtoV128, zero, half);
+        assign(src, bitQ ? getQReg128(nn) : binop(Iop_AndV128, getQReg128(nn), mask));
+
+        IROp op;
+        switch (sz) {
+        case BITS2(0,0): op = bitU ? Iop_AddLV8Ux16 : Iop_AddLV8Sx16; break;
+        case BITS2(0,1): op = bitU ? Iop_AddLV16Ux8 : Iop_AddLV16Sx8; break;
+        case BITS2(1,0): op = bitU ? Iop_AddLV32Ux4 : Iop_AddLV32Sx4; break;
+        default: vassert(0);
+        }
+
+        putQReg128(dd, unop(op, mkexpr(src)));
+
+        DIP("%saddlv %s,%s.%s\n", bitU ? "u" : "s", nameQRegLO(dd, ddTypes[sz]),
+            nameQReg128(nn), bitQ ? suffixesQ[sz] : suffixesq[sz]);
+
+        return True;
+      }
+      /* else fall through */
+   }
    /* ---------------------- {S,U}MOV ---------------------- */
    /* 31  28        20   15     9 4
       0q0 01110 000 imm5 001111 n d  UMOV Xd/Wd, Vn.Ts[index]

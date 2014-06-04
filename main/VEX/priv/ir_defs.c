@@ -844,6 +844,12 @@ void ppIROp ( IROp op )
       case Iop_Cls8Sx16: vex_printf("Cls8Sx16"); return;
       case Iop_Cls16Sx8: vex_printf("Cls16Sx8"); return;
       case Iop_Cls32Sx4: vex_printf("Cls32Sx4"); return;
+      case Iop_AddLV8Ux16: vex_printf("AddLV8Ux16"); return;
+      case Iop_AddLV16Ux8: vex_printf("AddLV16Ux8"); return;
+      case Iop_AddLV32Ux4: vex_printf("AddLV32Ux4"); return;
+      case Iop_AddLV8Sx16: vex_printf("AddLV8Sx16"); return;
+      case Iop_AddLV16Sx8: vex_printf("AddLV16Sx8"); return;
+      case Iop_AddLV32Sx4: vex_printf("AddLV32Sx4"); return;
 
       case Iop_ShlV128: vex_printf("ShlV128"); return;
       case Iop_ShrV128: vex_printf("ShrV128"); return;
@@ -2904,6 +2910,8 @@ void typeOfPrimop ( IROp op,
       case Iop_Cnt8x16:
       case Iop_Clz8Sx16: case Iop_Clz16Sx8: case Iop_Clz32Sx4: case Iop_Clz64x2:
       case Iop_Cls8Sx16: case Iop_Cls16Sx8: case Iop_Cls32Sx4:
+      case Iop_AddLV8Ux16: case Iop_AddLV16Ux8: case Iop_AddLV32Ux4:
+      case Iop_AddLV8Sx16: case Iop_AddLV16Sx8: case Iop_AddLV32Sx4:
       case Iop_PwAddL8Ux16: case Iop_PwAddL16Ux8: case Iop_PwAddL32Ux4:
       case Iop_PwAddL8Sx16: case Iop_PwAddL16Sx8: case Iop_PwAddL32Sx4:
       case Iop_Reverse64_8x16: case Iop_Reverse64_16x8: case Iop_Reverse64_32x4:
