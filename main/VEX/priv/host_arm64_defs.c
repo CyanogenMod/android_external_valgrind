@@ -911,12 +911,18 @@ static void showARM64VecUnaryOp(/*OUT*/const HChar** nm,
                                 /*OUT*/const HChar** ar, ARM64VecUnaryOp op )
 {
    switch (op) {
-      case ARM64vecu_FNEG64x2: *nm = "fneg "; *ar = "2d";  return;
-      case ARM64vecu_FNEG32x4: *nm = "fneg "; *ar = "4s";  return;
-      case ARM64vecu_FABS64x2: *nm = "fabs "; *ar = "2d";  return;
-      case ARM64vecu_FABS32x4: *nm = "fabs "; *ar = "4s";  return;
-      case ARM64vecu_NOT:      *nm = "not  "; *ar = "all"; return;
-      case ARM64vecu_CNT:      *nm = "cnt  "; *ar = "16b"; return;
+      case ARM64vecu_FNEG64x2:   *nm = "fneg   "; *ar = "2d";  return;
+      case ARM64vecu_FNEG32x4:   *nm = "fneg   "; *ar = "4s";  return;
+      case ARM64vecu_FABS64x2:   *nm = "fabs   "; *ar = "2d";  return;
+      case ARM64vecu_FABS32x4:   *nm = "fabs   "; *ar = "4s";  return;
+      case ARM64vecu_NOT:        *nm = "not    "; *ar = "all"; return;
+      case ARM64vecu_CNT:        *nm = "cnt    "; *ar = "16b"; return;
+      case ARM64vecu_UADDLV8x16: *nm = "uaddlv "; *ar = "16b"; return;
+      case ARM64vecu_UADDLV16x8: *nm = "uaddlv "; *ar = "8h"; return;
+      case ARM64vecu_UADDLV32x4: *nm = "uaddlv "; *ar = "4s"; return;
+      case ARM64vecu_SADDLV8x16: *nm = "saddlv "; *ar = "16b"; return;
+      case ARM64vecu_SADDLV16x8: *nm = "saddlv "; *ar = "8h"; return;
+      case ARM64vecu_SADDLV32x4: *nm = "saddlv "; *ar = "4s"; return;
       default: vpanic("showARM64VecUnaryOp");
    }
 }
@@ -3365,6 +3371,7 @@ static inline UChar qregNo ( HReg r )
 #define X001001  BITS8(0,0, 0,0,1,0,0,1)
 #define X001010  BITS8(0,0, 0,0,1,0,1,0)
 #define X001101  BITS8(0,0, 0,0,1,1,0,1)
+#define X001110  BITS8(0,0, 0,0,1,1,1,0)
 #define X001111  BITS8(0,0, 0,0,1,1,1,1)
 #define X010000  BITS8(0,0, 0,1,0,0,0,0)
 #define X010001  BITS8(0,0, 0,1,0,0,0,1)
@@ -5203,6 +5210,14 @@ Int emit_ARM64Instr ( /*MB_MOD*/Bool* is_profInc,
             011 01110 10 1 00000 111110 n d  FNEG Vd.4s,  Vn.4s
             010 01110 00 1 00000 010110 n d  CNT  Vd.16b, Vn.16b
             011 01110 00 1 00000 010110 n d  NOT  Vd.16b, Vn.16b
+
+            011 01110 00 1 10000 001110 n d  UADDLV  Hd, Vn.16b
+            011 01110 01 1 10000 001110 n d  UADDLV  Sd, Vn.8h
+            011 01110 10 1 10000 001110 n d  UADDLV  Dd, Vn.4s
+
+            010 01110 00 1 10000 001110 n d  SADDLV  Hd, Vn.16b
+            010 01110 01 1 10000 001110 n d  SADDLV  Sd, Vn.8h
+            010 01110 10 1 10000 001110 n d  SADDLV  Dd, Vn.4s
          */
          UInt vD = qregNo(i->ARM64in.VUnaryV.dst);
          UInt vN = qregNo(i->ARM64in.VUnaryV.arg);
@@ -5224,6 +5239,24 @@ Int emit_ARM64Instr ( /*MB_MOD*/Bool* is_profInc,
                break;
             case ARM64vecu_CNT:
                *p++ = X_3_8_5_6_5_5(X010, X01110001, X00000, X010110, vN, vD);
+               break;
+            case ARM64vecu_UADDLV8x16:
+               *p++ = X_3_8_5_6_5_5(X011, X01110001, X10000, X001110, vN, vD);
+               break;
+            case ARM64vecu_UADDLV16x8:
+               *p++ = X_3_8_5_6_5_5(X011, X01110011, X10000, X001110, vN, vD);
+               break;
+            case ARM64vecu_UADDLV32x4:
+               *p++ = X_3_8_5_6_5_5(X011, X01110101, X10000, X001110, vN, vD);
+               break;
+            case ARM64vecu_SADDLV8x16:
+               *p++ = X_3_8_5_6_5_5(X010, X01110001, X10000, X001110, vN, vD);
+               break;
+            case ARM64vecu_SADDLV16x8:
+               *p++ = X_3_8_5_6_5_5(X010, X01110011, X10000, X001110, vN, vD);
+               break;
+            case ARM64vecu_SADDLV32x4:
+               *p++ = X_3_8_5_6_5_5(X010, X01110101, X10000, X001110, vN, vD);
                break;
             default:
                goto bad;
