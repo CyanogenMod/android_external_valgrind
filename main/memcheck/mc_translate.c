@@ -4301,6 +4301,19 @@ IRExpr* expr2vbits_Unop ( MCEnv* mce, IROp op, IRAtom* atom )
          return mkPCast16x8(mce,
                assignNew('V', mce, Ity_V128, unop(op, mkPCast8x16(mce, vatom))));
 
+      // TODO: is this correct?
+      case Iop_AddLV8Ux16:
+      case Iop_AddLV8Sx16:
+         return assignNew('V', mce, Ity_V128, unop(op, mkPCast8x16(mce, vatom)));
+
+      case Iop_AddLV16Ux8:
+      case Iop_AddLV16Sx8:
+         return assignNew('V', mce, Ity_V128, unop(op, mkPCast16x8(mce, vatom)));
+
+      case Iop_AddLV32Ux4:
+      case Iop_AddLV32Sx4:
+         return assignNew('V', mce, Ity_V128, unop(op, mkPCast32x4(mce, vatom)));
+
       case Iop_I64UtoF32:
       default:
          ppIROp(op);

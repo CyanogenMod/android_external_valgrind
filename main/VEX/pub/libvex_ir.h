@@ -1506,6 +1506,10 @@ typedef
       Iop_Clz8Sx16, Iop_Clz16Sx8, Iop_Clz32Sx4,
       Iop_Cls8Sx16, Iop_Cls16Sx8, Iop_Cls32Sx4,
 
+      /* Sum vector (signed/unsigned)*/
+      Iop_AddLV8Ux16, Iop_AddLV16Ux8, Iop_AddLV32Ux4,
+      Iop_AddLV8Sx16, Iop_AddLV16Sx8, Iop_AddLV32Sx4,
+
       /* VECTOR x SCALAR SHIFT (shift amt :: Ity_I8) */
       Iop_ShlN8x16, Iop_ShlN16x8, Iop_ShlN32x4, Iop_ShlN64x2,
       Iop_ShrN8x16, Iop_ShrN16x8, Iop_ShrN32x4, Iop_ShrN64x2,
