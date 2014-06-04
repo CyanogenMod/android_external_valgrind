@@ -371,6 +371,7 @@ typedef
       ARM64vecu_FABS64x2,
       ARM64vecu_FABS32x4,
       ARM64vecu_NOT,
+      ARM64vecu_CNT,
       ARM64vecu_INVALID
    }
    ARM64VecUnaryOp;
