@@ -1196,6 +1196,11 @@ GEN_TWOVEC_TEST(fmov_2s_imm_01, "fmov v22.2s, #0.125", 22, 23)
 GEN_TWOVEC_TEST(fmov_2s_imm_02, "fmov v22.2s, #-4.0",  22, 23)
 GEN_TWOVEC_TEST(fmov_2s_imm_03, "fmov v22.2s, #1.0",   22, 23)
 
+GEN_TWOVEC_TEST(scvtf_s_s, "scvtf s7, s8", 7, 8)
+GEN_TWOVEC_TEST(scvtf_d_d, "scvtf d7, d8", 7, 8)
+GEN_TWOVEC_TEST(ucvtf_s_s, "ucvtf s7, s8", 7, 8)
+GEN_TWOVEC_TEST(ucvtf_d_d, "ucvtf d7, d8", 7, 8)
+
 GEN_ONEINT_ONEVEC_TEST(scvtf_s_w, "scvtf s7, w15", 15, 7)
 GEN_ONEINT_ONEVEC_TEST(scvtf_d_w, "scvtf d7, w15", 15, 7)
 GEN_ONEINT_ONEVEC_TEST(scvtf_s_x, "scvtf s7, x15", 15, 7)
@@ -3224,6 +3229,10 @@ int main ( void )
 
    // scvtf     d,s
    // ucvtf     d,s
+   if (1) test_scvtf_s_s(TyS);
+   if (1) test_scvtf_d_d(TyD);
+   if (1) test_ucvtf_s_s(TyS);
+   if (1) test_ucvtf_d_d(TyD);
 
    // scvtf     2d,4s,2s
    // ucvtf     2d,4s,2s
