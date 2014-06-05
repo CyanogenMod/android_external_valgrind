@@ -5606,7 +5606,36 @@ Bool dis_ARM64_simd_and_fp(/*MB_OUT*/DisResult* dres, UInt insn)
       /* else fall through */
    }
 
-   /* -------------- {S,U}CVTF (scalar, integer) -------------- */
+   /* -------------- {S,U}CVTF (vector, integer, scalar) -------------- */
+   /* 31  28    23 21     15     9 4                ix (u:sz)
+      010 11110 00 100001 110110 n d  SCVTF Sd, Sn   0
+        0       01                    SCVTF Dd, Dn   1
+        1       00                    UCVTF Sd, Sn   2
+        1       01                    UCVTF Dd, Dn   3
+   */
+   if (INSN(31,30) == BITS2(0,1) && INSN(28,23) == BITS6(1,1,1,1,0,0)
+       && INSN(21, 10) == BITS12(1,0,0,0,0,1,1,1,0,1,1,0)) {
+      Bool is64 = INSN(22,22);
+      Bool isU  = INSN(29,29);
+      UInt nn   = INSN(9,5);
+      UInt dd   = INSN(4,0);
+
+      UInt ix   = (INSN(29,29) << 1) | INSN(22,22);
+
+      const IROp ops[4]
+        = { Iop_I32StoF32, Iop_I64StoF64,
+            Iop_I32UtoF32, Iop_I64UtoF64 };
+
+      putQReg128(dd, mkV128(0));
+      putQRegLO(dd, binop(ops[ix], mkexpr(mk_get_IR_rounding_mode()), getQRegLO(nn, is64 ? Ity_I64 : Ity_I32)));
+
+      DIP("%ccvtf %s, %s\n",
+          isU ? 'u' : 's', nameQRegLO(dd, is64 ? Ity_F64 : Ity_F32),
+          nameQRegLO(nn, is64 ? Ity_I64 : Ity_I32));
+
+      return True;
+   }
+   /* -------------- {S,U}CVTF (scalar, fixed-point) -------------- */
    /* 31  28    23 21 20 18  15     9 4                  ix
       000 11110 00 1  00 010 000000 n d  SCVTF Sd, Wn    0
       000 11110 01 1  00 010 000000 n d  SCVTF Dd, Wn    1
