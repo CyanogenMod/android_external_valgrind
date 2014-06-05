@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-source $ANDROID_BUILD_TOP/build/envsetup.sh
+source $ANDROID_BUILD_TOP/build/envsetup.sh >/dev/null
 
 root_dir=`realpath \`dirname $0\`/../../`
 
