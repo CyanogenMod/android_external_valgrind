@@ -6783,6 +6783,7 @@ Bool dis_ARM64_simd_and_fp(/*MB_OUT*/DisResult* dres, UInt insn)
    /* ------------ {USHR,SSHR,SHL} (vector, immediate) ------------ */
    /* 31  28     22   18   15     9 4
       0q1 011110 immh immb 000001 n d  USHR Vd.T, Vn.T, #shift (1)
+      0q1 011110 immh immb 010001 n d  SRI  Vd.T, Vn.T, #shift (1)
       0q0 011110 immh immb 000001 n d  SSHR Vd.T, Vn.T, #shift (2)
       0q0 011110 immh immb 010101 n d  SHL  Vd.T, Vn.T, #shift (3)
       0q1 011110 immh immb 010101 n d  SLI  Vd.T, Vn.T, #shift (3)
@@ -6798,6 +6799,7 @@ Bool dis_ARM64_simd_and_fp(/*MB_OUT*/DisResult* dres, UInt insn)
        && INSN(10,10) == 1) {
       UInt ix = 0;
       /**/ if (INSN(29,29) == 1 && INSN(15,11) == BITS5(0,0,0,0,0)) ix = 1;
+      else if (INSN(29,29) == 1 && INSN(15,11) == BITS5(0,1,0,0,0)) ix = 1;
       else if (INSN(29,29) == 0 && INSN(15,11) == BITS5(0,0,0,0,0)) ix = 2;
       else if (                    INSN(15,11) == BITS5(0,1,0,1,0)) ix = 3;
       if (ix > 0) {
@@ -6806,7 +6808,9 @@ Bool dis_ARM64_simd_and_fp(/*MB_OUT*/DisResult* dres, UInt insn)
          UInt immb = INSN(18,16);
          UInt nn   = INSN(9,5);
          UInt dd   = INSN(4,0);
-         Bool isInsert = (ix == 3 && INSN(29,29) == 1);
+         Bool isInsert = (ix == 3 && INSN(29,29) == 1)
+                         || (INSN(29,29) == 1 && INSN(15,11) == BITS5(0,1,0,0,0));
+
          const IROp opsSHRN[4]
             = { Iop_ShrN8x16, Iop_ShrN16x8, Iop_ShrN32x4, Iop_ShrN64x2 };
          const IROp opsSARN[4]
@@ -6821,12 +6825,12 @@ Bool dis_ARM64_simd_and_fp(/*MB_OUT*/DisResult* dres, UInt insn)
                case.  Adjust shift to compensate. */
             shift = (8 << szBlg2) - shift;
          }
-         if (ok && szBlg2 < 4 && shift > 0 && shift < (8 << szBlg2)
+         if (ok && szBlg2 < 4 && shift >= 0 && shift <= (8 << szBlg2)
              && !(szBlg2 == 3/*64bit*/ && !isQ)) {
             IROp op = Iop_INVALID;
             const HChar* nm = NULL;
             switch (ix) {
-               case 1: op = opsSHRN[szBlg2]; nm = "ushr"; break;
+               case 1: op = opsSHRN[szBlg2]; nm = isInsert ? "sri" : "ushr"; break;
                case 2: op = opsSARN[szBlg2]; nm = "sshr"; break;
                case 3: op = opsSHLN[szBlg2]; nm = isInsert ? "sli" : "shl";  break;
                default: vassert(0);
