@@ -4174,11 +4174,11 @@ int main ( void )
    if (0) test_smull2_4s_8h_8h(TyH);
    if (0) test_smull_8h_8b_8b(TyB);
    if (0) test_smull2_8h_16b_16b(TyB);
-   if (0) test_umull_2d_2s_2s(TyS);
+   if (1) test_umull_2d_2s_2s(TyS);
    if (0) test_umull2_2d_4s_4s(TyS);
-   if (0) test_umull_4s_4h_4h(TyH);
+   if (1) test_umull_4s_4h_4h(TyH);
    if (0) test_umull2_4s_8h_8h(TyH);
-   if (0) test_umull_8h_8b_8b(TyB);
+   if (1) test_umull_8h_8b_8b(TyB);
    if (0) test_umull2_8h_16b_16b(TyB);
 
    // smov         w_b[], w_h[], x_b[], x_h[], x_s[]
