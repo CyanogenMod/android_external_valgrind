@@ -6588,6 +6588,29 @@ Bool dis_ARM64_simd_and_fp(/*MB_OUT*/DisResult* dres, UInt insn)
       }
       /* else fall through */
    }
+   /* ------------ UMULL (vector) ------------ */
+   /* 31  28    23 21 20 15     9 4
+      001 01110 sz 1  m  110000 n d UMULL Vd.Ta, Vn.Tb, Vm.Tb
+
+   */
+   if (INSN(31,24) == BITS8(0,0,1,0,1,1,1,0) && INSN(23,22) != BITS2(1,1)
+       && INSN(21,21) == 1 && INSN(15,10) == BITS6(1,1,0,0,0,0)) {
+      UInt mm = INSN(20,16);
+      UInt nn = INSN(9,5);
+      UInt dd = INSN(4,0);
+      UInt sz = INSN(23,22);
+
+      const HChar* nameTa[3] = { "8h", "4s", "2d" };
+      const HChar* nameTb[3] = { "8b", "4h", "2s" };
+      const IROp ops[3] = { Iop_Mull8Ux8, Iop_Mull16Ux4, Iop_Mull32Ux2 };
+
+      putQReg128(dd, binop(ops[sz], getQRegLO(nn, Ity_I64), getQRegLO(mm, Ity_I64)));
+
+      DIP("umull %s.%s, %s.%s, %s.%s\n", nameQReg128(dd), nameTa[sz],
+          nameQReg128(nn), nameTb[sz], nameQReg128(mm), nameTb[sz]);
+      return True;
+   }
+
 
    /* ------------ {AND,BIC,ORR,ORN} (vector) ------------ */
    /* 31  28    23  20 15     9 4

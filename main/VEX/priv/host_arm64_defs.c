@@ -875,6 +875,9 @@ static void showARM64VecBinOp(/*OUT*/const HChar** nm,
       case ARM64vecb_UMIN32x4:  *nm = "umin";  *ar = "4s";  return;
       case ARM64vecb_UMIN16x8:  *nm = "umin";  *ar = "8h";  return;
       case ARM64vecb_UMIN8x16:  *nm = "umin";  *ar = "16b"; return;
+      case ARM64vecb_UMULL32x2: *nm = "umull"; *ar = "2d"; return;
+      case ARM64vecb_UMULL16x4: *nm = "umull"; *ar = "4s"; return;
+      case ARM64vecb_UMULL8x8:  *nm = "umull"; *ar = "8b"; return;
       case ARM64vecb_SMAX32x4:  *nm = "smax";  *ar = "4s";  return;
       case ARM64vecb_SMAX16x8:  *nm = "smax";  *ar = "8h";  return;
       case ARM64vecb_SMAX8x16:  *nm = "smax";  *ar = "16b"; return;
@@ -915,6 +918,12 @@ static void showARM64VecUnaryOp(/*OUT*/const HChar** nm,
       case ARM64vecu_FNEG32x4:   *nm = "fneg   "; *ar = "4s";  return;
       case ARM64vecu_FABS64x2:   *nm = "fabs   "; *ar = "2d";  return;
       case ARM64vecu_FABS32x4:   *nm = "fabs   "; *ar = "4s";  return;
+      case ARM64vecu_VMOVL8U:    *nm = "vmovl.u8"; *ar = "all"; return;
+      case ARM64vecu_VMOVL16U:   *nm = "vmovl.u16"; *ar = "all"; return;
+      case ARM64vecu_VMOVL32U:   *nm = "vmovl.u32"; *ar = "all"; return;
+      case ARM64vecu_VMOVL8S:    *nm = "vmovl.s8"; *ar = "all"; return;
+      case ARM64vecu_VMOVL16S:   *nm = "vmovl.s16"; *ar = "all"; return;
+      case ARM64vecu_VMOVL32S:   *nm = "vmovl.s32"; *ar = "all"; return;
       case ARM64vecu_NOT:        *nm = "not    "; *ar = "all"; return;
       case ARM64vecu_CNT:        *nm = "cnt    "; *ar = "16b"; return;
       case ARM64vecu_UADDLV8x16: *nm = "uaddlv "; *ar = "16b"; return;
@@ -3312,7 +3321,7 @@ static inline UChar iregNo ( HReg r )
 static inline UChar dregNo ( HReg r )
 {
    UInt n;
-   vassert(hregClass(r) == HRcFlt64);
+   vassert(hregClass(r) == HRcFlt64 || hregClass(r) == HRcInt64);
    vassert(!hregIsVirtual(r));
    n = hregNumber(r);
    vassert(n <= 31);
@@ -3382,12 +3391,14 @@ static inline UChar qregNo ( HReg r )
 #define X011011  BITS8(0,0, 0,1,1,0,1,1)
 #define X011110  BITS8(0,0, 0,1,1,1,1,0)
 #define X011111  BITS8(0,0, 0,1,1,1,1,1)
+#define X100000  BITS8(0,0, 1,0,0,0,0,0)
 #define X100001  BITS8(0,0, 1,0,0,0,0,1)
 #define X100011  BITS8(0,0, 1,0,0,0,1,1)
 #define X100100  BITS8(0,0, 1,0,0,1,0,0)
 #define X100101  BITS8(0,0, 1,0,0,1,0,1)
 #define X100110  BITS8(0,0, 1,0,0,1,1,0)
 #define X100111  BITS8(0,0, 1,0,0,1,1,1)
+#define X101000  BITS8(0,0, 1,0,1,0,0,0)
 #define X110000  BITS8(0,0, 1,1,0,0,0,0)
 #define X110001  BITS8(0,0, 1,1,0,0,0,1)
 #define X110101  BITS8(0,0, 1,1,0,1,0,1)
@@ -3429,6 +3440,12 @@ static inline UChar qregNo ( HReg r )
 #define X11011110  BITS8(1,1,0,1,1,1,1,0)
 #define X11110001  BITS8(1,1,1,1,0,0,0,1)
 #define X11110011  BITS8(1,1,1,1,0,0,1,1)
+
+#define BITS9(zzb8,zzb7,zzb6,zzb5,zzb4,zzb3,zzb2,zzb1,zzb0) \
+  ((BITS8(zzb8,zzb7,zzb6,zzb5,zzb4,zzb3,zzb2,zzb1) << 1) | zzb0)
+
+#define X111100111 BITS9(1,1,1,1,0,0,1,1,1)
+#define X111100101 BITS9(1,1,1,1,0,0,1,0,1)
 
 
 /* --- 4 fields --- */
@@ -3585,6 +3602,29 @@ static inline UInt X_3_6_1_6_6_5_5 ( UInt f1, UInt f2, UInt f3,
    w = (w << 6) | f5;
    w = (w << 5) | f6;
    w = (w << 5) | f7;
+   return w;
+}
+
+static inline UInt X_9_1_6_4_6_1_1_4( UInt f1, UInt f2, UInt f3, UInt f4,
+                                        UInt f5, UInt f6, UInt f7, UInt f8) {
+   vassert(9+1+6+4+6+1+1+4 == 32);
+   vassert(f1 < (1<<9));
+   vassert(f2 < (1<<1));
+   vassert(f3 < (1<<6));
+   vassert(f4 < (1<<4));
+   vassert(f5 < (1<<6));
+   vassert(f6 < (1<<1));
+   vassert(f7 < (1<<1));
+   vassert(f8 < (1<<9));
+   UInt w = 0;
+   w = (w << 9) | f1;
+   w = (w << 1) | f2;
+   w = (w << 6) | f3;
+   w = (w << 4) | f4;
+   w = (w << 6) | f5;
+   w = (w << 1) | f6;
+   w = (w << 1) | f7;
+   w = (w << 4) | f8;
    return w;
 }
 
@@ -5022,8 +5062,14 @@ Int emit_ARM64Instr ( /*MB_MOD*/Bool* is_profInc,
 
          */
          UInt vD = qregNo(i->ARM64in.VBinV.dst);
-         UInt vN = qregNo(i->ARM64in.VBinV.argL);
-         UInt vM = qregNo(i->ARM64in.VBinV.argR);
+         ARM64VecBinOp op = i->ARM64in.VBinV.op;
+         Bool isV128 = (op != ARM64vecb_UMULL8x8
+                        && op != ARM64vecb_UMULL16x4
+                        && op != ARM64vecb_UMULL32x2);
+         UInt vN = isV128 ? qregNo(i->ARM64in.VBinV.argL)
+                          : dregNo(i->ARM64in.VBinV.argL);
+         UInt vM = isV128 ? qregNo(i->ARM64in.VBinV.argR)
+                          : dregNo(i->ARM64in.VBinV.argR);
          switch (i->ARM64in.VBinV.op) {
             case ARM64vecb_ADD64x2:
                *p++ = X_3_8_5_6_5_5(X010, X01110111, vM, X100001, vN, vD);
@@ -5101,6 +5147,16 @@ Int emit_ARM64Instr ( /*MB_MOD*/Bool* is_profInc,
                break;
             case ARM64vecb_UMIN8x16:
                *p++ = X_3_8_5_6_5_5(X011, X01110001, vM, X011011, vN, vD);
+               break;
+
+            case ARM64vecb_UMULL32x2:
+               *p++ = X_3_8_5_6_5_5(X001, X01110101, vM, X110000, vN, vD);
+               break;
+            case ARM64vecb_UMULL16x4:
+               *p++ = X_3_8_5_6_5_5(X001, X01110011, vM, X110000, vN, vD);
+               break;
+            case ARM64vecb_UMULL8x8:
+               *p++ = X_3_8_5_6_5_5(X001, X01110001, vM, X110000, vN, vD);
                break;
 
             case ARM64vecb_SMAX32x4:
@@ -5219,8 +5275,11 @@ Int emit_ARM64Instr ( /*MB_MOD*/Bool* is_profInc,
             010 01110 01 1 10000 001110 n d  SADDLV  Sd, Vn.8h
             010 01110 10 1 10000 001110 n d  SADDLV  Dd, Vn.4s
          */
+         ARM64VecUnaryOp op = i->ARM64in.VUnaryV.op;
          UInt vD = qregNo(i->ARM64in.VUnaryV.dst);
-         UInt vN = qregNo(i->ARM64in.VUnaryV.arg);
+         Bool isV128 = !(op >= ARM64vecu_VMOVL8U && op <= ARM64vecu_VMOVL32S);
+         UInt vN = isV128 ? qregNo(i->ARM64in.VUnaryV.arg)
+                          : dregNo(i->ARM64in.VUnaryV.arg);
          switch (i->ARM64in.VUnaryV.op) {
             case ARM64vecu_FABS64x2:
                *p++ = X_3_8_5_6_5_5(X010, X01110111, X00000, X111110, vN, vD);
@@ -5233,6 +5292,24 @@ Int emit_ARM64Instr ( /*MB_MOD*/Bool* is_profInc,
                break;
             case ARM64vecu_FNEG32x4:
                *p++ = X_3_8_5_6_5_5(X011, X01110101, X00000, X111110, vN, vD);
+               break;
+            case ARM64vecu_VMOVL8U:
+               *p++ = X_9_1_6_4_6_1_1_4(X111100111, vD >> 4, X001000, vD & 0xFU, X101000, vN >> 4, 1, vN & 0xFU);
+               break;
+            case ARM64vecu_VMOVL16U:
+               *p++ = X_9_1_6_4_6_1_1_4(X111100111, vD >> 4, X010000, vD & 0xFU, X101000, vN >> 4, 1, vN & 0xFU);
+               break;
+            case ARM64vecu_VMOVL32U:
+               *p++ = X_9_1_6_4_6_1_1_4(X111100111, vD >> 4, X100000, vD & 0xFU, X101000, vN >> 4, 1, vN & 0xFU);
+               break;
+            case ARM64vecu_VMOVL8S:
+               *p++ = X_9_1_6_4_6_1_1_4(X111100101, vD >> 4, X001000, vD & 0xFU, X101000, vN >> 4, 1, vN & 0xFU);
+               break;
+            case ARM64vecu_VMOVL16S:
+               *p++ = X_9_1_6_4_6_1_1_4(X111100101, vD >> 4, X010000, vD & 0xFU, X101000, vN >> 4, 1, vN & 0xFU);
+               break;
+            case ARM64vecu_VMOVL32S:
+               *p++ = X_9_1_6_4_6_1_1_4(X111100101, vD >> 4, X100000, vD & 0xFU, X101000, vN >> 4, 1, vN & 0xFU);
                break;
             case ARM64vecu_NOT:
                *p++ = X_3_8_5_6_5_5(X011, X01110001, X00000, X010110, vN, vD);
