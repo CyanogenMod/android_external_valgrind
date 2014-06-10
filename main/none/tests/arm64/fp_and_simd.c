@@ -3594,10 +3594,10 @@ int main ( void )
    if (0) test_ins_h7_h0(TyH);
    if (0) test_ins_h6_h1(TyH);
    if (0) test_ins_h1_h7(TyH);
-   if (0) test_ins_b0_b14(TyB);
-   if (0) test_ins_b15_b8(TyB);
-   if (0) test_ins_b13_b9(TyB);
-   if (0) test_ins_b5_b12(TyB);
+   if (1) test_ins_b0_b14(TyB);
+   if (1) test_ins_b15_b8(TyB);
+   if (1) test_ins_b13_b9(TyB);
+   if (1) test_ins_b5_b12(TyB);
 
    // ins      d[]_x, s[]_w, h[]_w, b[]_w
    if (1) test_INS_general();
