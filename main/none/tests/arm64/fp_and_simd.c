@@ -4820,8 +4820,8 @@ int main ( void )
    if (0) test_sshr_d_d_1(TyD);
    if (0) test_sshr_d_d_32(TyD);
    if (0) test_sshr_d_d_64(TyD);
-   if (0) test_ushr_d_d_1(TyD);
-   if (0) test_ushr_d_d_32(TyD);
+   if (1) test_ushr_d_d_1(TyD);
+   if (1) test_ushr_d_d_32(TyD);
    if (0) test_ushr_d_d_64(TyD);
 
    // shl  (imm)   16b,8b,8h,4h,4s,2s,2d
