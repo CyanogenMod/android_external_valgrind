@@ -6803,6 +6803,28 @@ Bool dis_ARM64_simd_and_fp(/*MB_OUT*/DisResult* dres, UInt insn)
       return True;
    }
 
+   /* ------------ USHR (scalar, immediate) ------------ */
+   /* 31  28     22   18   15     9 4
+      011 111110 immh immb 000001 n d  USHR Vd, Vn, #shift
+   */
+   if (INSN(31,23) == BITS9(0,1,1, 1,1,1,1,1,0)
+       && INSN(15,10) == BITS6(0,0,0,0,0,1)) {
+      UInt immh = INSN(22,19);
+      UInt immb = INSN(18,16);
+      UInt nn   = INSN(9,5);
+      UInt dd   = INSN(4,0);
+
+      UInt szBlg2 = 0;
+      UInt shift  = 0;
+      Bool ok     = getLaneInfo_IMMH_IMMB(&shift, &szBlg2, immh, immb);
+
+      if (szBlg2 == 3) {
+         putQRegHI64(dd, mkU64(0x0));
+         putQRegLO(dd, binop(Iop_Shr64, getQRegLO(nn, Ity_I64), mkU8(shift)));
+         DIP("ushr %s, %s\n", nameQRegLO(dd, Ity_I64), nameQRegLO(nn, Ity_I64));
+         return True;
+      }
+   }
    /* ------------ {USHR,SSHR,SHL} (vector, immediate) ------------ */
    /* 31  28     22   18   15     9 4
       0q1 011110 immh immb 000001 n d  USHR Vd.T, Vn.T, #shift (1)
