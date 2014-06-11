@@ -4902,6 +4902,11 @@ Bool dis_ARM64_branch_etc(/*MB_OUT*/DisResult* dres, UInt insn,
       DIP("dmb ishst\n");
       return True;
    }
+   if (INSN(31,0) == 0xD50339BF) {
+      stmt(IRStmt_MBE(Imbe_Fence));
+      DIP("dmb ishld\n");
+      return True;
+   }
    if (INSN(31,0) == 0xD5033B9F) {
       stmt(IRStmt_MBE(Imbe_Fence));
       DIP("dsb ish\n");
