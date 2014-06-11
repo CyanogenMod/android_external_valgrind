@@ -3937,17 +3937,17 @@ int main ( void )
 
    // shrn{2}      2s/4s_2d, 8h/4h_4s, 8b/16b_8h,   #imm in 1 .. elem_bits
    // rshrn{2}     2s/4s_2d, 8h/4h_4s, 8b/16b_8h,   #imm in 1 .. elem_bits
-   if (0) test_shrn_2s_2d_1(TyD);
+   if (1) test_shrn_2s_2d_1(TyD);
    if (0) test_shrn_2s_2d_32(TyD);
-   if (0) test_shrn2_4s_2d_1(TyD);
+   if (1) test_shrn2_4s_2d_1(TyD);
    if (0) test_shrn2_4s_2d_32(TyD);
-   if (0) test_shrn_4h_4s_1(TyS);
+   if (1) test_shrn_4h_4s_1(TyS);
    if (0) test_shrn_4h_4s_16(TyS);
-   if (0) test_shrn2_8h_4s_1(TyS);
+   if (1) test_shrn2_8h_4s_1(TyS);
    if (0) test_shrn2_8h_4s_16(TyS);
-   if (0) test_shrn_8b_8h_1(TyH);
+   if (1) test_shrn_8b_8h_1(TyH);
    if (0) test_shrn_8b_8h_8(TyH);
-   if (0) test_shrn2_16b_8h_1(TyH);
+   if (1) test_shrn2_16b_8h_1(TyH);
    if (0) test_shrn2_16b_8h_8(TyH);
    if (0) test_rshrn_2s_2d_1(TyD);
    if (0) test_rshrn_2s_2d_32(TyD);

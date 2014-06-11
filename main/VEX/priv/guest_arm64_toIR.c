@@ -6893,6 +6893,70 @@ Bool dis_ARM64_simd_and_fp(/*MB_OUT*/DisResult* dres, UInt insn)
       }
    }
 
+   /* -------------------- SHRN{,2} -------------------- */
+   /* 31  28     22   18   15     9 4
+      0q0 011110 immh immb 100001 n d  SHRN  Vd.Tb, Vn.Ta, #sh
+
+      where Ta,Tb,sh
+        = case immh of 1xxx -> invalid
+                       01xx -> 2d, 2s(q0)/4s(q1),  64 - immh:immb (0..31)
+                       001x -> 4s, 4h(q0)/8h(q1),  32 - immh:immb (0..15)
+                       0001 -> 8h, 8b(q0)/16b(q1),  8 - immh:immb  (0..7)
+                       0000 -> AdvSIMD modified immediate (???)
+   */
+
+   if (INSN(31,31) == 0 && INSN(28,23) == BITS6(0,1,1,1,1,0)
+       && INSN(15,10) == BITS6(1,0,0,0,0,1)) {
+      Bool isQ = INSN(30,30) == 1;
+      UInt immh  = INSN(22,19);
+      UInt immb  = INSN(18,16);
+      UInt nn    = INSN(9,5);
+      UInt dd    = INSN(4,0);
+      IRTemp  src  = newTemp(Ity_V128);
+      IRTemp  zero = newTemp(Ity_V128);
+      IRExpr* res  = NULL;
+      const HChar* ta = "??";
+      const HChar* tb = "??";
+
+      UInt szBlg2 = 0;
+      UInt shift  = 0;
+      Bool ok     = getLaneInfo_IMMH_IMMB(&shift, &szBlg2, immh, immb);
+
+      if (ok && shift >= 0 && szBlg2 < 3 && shift <= (8 << szBlg2)) {
+         const IROp opsSHR[3] = { Iop_ShrN16x8, Iop_ShrN32x4, Iop_ShrN64x2 };
+         const HChar* tas[3] = { "8h", "4s", "2d" };
+         const HChar* tbs_q0[3] = { "8b", "4h", "2s" };
+         const HChar* tbs_q1[3] = { "16b", "8h", "4s" };
+         assign(src, binop(opsSHR[szBlg2], getQReg128(nn), mkU8(shift)));
+         assign(zero, mkV128(0x0000));
+         switch(szBlg2) {
+            case 0:
+               res = mk_CatEvenLanes8x16(zero, src);
+               break;
+            case 1:
+               res = mk_CatEvenLanes16x8(zero, src);
+               break;
+            case 2:
+               res = mk_CatEvenLanes32x4(zero, src);
+               break;
+            default:
+               break;
+         }
+
+         if (res != NULL) {
+            if (isQ) {
+               putQRegHI64(dd, unop(Iop_V128to64, res));
+            } else {
+               putQReg128(dd, res);
+            }
+            DIP("shrn%s %s.%s, %s.%s, #%d\n",
+                isQ ? "2" : "", nameQReg128(dd), isQ ? tbs_q1[szBlg2] : tbs_q0[szBlg2],
+                nameQReg128(nn), tas[szBlg2], shift);
+            return True;
+         }
+      }
+   }
+
    /* -------------------- {U,S}SHLL{,2} -------------------- */
    /* 31  28     22   18   15     9 4
       0q0 011110 immh immb 101001 n d  SSHLL Vd.Ta, Vn.Tb, #sh
