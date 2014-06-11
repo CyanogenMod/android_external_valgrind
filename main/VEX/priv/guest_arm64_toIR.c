@@ -7330,6 +7330,59 @@ Bool dis_ARM64_simd_and_fp(/*MB_OUT*/DisResult* dres, UInt insn)
       /* else invalid; fall through */
    }
 
+   /* -------------------- INS (element) -------------------- */
+   /* 31  28       20   15 14   10 9 4
+      011 01110000 imm5 0  imm4 1  n d  INS Vd.Ts[ix1], Vn.Ts[ix2]
+
+      where Ts, ix1, ix2 = case imm5 of xxxx1 -> B, imm5<4:1>, imm4<3:0>
+                                        xxx10 -> H, imm5<4:2>, imm4<3:1>
+                                        xx100 -> S, imm5<4:3>, imm4<3:2>
+                                        x1000 -> D, imm5<4:4>, imm4<3:3>
+   */
+   if (INSN(31,21) == BITS11(0,1,1,0,1,1,1,0,0,0,0)
+       && INSN(15,15) == 0 && INSN(10,10) == 1 ) {
+      UInt   imm5      = INSN(20,16);
+      UInt   imm4      = INSN(14,11);
+      UInt   nn        = INSN(9,5);
+      UInt   dd        = INSN(4,0);
+      HChar  ts        = '?';
+      IRType ty        = Ity_INVALID;
+      UInt   srcLaneNo = 16;
+      UInt   dstLaneNo = 16;
+
+      if (imm5 & 1) {
+         srcLaneNo = imm4;
+         dstLaneNo = imm5 >> 1;
+         ty = Ity_I8;
+         ts = 'b';
+      } else if (imm5 & 2) {
+         srcLaneNo = imm4 >> 1;
+         dstLaneNo = imm5 >> 2;
+         ty = Ity_I16;
+         ts = 'h';
+      } else if (imm5 & 4) {
+         srcLaneNo = imm4 >> 2;
+         dstLaneNo = imm5 >> 3;
+         ty = Ity_I32;
+         ts = 's';
+      } else if (imm5 & 8) {
+         srcLaneNo = imm4 >> 3;
+         dstLaneNo = imm5 >> 4;
+         ty = Ity_I64;
+         ts = 'd';
+      }
+
+      if (ty != Ity_INVALID) {
+         vassert(srcLaneNo < 16);
+         vassert(dstLaneNo < 16);
+         putQRegLane(dd, dstLaneNo, getQRegLane(nn, srcLaneNo, ty));
+         DIP("ins %s.%c[%u], %s.%c[%u]\n", 
+             nameQReg128(dd), ts, dstLaneNo, nameQReg128(nn), ts, dstLaneNo);
+         return True;
+      }
+
+   }
+
    /* -------------------- NEG (vector) -------------------- */
    /* 31  28    23 21    16      9 4
       0q1 01110 sz 10000 0101110 n d  NEG Vd, Vn
