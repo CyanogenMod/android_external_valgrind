@@ -595,6 +595,7 @@ include $(CLEAR_VARS)
 LOCAL_MODULE := default.supp
 LOCAL_MODULE_CLASS := SHARED_LIBRARIES
 LOCAL_MODULE_PATH := $(PRODUCT_OUT)$(vg_module_path)
+LOCAL_STRIP_MODULE := false
 LOCAL_SRC_FILES := bionic.supp
 
 include $(BUILD_PREBUILT)
