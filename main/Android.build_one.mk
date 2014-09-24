@@ -64,8 +64,5 @@ ifeq ($(vg_local_no_crt),true)
   LOCAL_NO_CRT := true
 endif
 
-# libgcov depends on libc, which valgrind is built without.
-LOCAL_NATIVE_COVERAGE := false
-
 include $(BUILD_$(vg_local_target))
 
