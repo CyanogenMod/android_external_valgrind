@@ -1,1 +1,1 @@
-link ../x86/x87trigOOR.c
+../x86/x87trigOOR.c

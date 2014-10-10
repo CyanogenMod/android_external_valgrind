@@ -517,10 +517,12 @@ void prepare_fifos_and_shared_mem(int pid)
    user = getenv("LOGNAME");
    if (user == NULL) user = getenv("USER");
    if (user == NULL) user = "???";
+   if (strchr(user, '/')) user = "???";
 
    host = getenv("HOST");
    if (host == NULL) host = getenv("HOSTNAME");
    if (host == NULL) host = "???";
+   if (strchr(host, '/')) host = "???";
 
    len = strlen(vgdb_prefix) + strlen(user) + strlen(host) + 40;
    from_gdb_to_pid = vmalloc (len);
@@ -958,7 +960,17 @@ void standalone_send_commands(int pid,
       We then start to wait for packets (normally first a resume reply)
       At that point, we send our command and expect replies */
    buf[0] = '\003';
-   write_buf(to_pid, buf, 1, "write \\003 to wake up", /* notify */ True);
+   i = 0;
+   while (!write_buf(to_pid, buf, 1, 
+                     "write \\003 to wake up", /* notify */ True)) {
+      /* If write fails, retries up to 10 times every 0.5 seconds
+         This aims at solving the race condition described in
+         remote-utils.c remote_finish function. */
+      usleep(500*1000);
+      i++;
+      if (i >= 10)
+         XERROR (errno, "failed to send wake up char after 10 trials\n");
+   }
    from_pid = open_fifo(to_gdb_from_pid, O_RDONLY, 
                         "read cmd result from pid");
    

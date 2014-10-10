@@ -206,8 +206,8 @@ UInt VG_(get_StackTrace_wrk) ( ThreadId tid_if_known,
       fp_max -= sizeof(Addr);
 
    if (debug)
-      VG_(printf)("max_n_ips=%d fp_min=0x%lx fp_max_orig=0x%lx, "
-                  "fp_max=0x%lx ip=0x%lx fp=0x%lx\n",
+      VG_(printf)("max_n_ips=%d fp_min=0x%08lx fp_max_orig=0x08%lx, "
+                  "fp_max=0x%08lx ip=0x%08lx fp=0x%08lx\n",
                   max_n_ips, fp_min, fp_max_orig, fp_max,
                   uregs.xip, uregs.xbp);
 
@@ -262,8 +262,10 @@ UInt VG_(get_StackTrace_wrk) ( ThreadId tid_if_known,
       UWord hash = uregs.xip % N_FP_CF_VERIF;
       Addr xip_verif = uregs.xip ^ fp_CF_verif_cache [hash];
       if (debug)
-         VG_(printf)("     uregs.xip 0x%08lx xip_verif[0x%08lx]\n",
-                     uregs.xip, xip_verif);
+         VG_(printf)("     uregs.xip 0x%08lx xip_verif[0x%08lx]"
+                     " xbp 0x%08lx xsp 0x%08lx\n",
+                     uregs.xip, xip_verif,
+                     uregs.xbp, uregs.xsp);
       // If xip is in cache, then xip_verif will be <= CFUNWIND.
       // Otherwise, if not in cache, xip_verif will be > CFUNWIND.
 
@@ -620,7 +622,8 @@ UInt VG_(get_StackTrace_wrk) ( ThreadId tid_if_known,
 
 /* -----------------------ppc32/64 ---------------------- */
 
-#if defined(VGP_ppc32_linux) || defined(VGP_ppc64_linux)
+#if defined(VGP_ppc32_linux) || defined(VGP_ppc64be_linux) \
+    || defined(VGP_ppc64le_linux)
 
 UInt VG_(get_StackTrace_wrk) ( ThreadId tid_if_known,
                                /*OUT*/Addr* ips, UInt max_n_ips,
@@ -629,7 +632,7 @@ UInt VG_(get_StackTrace_wrk) ( ThreadId tid_if_known,
                                Addr fp_max_orig )
 {
    Bool  lr_is_first_RA = False;
-#  if defined(VG_PLAT_USES_PPCTOC)
+#  if defined(VG_PLAT_USES_PPCTOC) || defined(VGP_ppc64le_linux)
    Word redir_stack_size = 0;
    Word redirs_used      = 0;
 #  endif
@@ -648,7 +651,7 @@ UInt VG_(get_StackTrace_wrk) ( ThreadId tid_if_known,
    Addr fp = sp;
 #  if defined(VGP_ppc32_linux)
    Addr lr = startRegs->misc.PPC32.r_lr;
-#  elif defined(VGP_ppc64_linux)
+#  elif defined(VGP_ppc64be_linux) || defined(VGP_ppc64le_linux)
    Addr lr = startRegs->misc.PPC64.r_lr;
 #  endif
    Addr fp_min = sp;
@@ -684,7 +687,7 @@ UInt VG_(get_StackTrace_wrk) ( ThreadId tid_if_known,
    /* fp is %r1.  ip is %cia.  Note, ppc uses r1 as both the stack and
       frame pointers. */
 
-#  if defined(VGP_ppc64_linux)
+#  if defined(VGP_ppc64be_linux) || defined(VGP_ppc64le_linux)
    redir_stack_size = VEX_GUEST_PPC64_REDIR_STACK_SIZE;
    redirs_used      = 0;
 #  endif
@@ -740,7 +743,7 @@ UInt VG_(get_StackTrace_wrk) ( ThreadId tid_if_known,
         /* On ppc64-linux (ppc64-elf, really), the lr save
            slot is 2 words back from sp, whereas on ppc32-elf(?) it's
            only one word back. */
-#        if defined(VG_PLAT_USES_PPCTOC)
+#        if defined(VG_PLAT_USES_PPCTOC) || defined(VGP_ppc64le_linux)
          const Int lr_offset = 2;
 #        else
          const Int lr_offset = 1;
@@ -759,7 +762,7 @@ UInt VG_(get_StackTrace_wrk) ( ThreadId tid_if_known,
             else
                ip = (((UWord*)fp)[lr_offset]);
 
-#           if defined(VG_PLAT_USES_PPCTOC)
+#           if defined(VG_PLAT_USES_PPCTOC) || defined(VGP_ppc64le_linux)
             /* Nasty hack to do with function replacement/wrapping on
                ppc64-linux.  If LR points to our magic return stub,
                then we are in a wrapped or intercepted function, in
@@ -1392,8 +1395,8 @@ UInt VG_(get_StackTrace) ( ThreadId tid,
    VG_(memset)( &startRegs, 0, sizeof(startRegs) );
    VG_(get_UnwindStartRegs)( &startRegs, tid );
 
-   Addr stack_highest_word = VG_(threads)[tid].client_stack_highest_word;
-   Addr stack_lowest_word  = 0;
+   Addr stack_highest_byte = VG_(threads)[tid].client_stack_highest_byte;
+   Addr stack_lowest_byte  = 0;
 
 #  if defined(VGP_x86_linux)
    /* Nasty little hack to deal with syscalls - if libc is using its
@@ -1425,7 +1428,7 @@ UInt VG_(get_StackTrace) ( ThreadId tid,
 
    /* See if we can get a better idea of the stack limits */
    VG_(stack_limits)( (Addr)startRegs.r_sp,
-                      &stack_lowest_word, &stack_highest_word );
+                      &stack_lowest_byte, &stack_highest_byte );
 
    /* Take into account the first_ip_delta. */
    startRegs.r_pc += (Long)(Word)first_ip_delta;
@@ -1433,13 +1436,13 @@ UInt VG_(get_StackTrace) ( ThreadId tid,
    if (0)
       VG_(printf)("tid %d: stack_highest=0x%08lx ip=0x%010llx "
                   "sp=0x%010llx\n",
-		  tid, stack_highest_word,
+		  tid, stack_highest_byte,
                   startRegs.r_pc, startRegs.r_sp);
 
    return VG_(get_StackTrace_wrk)(tid, ips, max_n_ips, 
                                        sps, fps,
                                        &startRegs,
-                                       stack_highest_word);
+                                       stack_highest_byte);
 }
 
 static void printIpDesc(UInt n, Addr ip, void* uu_opaque)
@@ -1448,13 +1451,20 @@ static void printIpDesc(UInt n, Addr ip, void* uu_opaque)
    
    static HChar buf[BUF_LEN];
 
-   VG_(describe_IP)(ip, buf, BUF_LEN);
+   InlIPCursor *iipc = VG_(new_IIPC)(ip);
 
-   if (VG_(clo_xml)) {
-      VG_(printf_xml)("    %s\n", buf);
-   } else {
-      VG_(message)(Vg_UserMsg, "   %s %s\n", ( n == 0 ? "at" : "by" ), buf);
-   }
+   do {
+      VG_(describe_IP)(ip, buf, BUF_LEN, iipc);
+      if (VG_(clo_xml)) {
+         VG_(printf_xml)("    %s\n", buf);
+      } else {
+         VG_(message)(Vg_UserMsg, "   %s %s\n", 
+                      ( n == 0 ? "at" : "by" ), buf);
+      }
+      n++; 
+      // Increase n to show "at" for only one level.
+   } while (VG_(next_IIPC)(iipc));
+   VG_(delete_IIPC)(iipc);
 }
 
 /* Print a StackTrace. */

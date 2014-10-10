@@ -386,7 +386,7 @@ asm(
 ".previous\n"
 );
 
-#elif defined(VGP_ppc64_linux)
+#elif defined(VGP_ppc64be_linux)
 /* Due to the need to return 65 bits of result, this is completely
    different from the ppc32 case.  The single arg register points to a
    7-word block containing the syscall # and the 6 args.  The syscall
@@ -420,6 +420,45 @@ asm(
 "        andi. 3,3,1\n"
 "        std  3,8(5)\n"    /* argblock[1] = cr0.s0 & 1 */
 "        blr\n"
+);
+
+#elif defined(VGP_ppc64le_linux)
+/* Due to the need to return 65 bits of result, this is completely
+   different from the ppc32 case.  The single arg register points to a
+   7-word block containing the syscall # and the 6 args.  The syscall
+   result proper is put in [0] of the block, and %cr0.so is in the
+   bottom bit of [1]. */
+extern void do_syscall_WRK ( ULong* argblock );
+/* Little Endian supports ELF version 2.  In the future, it may support
+ * other versions as well.
+ */
+asm(
+".align   2\n"
+".globl   do_syscall_WRK\n"
+".type    do_syscall_WRK,@function\n"
+"do_syscall_WRK:\n"
+"#if  _CALL_ELF == 2"               "\n"
+"0:      addis        2,12,.TOC.-0b@ha\n"
+"        addi         2,2,.TOC.-0b@l\n"
+"        .localentry do_syscall_WRK, .-do_syscall_WRK\n"
+"#endif"                            "\n"
+"        std  3,-16(1)\n"  /* stash arg */
+"        ld   8, 48(3)\n"  /* sc arg 6 */
+"        ld   7, 40(3)\n"  /* sc arg 5 */
+"        ld   6, 32(3)\n"  /* sc arg 4 */
+"        ld   5, 24(3)\n"  /* sc arg 3 */
+"        ld   4, 16(3)\n"  /* sc arg 2 */
+"        ld   0,  0(3)\n"  /* sc number */
+"        ld   3,  8(3)\n"  /* sc arg 1 */
+"        sc\n"             /* result in r3 and cr0.so */
+"        ld   5,-16(1)\n"  /* reacquire argblock ptr (r5 is caller-save) */
+"        std  3,0(5)\n"    /* argblock[0] = r3 */
+"        mfcr 3\n"
+"        srwi 3,3,28\n"
+"        andi. 3,3,1\n"
+"        std  3,8(5)\n"    /* argblock[1] = cr0.s0 & 1 */
+"        blr\n"
+"        .size do_syscall_WRK, .-do_syscall_WRK\n"
 );
 
 #elif defined(VGP_arm_linux)
@@ -720,7 +759,7 @@ SysRes VG_(do_syscall) ( UWord sysno, UWord a1, UWord a2, UWord a3,
    UInt  cr0so   = (UInt)(ret);
    return VG_(mk_SysRes_ppc32_linux)( val, cr0so );
 
-#  elif defined(VGP_ppc64_linux)
+#  elif defined(VGP_ppc64be_linux) || defined(VGP_ppc64le_linux)
    ULong argblock[7];
    argblock[0] = sysno;
    argblock[1] = a1;

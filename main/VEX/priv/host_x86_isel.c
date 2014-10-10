@@ -3413,9 +3413,9 @@ static HReg iselVecExpr_wrk ( ISelEnv* env, IRExpr* e )
          return dst;
       }
 
-      case Iop_Recip32Fx4: op = Xsse_RCPF;   goto do_32Fx4_unary;
-      case Iop_RSqrt32Fx4: op = Xsse_RSQRTF; goto do_32Fx4_unary;
-      case Iop_Sqrt32Fx4:  op = Xsse_SQRTF;  goto do_32Fx4_unary;
+      case Iop_RecipEst32Fx4: op = Xsse_RCPF;   goto do_32Fx4_unary;
+      case Iop_RSqrtEst32Fx4: op = Xsse_RSQRTF; goto do_32Fx4_unary;
+      case Iop_Sqrt32Fx4:     op = Xsse_SQRTF;  goto do_32Fx4_unary;
       do_32Fx4_unary:
       {
          HReg arg = iselVecExpr(env, e->Iex.Unop.arg);
@@ -3424,8 +3424,6 @@ static HReg iselVecExpr_wrk ( ISelEnv* env, IRExpr* e )
          return dst;
       }
 
-      case Iop_Recip64Fx2: op = Xsse_RCPF;   goto do_64Fx2_unary;
-      case Iop_RSqrt64Fx2: op = Xsse_RSQRTF; goto do_64Fx2_unary;
       case Iop_Sqrt64Fx2:  op = Xsse_SQRTF;  goto do_64Fx2_unary;
       do_64Fx2_unary:
       {
@@ -3436,9 +3434,9 @@ static HReg iselVecExpr_wrk ( ISelEnv* env, IRExpr* e )
          return dst;
       }
 
-      case Iop_Recip32F0x4: op = Xsse_RCPF;   goto do_32F0x4_unary;
-      case Iop_RSqrt32F0x4: op = Xsse_RSQRTF; goto do_32F0x4_unary;
-      case Iop_Sqrt32F0x4:  op = Xsse_SQRTF;  goto do_32F0x4_unary;
+      case Iop_RecipEst32F0x4: op = Xsse_RCPF;   goto do_32F0x4_unary;
+      case Iop_RSqrtEst32F0x4: op = Xsse_RSQRTF; goto do_32F0x4_unary;
+      case Iop_Sqrt32F0x4:     op = Xsse_SQRTF;  goto do_32F0x4_unary;
       do_32F0x4_unary:
       {
          /* A bit subtle.  We have to copy the arg to the result
@@ -3454,8 +3452,6 @@ static HReg iselVecExpr_wrk ( ISelEnv* env, IRExpr* e )
          return dst;
       }
 
-      case Iop_Recip64F0x2: op = Xsse_RCPF;   goto do_64F0x2_unary;
-      case Iop_RSqrt64F0x2: op = Xsse_RSQRTF; goto do_64F0x2_unary;
       case Iop_Sqrt64F0x2:  op = Xsse_SQRTF;  goto do_64F0x2_unary;
       do_64F0x2_unary:
       {
@@ -4415,8 +4411,8 @@ static void iselNext ( ISelEnv* env,
 
 HInstrArray* iselSB_X86 ( IRSB* bb,
                           VexArch      arch_host,
-                          VexArchInfo* archinfo_host,
-                          VexAbiInfo*  vbi/*UNUSED*/,
+                          const VexArchInfo* archinfo_host,
+                          const VexAbiInfo*  vbi/*UNUSED*/,
                           Int offs_Host_EvC_Counter,
                           Int offs_Host_EvC_FailAddr,
                           Bool chainingAllowed,
@@ -4439,6 +4435,9 @@ HInstrArray* iselSB_X86 ( IRSB* bb,
                      | VEX_HWCAPS_X86_LZCNT)));
    vassert(sizeof(max_ga) == 8);
    vassert((max_ga >> 32) == 0);
+
+   /* Check that the host's endianness is as expected. */
+   vassert(archinfo_host->endness == VexEndnessLE);
 
    /* Make up an initial environment to use. */
    env = LibVEX_Alloc(sizeof(ISelEnv));

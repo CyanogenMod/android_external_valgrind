@@ -123,10 +123,10 @@
    not change during translation of the instruction.
 */
 
-/* CONST: is the host bigendian?  This has to do with float vs double
-   register accesses on VFP, but it's complex and not properly thought
-   out. */
-static Bool host_is_bigendian;
+/* CONST: what is the host's endianness?  This has to do with float vs
+   double register accesses on VFP, but it's complex and not properly
+   thought out. */
+static VexEndness host_endness;
 
 /* CONST: The guest address for the instruction currently being
    translated.  This is the real, "decoded" address (not subject
@@ -190,7 +190,7 @@ static IRTemp r15kind;
 
 /* Do a little-endian load of a 32-bit word, regardless of the
    endianness of the underlying host. */
-static inline UInt getUIntLittleEndianly ( UChar* p )
+static inline UInt getUIntLittleEndianly ( const UChar* p )
 {
    UInt w = 0;
    w = (w << 8) | p[3];
@@ -202,7 +202,7 @@ static inline UInt getUIntLittleEndianly ( UChar* p )
 
 /* Do a little-endian load of a 16-bit word, regardless of the
    endianness of the underlying host. */
-static inline UShort getUShortLittleEndianly ( UChar* p )
+static inline UShort getUShortLittleEndianly ( const UChar* p )
 {
    UShort w = 0;
    w = (w << 8) | p[1];
@@ -849,11 +849,11 @@ static Int floatGuestRegOffset ( UInt fregNo )
    Int off;
    vassert(fregNo < 32);
    off = doubleGuestRegOffset(fregNo >> 1);
-   if (host_is_bigendian) {
-      vassert(0);
-   } else {
+   if (host_endness == VexEndnessLE) {
       if (fregNo & 1)
          off += 4;
+   } else {
+      vassert(0);
    }
    return off;
 }
@@ -2864,11 +2864,11 @@ Bool dis_neon_vext ( UInt theInstr, IRTemp condT )
    HChar reg_t = Q ? 'q' : 'd';
 
    if (Q) {
-      putQReg(dreg, triop(Iop_ExtractV128, getQReg(nreg),
-               getQReg(mreg), mkU8(imm4)), condT);
+      putQReg(dreg, triop(Iop_SliceV128, /*hiV128*/getQReg(mreg),
+                          /*loV128*/getQReg(nreg), mkU8(imm4)), condT);
    } else {
-      putDRegI64(dreg, triop(Iop_Extract64, getDRegI64(nreg),
-                 getDRegI64(mreg), mkU8(imm4)), condT);
+      putDRegI64(dreg, triop(Iop_Slice64, /*hiI64*/getDRegI64(mreg),
+                             /*loI64*/getDRegI64(nreg), mkU8(imm4)), condT);
    }
    DIP("vext.8 %c%d, %c%d, %c%d, #%d\n", reg_t, dreg, reg_t, nreg,
                                          reg_t, mreg, imm4);
@@ -3657,8 +3657,8 @@ Bool dis_neon_data_3same ( UInt theInstr, IRTemp condT )
       case 4:
          if (B == 0) {
             /* VSHL */
-            IROp op, sub_op;
-            IRTemp tmp;
+            IROp op = Iop_INVALID, sub_op = Iop_INVALID;
+            IRTemp tmp = IRTemp_INVALID;
             if (U) {
                switch (size) {
                   case 0: op = Q ? Iop_Shl8x16 : Iop_Shl8x8; break;
@@ -4790,7 +4790,8 @@ Bool dis_neon_data_3same ( UInt theInstr, IRTemp condT )
                   /* VRECPS */
                   if ((theInstr >> 20) & 1)
                      return False;
-                  assign(res, binop(Q ? Iop_Recps32Fx4 : Iop_Recps32Fx2,
+                  assign(res, binop(Q ? Iop_RecipStep32Fx4
+                                      : Iop_RecipStep32Fx2,
                                     mkexpr(arg_n),
                                     mkexpr(arg_m)));
                   DIP("vrecps.f32 %c%u, %c%u, %c%u\n", Q ? 'q' : 'd', dreg,
@@ -4799,7 +4800,8 @@ Bool dis_neon_data_3same ( UInt theInstr, IRTemp condT )
                   /* VRSQRTS  */
                   if ((theInstr >> 20) & 1)
                      return False;
-                  assign(res, binop(Q ? Iop_Rsqrts32Fx4 : Iop_Rsqrts32Fx2,
+                  assign(res, binop(Q ? Iop_RSqrtStep32Fx4
+                                      : Iop_RSqrtStep32Fx2,
                                     mkexpr(arg_n),
                                     mkexpr(arg_m)));
                   DIP("vrsqrts.f32 %c%u, %c%u, %c%u\n", Q ? 'q' : 'd', dreg,
@@ -5132,7 +5134,7 @@ Bool dis_neon_data_3diff ( UInt theInstr, IRTemp condT )
             case 0: case 3:
                return False;
             case 1:
-               op = Iop_QDMulLong16Sx4;
+               op = Iop_QDMull16Sx4;
                cmp = Iop_CmpEQ16x4;
                add = P ? Iop_QSub32Sx4 : Iop_QAdd32Sx4;
                op2 = P ? Iop_Sub32x4 : Iop_Add32x4;
@@ -5141,7 +5143,7 @@ Bool dis_neon_data_3diff ( UInt theInstr, IRTemp condT )
                imm = (imm << 32) | imm;
                break;
             case 2:
-               op = Iop_QDMulLong32Sx2;
+               op = Iop_QDMull32Sx2;
                cmp = Iop_CmpEQ32x2;
                add = P ? Iop_QSub64Sx2 : Iop_QAdd64Sx2;
                op2 = P ? Iop_Sub64x2 : Iop_Add64x2;
@@ -5206,14 +5208,14 @@ Bool dis_neon_data_3diff ( UInt theInstr, IRTemp condT )
             case 3:
                return False;
             case 1:
-               op = Iop_QDMulLong16Sx4;
+               op = Iop_QDMull16Sx4;
                op2 = Iop_CmpEQ16x4;
                imm = 1LL << 15;
                imm = (imm << 16) | imm;
                imm = (imm << 32) | imm;
                break;
             case 2:
-               op = Iop_QDMulLong32Sx2;
+               op = Iop_QDMull32Sx2;
                op2 = Iop_CmpEQ32x2;
                imm = 1LL << 31;
                imm = (imm << 32) | imm;
@@ -5454,7 +5456,7 @@ Bool dis_neon_data_2reg_and_scalar ( UInt theInstr, IRTemp condT )
          case 3:
             return False;
          case 1:
-            op = Iop_QDMulLong16Sx4;
+            op = Iop_QDMull16Sx4;
             cmp = Iop_CmpEQ16x4;
             add = P ? Iop_QSub32Sx4 : Iop_QAdd32Sx4;
             op2 = P ? Iop_Sub32x4 : Iop_Add32x4;
@@ -5463,7 +5465,7 @@ Bool dis_neon_data_2reg_and_scalar ( UInt theInstr, IRTemp condT )
             imm = (imm << 32) | imm;
             break;
          case 2:
-            op = Iop_QDMulLong32Sx2;
+            op = Iop_QDMull32Sx2;
             cmp = Iop_CmpEQ32x2;
             add = P ? Iop_QSub64Sx2 : Iop_QAdd64Sx2;
             op2 = P ? Iop_Sub64x2 : Iop_Add64x2;
@@ -5667,14 +5669,14 @@ Bool dis_neon_data_2reg_and_scalar ( UInt theInstr, IRTemp condT )
          case 3:
             return False;
          case 1:
-            op = Iop_QDMulLong16Sx4;
+            op = Iop_QDMull16Sx4;
             op2 = Iop_CmpEQ16x4;
             imm = 1LL << 15;
             imm = (imm << 16) | imm;
             imm = (imm << 32) | imm;
             break;
          case 2:
-            op = Iop_QDMulLong32Sx2;
+            op = Iop_QDMull32Sx2;
             op2 = Iop_CmpEQ32x2;
             imm = 1LL << 31;
             imm = (imm << 32) | imm;
@@ -6257,19 +6259,19 @@ Bool dis_neon_data_2reg_and_shift ( UInt theInstr, IRTemp condT )
             if (A & 1) {
                switch (size) {
                   case 0:
-                     op = Q ? Iop_QShlN8x16 : Iop_QShlN8x8;
+                     op = Q ? Iop_QShlNsatUU8x16 : Iop_QShlNsatUU8x8;
                      op_rev = Q ? Iop_ShrN8x16 : Iop_ShrN8x8;
                      break;
                   case 1:
-                     op = Q ? Iop_QShlN16x8 : Iop_QShlN16x4;
+                     op = Q ? Iop_QShlNsatUU16x8 : Iop_QShlNsatUU16x4;
                      op_rev = Q ? Iop_ShrN16x8 : Iop_ShrN16x4;
                      break;
                   case 2:
-                     op = Q ? Iop_QShlN32x4 : Iop_QShlN32x2;
+                     op = Q ? Iop_QShlNsatUU32x4 : Iop_QShlNsatUU32x2;
                      op_rev = Q ? Iop_ShrN32x4 : Iop_ShrN32x2;
                      break;
                   case 3:
-                     op = Q ? Iop_QShlN64x2 : Iop_QShlN64x1;
+                     op = Q ? Iop_QShlNsatUU64x2 : Iop_QShlNsatUU64x1;
                      op_rev = Q ? Iop_ShrN64x2 : Iop_Shr64;
                      break;
                   default:
@@ -6281,19 +6283,19 @@ Bool dis_neon_data_2reg_and_shift ( UInt theInstr, IRTemp condT )
             } else {
                switch (size) {
                   case 0:
-                     op = Q ? Iop_QShlN8Sx16 : Iop_QShlN8Sx8;
+                     op = Q ? Iop_QShlNsatSU8x16 : Iop_QShlNsatSU8x8;
                      op_rev = Q ? Iop_ShrN8x16 : Iop_ShrN8x8;
                      break;
                   case 1:
-                     op = Q ? Iop_QShlN16Sx8 : Iop_QShlN16Sx4;
+                     op = Q ? Iop_QShlNsatSU16x8 : Iop_QShlNsatSU16x4;
                      op_rev = Q ? Iop_ShrN16x8 : Iop_ShrN16x4;
                      break;
                   case 2:
-                     op = Q ? Iop_QShlN32Sx4 : Iop_QShlN32Sx2;
+                     op = Q ? Iop_QShlNsatSU32x4 : Iop_QShlNsatSU32x2;
                      op_rev = Q ? Iop_ShrN32x4 : Iop_ShrN32x2;
                      break;
                   case 3:
-                     op = Q ? Iop_QShlN64Sx2 : Iop_QShlN64Sx1;
+                     op = Q ? Iop_QShlNsatSU64x2 : Iop_QShlNsatSU64x1;
                      op_rev = Q ? Iop_ShrN64x2 : Iop_Shr64;
                      break;
                   default:
@@ -6308,19 +6310,19 @@ Bool dis_neon_data_2reg_and_shift ( UInt theInstr, IRTemp condT )
                return False;
             switch (size) {
                case 0:
-                  op = Q ? Iop_QSalN8x16 : Iop_QSalN8x8;
+                  op = Q ? Iop_QShlNsatSS8x16 : Iop_QShlNsatSS8x8;
                   op_rev = Q ? Iop_SarN8x16 : Iop_SarN8x8;
                   break;
                case 1:
-                  op = Q ? Iop_QSalN16x8 : Iop_QSalN16x4;
+                  op = Q ? Iop_QShlNsatSS16x8 : Iop_QShlNsatSS16x4;
                   op_rev = Q ? Iop_SarN16x8 : Iop_SarN16x4;
                   break;
                case 2:
-                  op = Q ? Iop_QSalN32x4 : Iop_QSalN32x2;
+                  op = Q ? Iop_QShlNsatSS32x4 : Iop_QShlNsatSS32x2;
                   op_rev = Q ? Iop_SarN32x4 : Iop_SarN32x2;
                   break;
                case 3:
-                  op = Q ? Iop_QSalN64x2 : Iop_QSalN64x1;
+                  op = Q ? Iop_QShlNsatSS64x2 : Iop_QShlNsatSS64x1;
                   op_rev = Q ? Iop_SarN64x2 : Iop_Sar64;
                   break;
                default:
@@ -6646,13 +6648,13 @@ Bool dis_neon_data_2reg_misc ( UInt theInstr, IRTemp condT )
                IROp op;
                switch (size) {
                   case 0:
-                     op = Q ? Iop_Reverse64_8x16 : Iop_Reverse64_8x8;
+                     op = Q ? Iop_Reverse8sIn64_x2 : Iop_Reverse8sIn64_x1;
                      break;
                   case 1:
-                     op = Q ? Iop_Reverse64_16x8 : Iop_Reverse64_16x4;
+                     op = Q ? Iop_Reverse16sIn64_x2 : Iop_Reverse16sIn64_x1;
                      break;
                   case 2:
-                     op = Q ? Iop_Reverse64_32x4 : Iop_Reverse64_32x2;
+                     op = Q ? Iop_Reverse32sIn64_x2 : Iop_Reverse32sIn64_x1;
                      break;
                   case 3:
                      return False;
@@ -6669,10 +6671,10 @@ Bool dis_neon_data_2reg_misc ( UInt theInstr, IRTemp condT )
                IROp op;
                switch (size) {
                   case 0:
-                     op = Q ? Iop_Reverse32_8x16 : Iop_Reverse32_8x8;
+                     op = Q ? Iop_Reverse8sIn32_x4 : Iop_Reverse8sIn32_x2;
                      break;
                   case 1:
-                     op = Q ? Iop_Reverse32_16x8 : Iop_Reverse32_16x4;
+                     op = Q ? Iop_Reverse16sIn32_x4 : Iop_Reverse16sIn32_x2;
                      break;
                   case 2:
                   case 3:
@@ -6690,7 +6692,7 @@ Bool dis_neon_data_2reg_misc ( UInt theInstr, IRTemp condT )
                IROp op;
                switch (size) {
                   case 0:
-                     op = Q ? Iop_Reverse16_8x16 : Iop_Reverse16_8x8;
+                     op = Q ? Iop_Reverse8sIn16_x8 : Iop_Reverse8sIn16_x4;
                      break;
                   case 1:
                   case 2:
@@ -6740,9 +6742,9 @@ Bool dis_neon_data_2reg_misc ( UInt theInstr, IRTemp condT )
                /* VCLS */
                IROp op;
                switch (size) {
-                  case 0: op = Q ? Iop_Cls8Sx16 : Iop_Cls8Sx8; break;
-                  case 1: op = Q ? Iop_Cls16Sx8 : Iop_Cls16Sx4; break;
-                  case 2: op = Q ? Iop_Cls32Sx4 : Iop_Cls32Sx2; break;
+                  case 0: op = Q ? Iop_Cls8x16 : Iop_Cls8x8; break;
+                  case 1: op = Q ? Iop_Cls16x8 : Iop_Cls16x4; break;
+                  case 2: op = Q ? Iop_Cls32x4 : Iop_Cls32x2; break;
                   case 3: return False;
                   default: vassert(0);
                }
@@ -6755,9 +6757,9 @@ Bool dis_neon_data_2reg_misc ( UInt theInstr, IRTemp condT )
                /* VCLZ */
                IROp op;
                switch (size) {
-                  case 0: op = Q ? Iop_Clz8Sx16 : Iop_Clz8Sx8; break;
-                  case 1: op = Q ? Iop_Clz16Sx8 : Iop_Clz16Sx4; break;
-                  case 2: op = Q ? Iop_Clz32Sx4 : Iop_Clz32Sx2; break;
+                  case 0: op = Q ? Iop_Clz8x16 : Iop_Clz8x8; break;
+                  case 1: op = Q ? Iop_Clz16x8 : Iop_Clz16x4; break;
+                  case 2: op = Q ? Iop_Clz32x4 : Iop_Clz32x2; break;
                   case 3: return False;
                   default: vassert(0);
                }
@@ -7489,11 +7491,11 @@ Bool dis_neon_data_2reg_misc ( UInt theInstr, IRTemp condT )
             if (size != 2)
                return False;
             if (Q) {
-               op = F ? Iop_Recip32Fx4 : Iop_Recip32x4;
+               op = F ? Iop_RecipEst32Fx4 : Iop_RecipEst32Ux4;
                putQReg(dreg, unop(op, getQReg(mreg)), condT);
                DIP("vrecpe.%c32 q%u, q%u\n", F ? 'f' : 'u', dreg, mreg);
             } else {
-               op = F ? Iop_Recip32Fx2 : Iop_Recip32x2;
+               op = F ? Iop_RecipEst32Fx2 : Iop_RecipEst32Ux2;
                putDRegI64(dreg, unop(op, getDRegI64(mreg)), condT);
                DIP("vrecpe.%c32 d%u, d%u\n", F ? 'f' : 'u', dreg, mreg);
             }
@@ -7506,10 +7508,10 @@ Bool dis_neon_data_2reg_misc ( UInt theInstr, IRTemp condT )
                return False;
             if (F) {
                /* fp */
-               op = Q ? Iop_Rsqrte32Fx4 : Iop_Rsqrte32Fx2;
+               op = Q ? Iop_RSqrtEst32Fx4 : Iop_RSqrtEst32Fx2;
             } else {
                /* unsigned int */
-               op = Q ? Iop_Rsqrte32x4 : Iop_Rsqrte32x2;
+               op = Q ? Iop_RSqrtEst32Ux4 : Iop_RSqrtEst32Ux2;
             }
             if (Q) {
                putQReg(dreg, unop(op, getQReg(mreg)), condT);
@@ -7974,7 +7976,7 @@ static void math_INTERLEAVE_2 (/*OUT*/IRTemp* i0, /*OUT*/IRTemp* i1,
    /* The following assumes that the guest is little endian, and hence
       that the memory-side (interleaved) data is stored
       little-endianly. */
-   vassert(i0 && *i1);
+   vassert(i0 && i1);
    /* This is pretty easy, since we have primitives directly to
       hand. */
    if (laneszB == 4) {
@@ -14400,17 +14402,18 @@ static Bool decode_NV_instruction ( /*MOD*/DisResult* dres,
    // Should only be called for NV instructions
    vassert(BITS4(1,1,1,1) == INSN_COND);
 
-   /* ------------------------ pld ------------------------ */
-   if (BITS8(0,1,0,1, 0, 1,0,1) == (INSN(27,20) & BITS8(1,1,1,1,0,1,1,1))
+   /* ------------------------ pld{w} ------------------------ */
+   if (BITS8(0,1,0,1, 0,0, 0,1) == (INSN(27,20) & BITS8(1,1,1,1, 0,0, 1,1))
        && BITS4(1,1,1,1) == INSN(15,12)) {
       UInt rN    = INSN(19,16);
       UInt imm12 = INSN(11,0);
       UInt bU    = INSN(23,23);
-      DIP("pld [r%u, #%c%u]\n", rN, bU ? '+' : '-', imm12);
+      UInt bR    = INSN(22,22);
+      DIP("pld%c [r%u, #%c%u]\n", bR ? ' ' : 'w', rN, bU ? '+' : '-', imm12);
       return True;
    }
 
-   if (BITS8(0,1,1,1, 0, 1,0,1) == (INSN(27,20) & BITS8(1,1,1,1,0,1,1,1))
+   if (BITS8(0,1,1,1, 0,0, 0,1) == (INSN(27,20) & BITS8(1,1,1,1, 0,0, 1,1))
        && BITS4(1,1,1,1) == INSN(15,12)
        && 0 == INSN(4,4)) {
       UInt rN   = INSN(19,16);
@@ -14418,7 +14421,8 @@ static Bool decode_NV_instruction ( /*MOD*/DisResult* dres,
       UInt imm5 = INSN(11,7);
       UInt sh2  = INSN(6,5);
       UInt bU   = INSN(23,23);
-      if (rM != 15) {
+      UInt bR   = INSN(22,22);
+      if (rM != 15 && (rN != 15 || bR)) {
          IRExpr* eaE = mk_EA_reg_plusminus_shifted_reg(rN, bU, rM,
                                                        sh2, imm5, dis_buf);
          IRTemp eaT = newTemp(Ity_I32);
@@ -14427,7 +14431,7 @@ static Bool decode_NV_instruction ( /*MOD*/DisResult* dres,
             by iropt a little later on. */
          vassert(eaE);
          assign(eaT, eaE);
-         DIP("pld %s\n", dis_buf);
+         DIP("pld%c %s\n", bR ? ' ' : 'w', dis_buf);
          return True;
       }
       /* fall through */
@@ -14542,7 +14546,7 @@ DisResult disInstr_ARM_WRK (
              Bool         (*resteerOkFn) ( /*opaque*/void*, Addr64 ),
              Bool         resteerCisOk,
              void*        callback_opaque,
-             UChar*       guest_instr,
+             const UChar* guest_instr,
              VexArchInfo* archinfo,
              VexAbiInfo*  abiinfo,
              Bool         sigill_diag
@@ -14591,7 +14595,7 @@ DisResult disInstr_ARM_WRK (
 
    /* Spot "Special" instructions (see comment at top of file). */
    {
-      UChar* code = (UChar*)guest_instr;
+      const UChar* code = guest_instr;
       /* Spot the 16-byte preamble: 
 
          e1a0c1ec  mov r12, r12, ROR #3
@@ -17275,9 +17279,10 @@ DisResult disInstr_ARM_WRK (
       now. */
    vassert(0 == (guest_R15_curr_instr_notENC & 3));
    llPutIReg( 15, mkU32(guest_R15_curr_instr_notENC) );
+   dres.len         = 0;
    dres.whatNext    = Dis_StopHere;
    dres.jk_StopHere = Ijk_NoDecode;
-   dres.len         = 0;
+   dres.continueAt  = 0;
    return dres;
 
   decode_success:
@@ -17373,7 +17378,7 @@ DisResult disInstr_THUMB_WRK (
              Bool         (*resteerOkFn) ( /*opaque*/void*, Addr64 ),
              Bool         resteerCisOk,
              void*        callback_opaque,
-             UChar*       guest_instr,
+             const UChar* guest_instr,
              VexArchInfo* archinfo,
              VexAbiInfo*  abiinfo,
              Bool         sigill_diag
@@ -17432,7 +17437,7 @@ DisResult disInstr_THUMB_WRK (
    /* ----------------------------------------------------------- */
    /* Spot "Special" instructions (see comment at top of file). */
    {
-      UChar* code = (UChar*)guest_instr;
+      const UChar* code = guest_instr;
       /* Spot the 16-byte preamble: 
 
          ea4f 0cfc  mov.w   ip, ip, ror #3
@@ -19803,11 +19808,8 @@ DisResult disInstr_THUMB_WRK (
        && INSN1(15,15) == 0) {
       UInt rD = INSN1(11,8);
       UInt rN = INSN1(3,0);
-      UInt bS = INSN0(4,4);
-      int badRegs = bS ? (isBadRegT(rD) || isBadRegT(rN))
-                       : (rD == 15 || rN == 15 || (rD == 15 && rN == 15));
-
-      if (!badRegs) {
+      if (!isBadRegT(rD) && !isBadRegT(rN)) {
+         UInt bS    = INSN0(4,4);
          UInt isMVN = INSN0(5,5);
          UInt imm5  = (INSN1(14,12) << 2) | INSN1(7,6);
          UInt how   = INSN1(5,4);
@@ -21847,9 +21849,10 @@ DisResult disInstr_THUMB_WRK (
       now. */
    vassert(0 == (guest_R15_curr_instr_notENC & 1));
    llPutIReg( 15, mkU32(guest_R15_curr_instr_notENC | 1) );
+   dres.len         = 0;
    dres.whatNext    = Dis_StopHere;
    dres.jk_StopHere = Ijk_NoDecode;
-   dres.len         = 0;
+   dres.continueAt  = 0;
    return dres;
 
   decode_success:
@@ -21971,13 +21974,13 @@ DisResult disInstr_ARM ( IRSB*        irsb_IN,
                          Bool         (*resteerOkFn) ( void*, Addr64 ),
                          Bool         resteerCisOk,
                          void*        callback_opaque,
-                         UChar*       guest_code_IN,
+                         const UChar* guest_code_IN,
                          Long         delta_ENCODED,
                          Addr64       guest_IP_ENCODED,
                          VexArch      guest_arch,
                          VexArchInfo* archinfo,
                          VexAbiInfo*  abiinfo,
-                         Bool         host_bigendian_IN,
+                         VexEndness   host_endness_IN,
                          Bool         sigill_diag_IN )
 {
    DisResult dres;
@@ -21986,9 +21989,9 @@ DisResult disInstr_ARM ( IRSB*        irsb_IN,
    /* Set globals (see top of this file) */
    vassert(guest_arch == VexArchARM);
 
-   irsb              = irsb_IN;
-   host_is_bigendian = host_bigendian_IN;
-   __curr_is_Thumb   = isThumb;
+   irsb            = irsb_IN;
+   host_endness    = host_endness_IN;
+   __curr_is_Thumb = isThumb;
 
    if (isThumb) {
       guest_R15_curr_instr_notENC = (Addr32)guest_IP_ENCODED - 1;

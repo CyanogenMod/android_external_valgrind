@@ -87,8 +87,8 @@
  */
 typedef struct _Stack {
    UWord id;
-   Addr start;
-   Addr end;
+   Addr start; // Lowest stack byte, included.
+   Addr end;   // Highest stack byte, included.
    struct _Stack *next;
 } Stack;
 
@@ -183,12 +183,15 @@ UWord VG_(register_stack)(Addr start, Addr end)
    Stack *i;
 
    if (start > end) {
+      /* If caller provides addresses in reverse order, swap them.
+         Ugly but not doing that breaks backward compatibility with
+         (user) code registering stacks with start/end inverted . */
       Addr t = end;
       end = start;
       start = t;
    }
 
-   i = (Stack *)VG_(arena_malloc)(VG_AR_CORE, "stacks.rs.1", sizeof(Stack));
+   i = VG_(malloc)("stacks.rs.1", sizeof(Stack));
    i->start = start;
    i->end = end;
    i->id = next_id++;
@@ -199,7 +202,7 @@ UWord VG_(register_stack)(Addr start, Addr end)
       current_stack = i;
    }
 
-   VG_(debugLog)(2, "stacks", "register %p-%p as stack %lu\n",
+   VG_(debugLog)(2, "stacks", "register [%p-%p] as stack %lu\n",
                     (void*)start, (void*)end, i->id);
 
    return i->id;
@@ -227,7 +230,7 @@ void VG_(deregister_stack)(UWord id)
          } else {
             prev->next = i->next;
          }
-         VG_(arena_free)(VG_AR_CORE, i);
+         VG_(free)(i);
          return;
       }
       prev = i;
@@ -246,9 +249,11 @@ void VG_(change_stack)(UWord id, Addr start, Addr end)
 
    while (i) {
       if (i->id == id) {
-         VG_(debugLog)(2, "stacks", "change stack %lu from %p-%p to %p-%p\n",
+         VG_(debugLog)(2, "stacks", 
+                       "change stack %lu from [%p-%p] to [%p-%p]\n",
                        id, (void*)i->start, (void*)i->end,
                            (void*)start,    (void*)end);
+         /* FIXME : swap start/end like VG_(register_stack) ??? */
          i->start = start;
          i->end = end;
          return;
@@ -270,7 +275,6 @@ void VG_(stack_limits)(Addr SP, Addr *start, Addr *end )
       *end = stack->end;
    }
 }
-
 
 /* complaints_stack_switch reports that SP has changed by more than some
    threshold amount (by default, 2MB).  We take this to mean that the
