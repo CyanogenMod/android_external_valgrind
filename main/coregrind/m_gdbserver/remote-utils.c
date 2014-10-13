@@ -44,7 +44,7 @@ void sr_extended_perror (SysRes sr, const HChar *msg)
       Int i;
       vki_sigset_t cursigset;
       VG_(show_sched_status) (True,  // host_stacktrace
-                              True,  // valgrind_stack_usage
+                              True,  // stack_usage
                               True); // exited_threads
       VG_(sigprocmask) (0,           // dummy how.
                         NULL,        // do not change the sigmask
@@ -274,6 +274,28 @@ void safe_mknod (char *nod)
    }
 }
 
+/* If remote_desc is not opened, open it.
+   Setup remote_desc_pollfdread_activity. */
+static void setup_remote_desc_for_reading (void)
+{
+   int save_fcntl_flags;
+
+   if (remote_desc == INVALID_DESCRIPTOR) {
+      /* we open the read side FIFO in non blocking mode
+         We then set the fd in blocking mode.
+         Opening in non-blocking read mode always succeeds while opening
+         in non-blocking write mode succeeds only if the fifo is already
+         opened in read mode. So, we wait till we have read the first
+         character from the read side before opening the write side. */
+      remote_desc = open_fifo ("read", from_gdb, VKI_O_RDONLY|VKI_O_NONBLOCK);
+      save_fcntl_flags = VG_(fcntl) (remote_desc, VKI_F_GETFL, 0);
+      VG_(fcntl) (remote_desc, VKI_F_SETFL, save_fcntl_flags & ~VKI_O_NONBLOCK);
+   }
+   remote_desc_pollfdread_activity.fd = remote_desc;
+   remote_desc_pollfdread_activity.events = VKI_POLLIN;
+   remote_desc_pollfdread_activity.revents = 0;
+}
+
 /* Open a connection to a remote debugger.
    NAME is the filename used for communication.  
    For Valgrind, name is the prefix for the two read and write FIFOs
@@ -286,7 +308,7 @@ void safe_mknod (char *nod)
 void remote_open (const HChar *name)
 {
    const HChar *user, *host;
-   int save_fcntl_flags, len;
+   int len;
    VgdbShared vgdbinit = 
       {0, 0, (Addr) VG_(invoke_gdbserver),
        (Addr) VG_(threads), sizeof(ThreadState), 
@@ -301,10 +323,12 @@ void remote_open (const HChar *name)
    user = VG_(getenv)("LOGNAME");
    if (user == NULL) user = VG_(getenv)("USER");
    if (user == NULL) user = "???";
+   if (VG_(strchr)(user, '/')) user = "???";
 
    host = VG_(getenv)("HOST");
    if (host == NULL) host = VG_(getenv)("HOSTNAME");
    if (host == NULL) host = "???";
+   if (VG_(strchr)(host, '/')) host = "???";
 
    len = strlen(name) + strlen(user) + strlen(host) + 40;
 
@@ -368,11 +392,6 @@ void remote_open (const HChar *name)
       VG_(unlink)(to_gdb);
       VG_(unlink)(shared_mem);
 
-      safe_mknod(from_gdb);
-      safe_mknod(to_gdb);
-
-      pid_from_to_creator = pid;
-      
       o = VG_(open) (shared_mem, VKI_O_CREAT|VKI_O_RDWR, 0600);
       if (sr_isError (o)) {
          sr_perror(o, "cannot create shared_mem file %s\n", shared_mem);
@@ -399,22 +418,18 @@ void remote_open (const HChar *name)
       }
       shared = (VgdbShared*) addr_shared;
       VG_(close) (shared_mem_fd);
+
+      safe_mknod(to_gdb);
+      safe_mknod(from_gdb);
+      /* from_gdb is the last resource created: vgdb searches such FIFOs
+         to detect the presence of a valgrind process.
+         So, we better create this resource when all the rest needed by
+         vgdb is ready : the other FIFO and the shared memory. */
+
+      pid_from_to_creator = pid;
    }
    
-   if (remote_desc == INVALID_DESCRIPTOR) {
-      /* we open the read side FIFO in non blocking mode
-         We then set the fd in blocking mode.
-         Opening in non-blocking read mode always succeeds while opening
-         in non-blocking write mode succeeds only if the fifo is already
-         opened in read mode. So, we wait till we have read the first
-         character from the read side before opening the write side. */
-      remote_desc = open_fifo ("read", from_gdb, VKI_O_RDONLY|VKI_O_NONBLOCK);
-      save_fcntl_flags = VG_(fcntl) (remote_desc, VKI_F_GETFL, 0);
-      VG_(fcntl) (remote_desc, VKI_F_SETFL, save_fcntl_flags & ~VKI_O_NONBLOCK);
-   }
-   remote_desc_pollfdread_activity.fd = remote_desc;
-   remote_desc_pollfdread_activity.events = VKI_POLLIN;
-   remote_desc_pollfdread_activity.revents = 0;
+   setup_remote_desc_for_reading ();
 }
 
 /* sync_gdb_connection wait a time long enough to let the connection
@@ -452,12 +467,28 @@ void remote_finish (FinishReason reason)
       VG_(close) (write_remote_desc);
    write_remote_desc = INVALID_DESCRIPTOR;
    
-   if (remote_desc != INVALID_DESCRIPTOR && reason != reset_after_error) {
+   if (remote_desc != INVALID_DESCRIPTOR) {
       /* Fully close the connection, either due to orderly_finish or
-         to reset_after_fork.
-         For reset_after_error, keep the reading side opened, to always be
-         ready to accept new vgdb connection. */
-      vg_assert (reason == reset_after_fork || reason == orderly_finish);
+         to reset_after_fork or reset_after_error.  For
+         reset_after_error, the FIFO will be re-opened soon.  This
+         leaves a small window during which a race condition can
+         happen between vgdb and a forking process: Just after fork,
+         both the parent and the child have the FIFO open.  The child
+         will close it asap (as part of the 'after fork cleanup').  If
+         2 vgdbs are launched very quickly just after the fork, the
+         parent will close its FIFO when the 1st vgdb exits.  Then if
+         the 2nd vgdb is started before the parent has the time to
+         re-open the FIFO, the 2nd vgdb will be able to open the FIFO
+         (as it is still opened by the child).  The 2nd vgdb can then
+         have a 'write' error when the child closes the FIFO.  After
+         the 1st vgdb closes its FIFO write side, the parent gets EOF
+         on its reading FIFO till it is closed and re-opened.  Opening
+         a 2nd time the FIFO before closing the 'previous fd' solves
+         this race condition, but causes other (not understood)
+         problems due to too early re-invocation of gdbsrv.  Rather
+         than to handle this race condition in gdbsrv side, we put a
+         'retry' loop in vgdb for the initial write on the write
+         FIFO. */
       remote_desc_pollfdread_activity.fd = INVALID_DESCRIPTOR;
       remote_desc_pollfdread_activity.events = 0;
       remote_desc_pollfdread_activity.revents = 0;
@@ -632,17 +663,17 @@ int hexify (char *hex, const char *bin, int count)
    Useful for register and int image */
 char* heximage (char *buf, char *bin, int count)
 {
-#if defined(VGA_x86) || defined(VGA_amd64)
+#if (VKI_LITTLE_ENDIAN)
    char rev[count]; 
    /* note: no need for trailing \0, length is known with count */
-  int i;
-  for (i = 0; i < count; i++)
-    rev[i] = bin[count - i - 1];
-  hexify (buf, rev, count);
+   int i;
+   for (i = 0; i < count; i++)
+      rev[i] = bin[count - i - 1];
+   hexify (buf, rev, count);
 #else
-  hexify (buf, bin, count);
+   hexify (buf, bin, count);
 #endif
-  return buf;
+   return buf;
 }
 
 void* C2v(CORE_ADDR addr)
@@ -805,6 +836,7 @@ int putpkt_binary (char *buf, int cnt)
    /* we might have to write a pkt when out FIFO not yet/anymore opened */
    if (!ensure_write_remote_desc()) {
       warning ("putpkt(write) error: no write_remote_desc\n");
+      free (buf2);
       return -1;
    }
 
@@ -814,6 +846,7 @@ int putpkt_binary (char *buf, int cnt)
    do {
       if (VG_(write) (write_remote_desc, buf2, p - buf2) != p - buf2) {
          warning ("putpkt(write) error\n");
+         free (buf2);
          return -1;
       }
 

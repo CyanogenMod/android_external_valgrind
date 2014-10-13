@@ -41,8 +41,8 @@ VgToolInterface VG_(tdict);
 void VG_(basic_tool_funcs)(
    void(*post_clo_init)(void),
    IRSB*(*instrument)(VgCallbackClosure*, IRSB*, 
-                      VexGuestLayout*, VexGuestExtents*, VexArchInfo*,
-                      IRType, IRType),
+                      const VexGuestLayout*, const VexGuestExtents*,
+                      const VexArchInfo*, IRType, IRType),
    void(*fini)(Int)
 )
 {
@@ -236,8 +236,8 @@ void VG_(needs_tool_errors)(
    Bool (*read_extra) (Int, HChar**, SizeT*, Int*, Supp*),
    Bool (*matches)    (Error*, Supp*),
    const HChar* (*name) (Error*),
-   Bool (*get_xtra_si)(Error*,/*OUT*/HChar*,Int),
-   Bool (*print_xtra_su)(Supp*,/*OUT*/HChar*,Int),
+   SizeT (*get_xtra_si)(Error*,/*OUT*/HChar*,Int),
+   SizeT (*print_xtra_su)(Supp*,/*OUT*/HChar*,Int),
    void (*update_xtra_su)(Error*, Supp*)
 )
 {

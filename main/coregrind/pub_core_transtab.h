@@ -38,6 +38,7 @@
 //--------------------------------------------------------------------
 
 #include "pub_core_transtab_asm.h"
+#include "libvex.h"                   // VexGuestExtents
 
 /* The fast-cache for tt-lookup.  Unused entries are denoted by .guest
    == 1, which is assumed to be a bogus address for all guest code. */
@@ -83,8 +84,7 @@ void VG_(add_to_transtab)( VexGuestExtents* vge,
                            UInt             code_len,
                            Bool             is_self_checking,
                            Int              offs_profInc,
-                           UInt             n_guest_instrs,
-                           VexArch          arch_host );
+                           UInt             n_guest_instrs );
 
 extern
 void VG_(tt_tc_do_chaining) ( void* from__patch_addr,

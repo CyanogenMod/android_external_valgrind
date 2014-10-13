@@ -36,17 +36,8 @@
 // plus some functions and macros for manipulating them.  Almost every
 // other module imports this one, if only for VG_(clo_verbosity).
 //--------------------------------------------------------------------
-
 #include "pub_tool_options.h"
-
-/* The max number of suppression files. */
-#define VG_CLO_MAX_SFILES 100
-
-/* The max number of --require-text-symbol= specification strings. */
-#define VG_CLO_MAX_REQ_TSYMS 100
-
-/* The max number of --fullpath-after= parameters. */
-#define VG_CLO_MAX_FULLPATH_AFTER 100
+#include "pub_core_xarray.h"
 
 /* Should we stop collecting errors if too many appear?  default: YES */
 extern Bool  VG_(clo_error_limit);
@@ -82,11 +73,6 @@ typedef
 #define VgdbStopAt2S(a) (1 << (a))
 // VgdbStopAt a is member of the Set s ?
 #define VgdbStopAtiS(a,s) ((s) & VgdbStopAt2S(a))
-// A set with all VgdbStopAt:
-#define VgdbStopAtallS \
-     (VgdbStopAt2S(VgdbStopAt_Startup) \
-    | VgdbStopAt2S(VgdbStopAt_Exit)    \
-    | VgdbStopAt2S(VgdbStopAt_ValgrindAbExit)
 extern UInt VG_(clo_vgdb_stop_at); // A set of VgdbStopAt reasons.
 
 /* prefix for the named pipes (FIFOs) used by vgdb/gdb to communicate with valgrind */
@@ -139,14 +125,14 @@ extern Bool  VG_(clo_time_stamp);
 /* The file descriptor to read for input.  default: 0 == stdin */
 extern Int   VG_(clo_input_fd);
 
-/* The number of suppression files specified. */
-extern Int   VG_(clo_n_suppressions);
+/* Whether or not to load the default suppressions. */
+extern Bool  VG_(clo_default_supp);
+
 /* The names of the suppression files. */
-extern const HChar* VG_(clo_suppressions)[VG_CLO_MAX_SFILES];
+extern XArray *VG_(clo_suppressions);
 
 /* An array of strings harvested from --fullpath-after= flags. */
-extern Int   VG_(clo_n_fullpath_after);
-extern const HChar* VG_(clo_fullpath_after)[VG_CLO_MAX_FULLPATH_AFTER];
+extern XArray *VG_(clo_fullpath_after);
 
 /* Full path to additional path to search for debug symbols */
 extern const HChar* VG_(clo_extra_debuginfo_path);
@@ -223,10 +209,28 @@ extern Int VG_(clo_redzone_size);
 /* DEBUG: display gory details for the k'th most popular error.
    default: Infinity. */
 extern Int   VG_(clo_dump_error);
+
 /* Engage miscellaneous weird hacks needed for some progs. */
-extern const HChar* VG_(clo_sim_hints);
+typedef
+   enum {
+      SimHint_lax_ioctls,
+      SimHint_fuse_compatible,
+      SimHint_enable_outer,
+      SimHint_no_inner_prefix,
+      SimHint_no_nptl_pthread_stackcache
+   }
+   SimHint;
+
+// Build mask to check or set SimHint a membership
+#define SimHint2S(a) (1 << (a))
+// SimHint h is member of the Set s ?
+#define SimHintiS(h,s) ((s) & SimHint2S(h))
+extern UInt VG_(clo_sim_hints);
+
 /* Show symbols in the form 'name+offset' ?  Default: NO */
 extern Bool VG_(clo_sym_offsets);
+/* Read DWARF3 inline info ? */
+extern Bool VG_(clo_read_inline_info);
 /* Read DWARF3 variable info even if tool doesn't ask for it? */
 extern Bool VG_(clo_read_var_info);
 /* Which prefix to strip from full source file paths, if any. */
@@ -262,8 +266,7 @@ extern const HChar* VG_(clo_prefix_to_strip);
    silently with the un-marked-up library.  Note that you should put
    the entire flag in quotes to stop shells messing up the * and ?
    wildcards. */
-extern Int    VG_(clo_n_req_tsyms);
-extern const HChar* VG_(clo_req_tsyms)[VG_CLO_MAX_REQ_TSYMS];
+extern XArray *VG_(clo_req_tsyms);
 
 /* Track open file descriptors? */
 extern Bool  VG_(clo_track_fds);
@@ -322,9 +325,21 @@ typedef
    auto-detected. */
 extern VgSmc VG_(clo_smc_check);
 
-/* String containing comma-separated names of minor kernel variants,
+/* A set of minor kernel variants,
    so they can be properly handled by m_syswrap. */
-extern const HChar* VG_(clo_kernel_variant);
+typedef
+   enum {
+      KernelVariant_bproc,
+      KernelVariant_android_no_hw_tls,
+      KernelVariant_android_gpu_sgx5xx,
+      KernelVariant_android_gpu_adreno3xx
+   }
+   KernelVariant;
+// Build mask to check or set KernelVariant a membership
+#define KernelVariant2S(v) (1 << (v))
+// KernelVariant v is member of the Set s ?
+#define KernelVariantiS(v,s) ((s) & KernelVariant2S(v))
+extern UInt VG_(clo_kernel_variant);
 
 /* Darwin-specific: automatically run /usr/bin/dsymutil to update
    .dSYM directories as necessary? */

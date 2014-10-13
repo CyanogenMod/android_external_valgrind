@@ -348,7 +348,7 @@ typedef struct SigQueue {
         (srP)->misc.PPC32.r_lr = (uc)->uc_regs->mc_gregs[VKI_PT_LNK]; \
       }
 
-#elif defined(VGP_ppc64_linux)
+#elif defined(VGP_ppc64be_linux) || defined(VGP_ppc64le_linux)
 #  define VG_UCONTEXT_INSTR_PTR(uc)  ((uc)->uc_mcontext.gp_regs[VKI_PT_NIP])
 #  define VG_UCONTEXT_STACK_PTR(uc)  ((uc)->uc_mcontext.gp_regs[VKI_PT_R1])
    /* Dubious hack: if there is an error, only consider the lowest 8
@@ -851,7 +851,7 @@ extern void my_sigreturn(void);
    "	sc\n" \
    ".previous\n"
 
-#elif defined(VGP_ppc64_linux)
+#elif defined(VGP_ppc64be_linux)
 #  define _MY_SIGRETURN(name) \
    ".align   2\n" \
    ".globl   my_sigreturn\n" \
@@ -865,6 +865,23 @@ extern void my_sigreturn(void);
    ".my_sigreturn:\n" \
    "	li	0, " #name "\n" \
    "	sc\n"
+
+#elif defined(VGP_ppc64le_linux)
+/* Little Endian supports ELF version 2.  In the future, it may
+ * support other versions.
+ */
+#  define _MY_SIGRETURN(name) \
+   ".align   2\n" \
+   ".globl   my_sigreturn\n" \
+   ".type    .my_sigreturn,@function\n" \
+   "my_sigreturn:\n" \
+   "#if _CALL_ELF == 2 \n" \
+   "0: addis        2,12,.TOC.-0b@ha\n" \
+   "   addi         2,2,.TOC.-0b@l\n" \
+   "   .localentry my_sigreturn,.-my_sigreturn\n" \
+   "#endif \n" \
+   "   sc\n" \
+   "   .size my_sigreturn,.-my_sigreturn\n"
 
 #elif defined(VGP_arm_linux)
 #  define _MY_SIGRETURN(name) \
@@ -1311,7 +1328,7 @@ void VG_(clear_out_queued_signals)( ThreadId tid, vki_sigset_t* saved_mask )
 {
    block_all_host_signals(saved_mask);
    if (VG_(threads)[tid].sig_queue != NULL) {
-      VG_(arena_free)(VG_AR_CORE, VG_(threads)[tid].sig_queue);
+      VG_(free)(VG_(threads)[tid].sig_queue);
       VG_(threads)[tid].sig_queue = NULL;
    }
    restore_all_host_signals(saved_mask);
@@ -1743,6 +1760,13 @@ static void default_action(const vki_siginfo_t *info, ThreadId tid)
       }
    }
 
+   if (VG_(clo_vgdb) != Vg_VgdbNo
+       && VG_(dyn_vgdb_error) <= VG_(get_n_errs_shown)() + 1) {
+      /* Note: we add + 1 to n_errs_shown as the fatal signal was not
+         reported through error msg, and so was not counted. */
+      VG_(gdbserver_report_fatal_signal) (sigNo, tid);
+   }
+
    if (VG_(is_action_requested)( "Attach to debugger", & VG_(clo_db_attach) )) {
       VG_(start_debugger)( tid );
    }
@@ -2035,8 +2059,7 @@ void queue_signal(ThreadId tid, const vki_siginfo_t *si)
    block_all_host_signals(&savedmask);
 
    if (tst->sig_queue == NULL) {
-      tst->sig_queue = VG_(arena_malloc)(VG_AR_CORE, "signals.qs.1",
-                                         sizeof(*tst->sig_queue));
+      tst->sig_queue = VG_(malloc)("signals.qs.1", sizeof(*tst->sig_queue));
       VG_(memset)(tst->sig_queue, 0, sizeof(*tst->sig_queue));
    }
    sq = tst->sig_queue;

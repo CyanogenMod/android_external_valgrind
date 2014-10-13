@@ -406,7 +406,7 @@ ppS390AMode(s390_amode *am)
 }
 
 void
-ppS390Instr(s390_insn *insn, Bool mode64)
+ppS390Instr(const s390_insn *insn, Bool mode64)
 {
    vex_printf("%s", s390_insn_as_string(insn));
 }
@@ -432,7 +432,7 @@ getAllocableRegs_S390(Int *nregs, HReg **arr, Bool mode64)
 /* Tell the register allocator how the given instruction uses the registers
    it refers to. */
 void
-getRegUsage_S390Instr(HRegUsage *u, s390_insn *insn, Bool mode64)
+getRegUsage_S390Instr(HRegUsage *u, const s390_insn *insn, Bool mode64)
 {
    s390_insn_get_reg_usage(u, insn);
 }
@@ -450,7 +450,7 @@ mapRegs_S390Instr(HRegRemap *m, s390_insn *insn, Bool mode64)
    assign the source and destination to *src and *dst.  If in doubt say No.
    Used by the register allocator to do move coalescing. */
 Bool
-isMove_S390Instr(s390_insn *insn, HReg *src, HReg *dst)
+isMove_S390Instr(const s390_insn *insn, HReg *src, HReg *dst)
 {
    return s390_insn_is_reg_reg_move(insn, src, dst);
 }
@@ -8727,7 +8727,6 @@ s390_insn_helper_call_emit(UChar *buf, const s390_insn *insn)
    s390_cc_t cond;
    ULong target;
    UChar *ptmp = buf;
-   UChar *bufIN = buf;
    s390_helper_call *helper_call = insn->variant.helper_call.details;
 
    cond = helper_call->cond;
@@ -8741,7 +8740,7 @@ s390_insn_helper_call_emit(UChar *buf, const s390_insn *insn)
          register(s) in the case where the call doesn't happen.  If
          this ever becomes necessary, maybe copy code from the ARM
          equivalent.  Until that day, just give up. */
-      return bufIN; /* To denote failure. */
+      return buf; /* To denote failure. */
    }
 
    if (cond != S390_CC_ALWAYS) {
@@ -9601,8 +9600,8 @@ s390_tchain_patch_load64(UChar *code, ULong imm64)
    chainXDirect_S390 and unchainXDirect_S390 below. */
 static UChar *
 s390_insn_xdirect_emit(UChar *buf, const s390_insn *insn,
-                       void *disp_cp_chain_me_to_slowEP,
-                       void *disp_cp_chain_me_to_fastEP)
+                       const void *disp_cp_chain_me_to_slowEP,
+                       const void *disp_cp_chain_me_to_fastEP)
 {
    /* We're generating chain-me requests here, so we need to be
       sure this is actually allowed -- no-redir translations can't
@@ -9641,7 +9640,7 @@ s390_insn_xdirect_emit(UChar *buf, const s390_insn *insn,
    buf = s390_emit_STG(buf, R0, 0, b, DISP20(d));
 
    /* Load the chosen entry point into the scratch reg */
-   void *disp_cp_chain_me;
+   const void *disp_cp_chain_me;
 
    disp_cp_chain_me =
       insn->variant.xdirect.to_fast_entry ? disp_cp_chain_me_to_fastEP 
@@ -9681,7 +9680,8 @@ s390_xdirect_patchable_len(void)
 
 
 static UChar *
-s390_insn_xindir_emit(UChar *buf, const s390_insn *insn, void *disp_cp_xindir)
+s390_insn_xindir_emit(UChar *buf, const s390_insn *insn,
+                      const void *disp_cp_xindir)
 {
    /* We're generating transfers that could lead indirectly to a
       chain-me, so we need to be sure this is actually allowed --
@@ -9741,7 +9741,7 @@ s390_insn_xindir_emit(UChar *buf, const s390_insn *insn, void *disp_cp_xindir)
 
 static UChar *
 s390_insn_xassisted_emit(UChar *buf, const s390_insn *insn,
-                         void *disp_cp_xassisted)
+                         const void *disp_cp_xassisted)
 {
    /* Use ptmp for backpatching conditional jumps. */
    UChar *ptmp = buf;
@@ -9831,7 +9831,8 @@ s390_insn_xassisted_emit(UChar *buf, const s390_insn *insn,
 
    The dispatch counter is a 32-bit value. */
 static UChar *
-s390_insn_evcheck_emit(UChar *buf, const s390_insn *insn)
+s390_insn_evcheck_emit(UChar *buf, const s390_insn *insn,
+                       VexEndness endness_host)
 {
    s390_amode *amode;
    UInt b, d;
@@ -9867,7 +9868,7 @@ s390_insn_evcheck_emit(UChar *buf, const s390_insn *insn)
    
    /* Make sure the size of the generated code is identical to the size
       returned by evCheckSzB_S390 */
-   vassert(evCheckSzB_S390() == code_end - code_begin);
+   vassert(evCheckSzB_S390(endness_host) == code_end - code_begin);
 
    return buf;
 }
@@ -9895,10 +9896,12 @@ s390_insn_profinc_emit(UChar *buf,
 
 
 Int
-emit_S390Instr(Bool *is_profinc, UChar *buf, Int nbuf, s390_insn *insn,
-               Bool mode64, void *disp_cp_chain_me_to_slowEP,
-               void *disp_cp_chain_me_to_fastEP, void *disp_cp_xindir,
-               void *disp_cp_xassisted)
+emit_S390Instr(Bool *is_profinc, UChar *buf, Int nbuf, const s390_insn *insn,
+               Bool mode64, VexEndness endness_host,
+               const void *disp_cp_chain_me_to_slowEP,
+               const void *disp_cp_chain_me_to_fastEP,
+               const void *disp_cp_xindir,
+               const void *disp_cp_xassisted)
 {
    UChar *end;
 
@@ -10057,7 +10060,7 @@ emit_S390Instr(Bool *is_profinc, UChar *buf, Int nbuf, s390_insn *insn,
       break;
 
    case S390_INSN_EVCHECK:
-      end = s390_insn_evcheck_emit(buf, insn);
+      end = s390_insn_evcheck_emit(buf, insn, endness_host);
       break;
 
    case S390_INSN_XDIRECT:
@@ -10087,7 +10090,7 @@ emit_S390Instr(Bool *is_profinc, UChar *buf, Int nbuf, s390_insn *insn,
 /* Return the number of bytes emitted for an S390_INSN_EVCHECK.
    See s390_insn_evcheck_emit */
 Int
-evCheckSzB_S390(void)
+evCheckSzB_S390(VexEndness endness_host)
 {
    return s390_host_has_gie ? 18 : 24;
 }
@@ -10096,7 +10099,8 @@ evCheckSzB_S390(void)
 /* Patch the counter address into CODE_TO_PATCH as previously
    generated by s390_insn_profinc_emit. */
 VexInvalRange
-patchProfInc_S390(void *code_to_patch, ULong *location_of_counter)
+patchProfInc_S390(VexEndness endness_host,
+                  void *code_to_patch, const ULong *location_of_counter)
 {
    vassert(sizeof(ULong *) == 8);
 
@@ -10114,10 +10118,13 @@ patchProfInc_S390(void *code_to_patch, ULong *location_of_counter)
 /* NB: what goes on here has to be very closely coordinated with the
    s390_insn_xdirect_emit code above. */
 VexInvalRange
-chainXDirect_S390(void *place_to_chain,
-                  void *disp_cp_chain_me_EXPECTED,
-                  void *place_to_jump_to)
+chainXDirect_S390(VexEndness endness_host,
+                  void *place_to_chain,
+                  const void *disp_cp_chain_me_EXPECTED,
+                  const void *place_to_jump_to)
 {
+   vassert(endness_host == VexEndnessBE);
+
    /* What we're expecting to see @ PLACE_TO_CHAIN is:
 
         load  tchain_scratch, #disp_cp_chain_me_EXPECTED
@@ -10153,7 +10160,8 @@ chainXDirect_S390(void *place_to_chain,
 
    /* This is the delta we need to put into a BRCL insn. Note, that the
       offset in BRCL is in half-words. Hence division by 2. */
-   Long delta = (Long)((UChar *)place_to_jump_to - (UChar *)place_to_chain) / 2;
+   Long delta =
+      (Long)((const UChar *)place_to_jump_to - (const UChar *)place_to_chain) / 2;
    Bool shortOK = delta >= -1000*1000*1000 && delta < 1000*1000*1000;
 
    static UInt shortCTR = 0; /* DO NOT MAKE NON-STATIC */
@@ -10199,10 +10207,13 @@ chainXDirect_S390(void *place_to_chain,
 /* NB: what goes on here has to be very closely coordinated with the
    s390_insn_xdirect_emit code above. */
 VexInvalRange
-unchainXDirect_S390(void *place_to_unchain,
-                    void *place_to_jump_to_EXPECTED,
-                    void *disp_cp_chain_me)
+unchainXDirect_S390(VexEndness endness_host,
+                    void *place_to_unchain,
+                    const void *place_to_jump_to_EXPECTED,
+                    const void *disp_cp_chain_me)
 {
+   vassert(endness_host == VexEndnessBE);
+
    /* What we're expecting to see @ PLACE_TO_UNCHAIN:
 
           load  tchain_scratch, #place_to_jump_to_EXPECTED

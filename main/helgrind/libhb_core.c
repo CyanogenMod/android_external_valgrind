@@ -517,6 +517,7 @@ typedef
 
 #define SecMap_MAGIC   0x571e58cbU
 
+__attribute__((unused))
 static inline Bool is_sane_SecMap ( SecMap* sm ) {
    return sm != NULL && sm->magic == SecMap_MAGIC;
 }
@@ -881,7 +882,6 @@ void alloc_F_for_writing ( /*MOD*/SecMap* sm, /*OUT*/Word* fixp ) {
    new_size = sm->linesF_size==0 ? 1 : 2 * sm->linesF_size;
    nyu      = HG_(zalloc)( "libhb.aFfw.1 (LineF storage)",
                            new_size * sizeof(LineF) );
-   tl_assert(nyu);
 
    stats__secmap_linesF_allocd += (new_size - sm->linesF_size);
    stats__secmap_linesF_bytes  += (new_size - sm->linesF_size)
@@ -1758,7 +1758,6 @@ static void zsm_init ( void(*p_rcinc)(SVal), void(*p_rcdec)(SVal) )
    map_shmem = VG_(newFM)( HG_(zalloc), "libhb.zsm_init.1 (map_shmem)",
                            HG_(free), 
                            NULL/*unboxed UWord cmp*/);
-   tl_assert(map_shmem != NULL);
    shmem__invalidate_scache();
 
    /* a SecMap must contain an integral number of CacheLines */
@@ -1847,7 +1846,6 @@ static void verydead_thread_table_init ( void )
      = VG_(newXA)( HG_(zalloc),
                    "libhb.verydead_thread_table_init.1",
                    HG_(free), sizeof(ThrID) );
-   tl_assert(verydead_thread_table);
    VG_(setCmpFnXA)(verydead_thread_table, cmp__ThrID);
 }
 
@@ -2489,7 +2487,6 @@ static void vts_set_init ( void )
    vts_set = VG_(newFM)( HG_(zalloc), "libhb.vts_set_init.1",
                          HG_(free),
                          (Word(*)(UWord,UWord))VTS__cmp_structural );
-   tl_assert(vts_set);
 }
 
 /* Given a VTS, look in vts_set to see if we already have a
@@ -2564,12 +2561,9 @@ static Word vts_next_GC_at = 1000;
 
 static void vts_tab_init ( void )
 {
-   vts_tab
-      = VG_(newXA)( HG_(zalloc), "libhb.vts_tab_init.1",
-                    HG_(free), sizeof(VtsTE) );
-   vts_tab_freelist
-      = VtsID_INVALID;
-   tl_assert(vts_tab);
+   vts_tab = VG_(newXA)( HG_(zalloc), "libhb.vts_tab_init.1",
+                         HG_(free), sizeof(VtsTE) );
+   vts_tab_freelist = VtsID_INVALID;
 }
 
 /* Add ii to the free list, checking that it looks out-of-use. */
@@ -3679,7 +3673,6 @@ static Thr* Thr__new ( void )
    if (!thrid_to_thr_map) {
       thrid_to_thr_map = VG_(newXA)( HG_(zalloc), "libhb.Thr__new.4",
                                      HG_(free), sizeof(Thr*) );
-      tl_assert(thrid_to_thr_map);
    }
 
    if (thrid_counter >= ThrID_MAX_VALID) {
@@ -3789,6 +3782,7 @@ static inline VtsID SVal__unC_Wmin ( SVal s ) {
 static inline Bool SVal__isA ( SVal s ) {
    return (2ULL << 62) == (s & SVAL_TAGMASK);
 }
+__attribute__((unused))
 static inline SVal SVal__mkA ( void ) {
    return 2ULL << 62;
 }
@@ -4409,7 +4403,6 @@ static void event_map_init ( void )
    tl_assert(!contextTab);
    contextTab = HG_(zalloc)( "libhb.event_map_init.2 (context table)",
                              N_RCEC_TAB * sizeof(RCEC*) );
-   tl_assert(contextTab);
    for (i = 0; i < N_RCEC_TAB; i++)
       contextTab[i] = NULL;
 
@@ -4429,7 +4422,6 @@ static void event_map_init ( void )
                    "libhb.event_map_init.4 (oldref tree)", 
                    HG_(free)
                 );
-   tl_assert(oldrefTree);
 
    oldrefGen = 0;
    oldrefGenIncAt = 0;

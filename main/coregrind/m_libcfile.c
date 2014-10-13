@@ -1,3 +1,4 @@
+/* -*- mode: C; c-basic-offset: 3; -*- */
 
 /*--------------------------------------------------------------------*/
 /*--- File- and socket-related libc stuff.            m_libcfile.c ---*/
@@ -37,8 +38,8 @@
 #include "pub_core_libcfile.h"
 #include "pub_core_libcprint.h"     // VG_(sprintf)
 #include "pub_core_libcproc.h"      // VG_(getpid), VG_(getppid)
-#include "pub_core_xarray.h"
 #include "pub_core_clientstate.h"   // VG_(fd_hard_limit)
+#include "pub_core_mallocfree.h"    // VG_(realloc)
 #include "pub_core_syscall.h"
 
 /* IMPORTANT: on Darwin it is essential to use the _nocancel versions
@@ -49,12 +50,6 @@
 /* ---------------------------------------------------------------------
    File stuff
    ------------------------------------------------------------------ */
-
-static inline Bool fd_exists(Int fd)
-{
-   struct vg_stat st;
-   return VG_(fstat)(fd, &st) == 0;
-}
 
 /* Move an fd into the Valgrind-safe range */
 Int VG_(safe_fd)(Int oldfd)
@@ -423,14 +418,12 @@ Int VG_(unlink) ( const HChar* file_name )
    return sr_isError(res) ? (-1) : 0;
 }
 
-/* The working directory at startup.  AIX doesn't provide an easy
-   system call to do getcwd, but fortunately we don't need arbitrary
-   getcwd support.  All that is really needed is to note the cwd at
-   process startup.  Hence VG_(record_startup_wd) notes it (in a
-   platform dependent way) and VG_(get_startup_wd) produces the noted
-   value.  Hence: */
-static HChar startup_wd[VKI_PATH_MAX];
-static Bool  startup_wd_acquired = False;
+/* The working directory at startup.
+   All that is really needed is to note the cwd at process startup.
+   Hence VG_(record_startup_wd) notes it (in a platform dependent way)
+   and VG_(get_startup_wd) produces the noted value. */
+static HChar *startup_wd;
+static Bool   startup_wd_acquired = False;
 
 /* Record the process' working directory at startup.  Is intended to
    be called exactly once, at startup, before the working directory
@@ -439,37 +432,39 @@ static Bool  startup_wd_acquired = False;
    there is a problem. */
 Bool VG_(record_startup_wd) ( void )
 {
-   const Int szB = sizeof(startup_wd);
    vg_assert(!startup_wd_acquired);
-   vg_assert(szB >= 512 && szB <= 16384/*let's say*/); /* stay sane */
-   VG_(memset)(startup_wd, 0, szB);
+
 #  if defined(VGO_linux)
    /* Simple: just ask the kernel */
-   { SysRes res
-        = VG_(do_syscall2)(__NR_getcwd, (UWord)startup_wd, szB-1);
-     vg_assert(startup_wd[szB-1] == 0);
-     if (sr_isError(res)) {
-        return False;
-     } else {
-        startup_wd_acquired = True;
-        return True;
-     }
-   }
+   SysRes res;
+   SizeT szB = 0;
+   do { 
+      szB += 500;
+      startup_wd = VG_(realloc)("startup_wd", startup_wd, szB);
+      VG_(memset)(startup_wd, 0, szB);
+      res = VG_(do_syscall2)(__NR_getcwd, (UWord)startup_wd, szB-1);
+   } while (sr_isError(res));
+
+   vg_assert(startup_wd[szB-1] == 0);
+   startup_wd_acquired = True;
+   return True;
+
 #  elif defined(VGO_darwin)
    /* We can't ask the kernel, so instead rely on launcher-*.c to
       tell us the startup path.  Note the env var is keyed to the
       parent's PID, not ours, since our parent is the launcher
       process. */
-   { HChar  envvar[100];
-     HChar* wd = NULL;
+   { HChar  envvar[100];   // large enough
+     HChar* wd;
      VG_(memset)(envvar, 0, sizeof(envvar));
      VG_(sprintf)(envvar, "VALGRIND_STARTUP_PWD_%d_XYZZY", 
                           (Int)VG_(getppid)());
      wd = VG_(getenv)( envvar );
-     if (wd == NULL || (1+VG_(strlen)(wd) >= szB))
+     if (wd == NULL)
         return False;
-     VG_(strncpy_safely)(startup_wd, wd, szB);
-     vg_assert(startup_wd[szB-1] == 0);
+     SizeT need = VG_(strlen)(wd) + 1;
+     startup_wd = VG_(malloc)("startup_wd", need);
+     VG_(strcpy)(startup_wd, wd);
      startup_wd_acquired = True;
      return True;
    }
@@ -478,16 +473,12 @@ Bool VG_(record_startup_wd) ( void )
 #  endif
 }
 
-/* Copy the previously acquired startup_wd into buf[0 .. size-1],
-   or return False if buf isn't big enough. */
-Bool VG_(get_startup_wd) ( HChar* buf, SizeT size )
+/* Return the previously acquired startup_wd. */
+const HChar *VG_(get_startup_wd) ( void )
 {
    vg_assert(startup_wd_acquired);
-   vg_assert(startup_wd[ sizeof(startup_wd)-1 ] == 0);
-   if (1+VG_(strlen)(startup_wd) >= size)
-      return False;
-   VG_(strncpy_safely)(buf, startup_wd, size);
-   return True;
+
+   return startup_wd;
 }
 
 SysRes VG_(poll) (struct vki_pollfd *fds, Int nfds, Int timeout)
@@ -528,19 +519,15 @@ Int VG_(readlink) (const HChar* path, HChar* buf, UInt bufsiz)
    return sr_isError(res) ? -1 : sr_Res(res);
 }
 
-Int VG_(getdents) (Int fd, struct vki_dirent *dirp, UInt count)
+#if defined(VGO_linux)
+Int VG_(getdents64) (Int fd, struct vki_dirent64 *dirp, UInt count)
 {
-#  if defined(VGO_linux)
    SysRes res;
    /* res = getdents( fd, dirp, count ); */
-   res = VG_(do_syscall3)(__NR_getdents, fd, (UWord)dirp, count);
+   res = VG_(do_syscall3)(__NR_getdents64, fd, (UWord)dirp, count);
    return sr_isError(res) ? -1 : sr_Res(res);
-#  elif defined(VGO_darwin)
-   I_die_here;
-#  else
-#    error "Unknown OS"
-#  endif
 }
+#endif
 
 /* Check accessibility of a file.  Returns zero for access granted,
    nonzero otherwise. */
@@ -628,9 +615,17 @@ Int VG_(check_executable)(/*OUT*/Bool* is_setuid,
       if (VG_(getegid)() == st.gid)
 	 grpmatch = 1;
       else {
-	 UInt groups[32];
-	 Int ngrp = VG_(getgroups)(32, groups);
-	 Int i;
+         UInt *groups = NULL;
+         Int   ngrp;
+
+         /* Find out # groups, allocate large enough array and fetch groups */
+         ngrp = VG_(getgroups)(0, NULL);
+         if (ngrp != -1) {
+            groups = VG_(malloc)("check_executable", ngrp * sizeof *groups);
+            ngrp   = VG_(getgroups)(ngrp, groups);
+         }
+
+         Int i;
          /* ngrp will be -1 if VG_(getgroups) failed. */
          for (i = 0; i < ngrp; i++) {
 	    if (groups[i] == st.gid) {
@@ -638,6 +633,7 @@ Int VG_(check_executable)(/*OUT*/Bool* is_setuid,
 	       break;
 	    }
          }
+         VG_(free)(groups);
       }
 
       if (grpmatch) {
@@ -683,8 +679,8 @@ SysRes VG_(pread) ( Int fd, void* buf, Int count, OffT offset )
    res = VG_(do_syscall6)(__NR_pread64, fd, (UWord)buf, count, 
                           0, 0, offset);
    return res;
-#  elif defined(VGP_amd64_linux) \
-      || defined(VGP_ppc64_linux) || defined(VGP_s390x_linux) \
+#  elif defined(VGP_amd64_linux) || defined(VGP_s390x_linux) \
+      || defined(VGP_ppc64be_linux)  || defined(VGP_ppc64le_linux) \
       || defined(VGP_mips64_linux) \
       || defined(VGP_arm64_linux)
    res = VG_(do_syscall4)(__NR_pread64, fd, (UWord)buf, count, offset);
@@ -715,7 +711,7 @@ const HChar *VG_(tmpdir)(void)
    return tmpdir;
 }
 
-static const HChar *mkstemp_format = "%s/valgrind_%s_%08x";
+static const HChar mkstemp_format[] = "%s/valgrind_%s_%08x";
 
 SizeT VG_(mkstemp_fullname_bufsz) ( SizeT part_of_name_len )
 {
@@ -727,12 +723,7 @@ SizeT VG_(mkstemp_fullname_bufsz) ( SizeT part_of_name_len )
 }
 
 
-/* Create and open (-rw------) a tmp file name incorporating said arg.
-   Returns -1 on failure, else the fd of the file.  If fullname is
-   non-NULL, the file's name is written into it.  The number of bytes
-   written is equal to VG_(mkstemp_fullname_bufsz)(part_of_name). */
-
-Int VG_(mkstemp) ( HChar* part_of_name, /*OUT*/HChar* fullname )
+Int VG_(mkstemp) ( const HChar* part_of_name, /*OUT*/HChar* fullname )
 {
    HChar  buf[VG_(mkstemp_fullname_bufsz)(VG_(strlen)(part_of_name))];
    Int    n, tries, fd;
@@ -753,7 +744,7 @@ Int VG_(mkstemp) ( HChar* part_of_name, /*OUT*/HChar* fullname )
    while (True) {
       if (tries++ > 10) 
          return -1;
-      VG_(sprintf)( buf, "%s/valgrind_%s_%08x",
+      VG_(sprintf)( buf, mkstemp_format,
                     tmpdir, part_of_name, VG_(random)( &seed ));
       if (0)
          VG_(printf)("VG_(mkstemp): trying: %s\n", buf);
@@ -929,7 +920,8 @@ static Int parse_inet_addr_and_port ( const HChar* str, UInt* ip_addr, UShort* p
 Int VG_(socket) ( Int domain, Int type, Int protocol )
 {
 #  if defined(VGP_x86_linux) || defined(VGP_ppc32_linux) \
-      || defined(VGP_ppc64_linux) || defined(VGP_s390x_linux)
+      || defined(VGP_ppc64be_linux) || defined(VGP_ppc64le_linux) \
+      || defined(VGP_s390x_linux)
    SysRes res;
    UWord  args[3];
    args[0] = domain;
@@ -969,7 +961,8 @@ static
 Int my_connect ( Int sockfd, struct vki_sockaddr_in* serv_addr, Int addrlen )
 {
 #  if defined(VGP_x86_linux) || defined(VGP_ppc32_linux) \
-      || defined(VGP_ppc64_linux) || defined(VGP_s390x_linux)
+      || defined(VGP_ppc64be_linux) || defined(VGP_ppc64le_linux) \
+      || defined(VGP_s390x_linux)
    SysRes res;
    UWord  args[3];
    args[0] = sockfd;
@@ -1008,7 +1001,8 @@ Int VG_(write_socket)( Int sd, const void *msg, Int count )
       SIGPIPE */
 
 #  if defined(VGP_x86_linux) || defined(VGP_ppc32_linux) \
-      || defined(VGP_ppc64_linux) || defined(VGP_s390x_linux)
+      || defined(VGP_ppc64be_linux) || defined(VGP_ppc64le_linux) \
+      || defined(VGP_s390x_linux)
    SysRes res;
    UWord  args[4];
    args[0] = sd;
@@ -1039,7 +1033,8 @@ Int VG_(write_socket)( Int sd, const void *msg, Int count )
 Int VG_(getsockname) ( Int sd, struct vki_sockaddr *name, Int *namelen)
 {
 #  if defined(VGP_x86_linux) || defined(VGP_ppc32_linux) \
-      || defined(VGP_ppc64_linux) || defined(VGP_s390x_linux) \
+      || defined(VGP_ppc64be_linux) || defined(VGP_ppc64le_linux) \
+      || defined(VGP_s390x_linux) \
       || defined(VGP_mips32_linux)
    SysRes res;
    UWord  args[3];
@@ -1070,7 +1065,8 @@ Int VG_(getsockname) ( Int sd, struct vki_sockaddr *name, Int *namelen)
 Int VG_(getpeername) ( Int sd, struct vki_sockaddr *name, Int *namelen)
 {
 #  if defined(VGP_x86_linux) || defined(VGP_ppc32_linux) \
-      || defined(VGP_ppc64_linux) || defined(VGP_s390x_linux) \
+      || defined(VGP_ppc64be_linux) || defined(VGP_ppc64le_linux) \
+      || defined(VGP_s390x_linux) \
       || defined(VGP_mips32_linux)
    SysRes res;
    UWord  args[3];
@@ -1102,7 +1098,8 @@ Int VG_(getsockopt) ( Int sd, Int level, Int optname, void *optval,
                       Int *optlen)
 {
 #  if defined(VGP_x86_linux) || defined(VGP_ppc32_linux) \
-      || defined(VGP_ppc64_linux) || defined(VGP_s390x_linux)
+      || defined(VGP_ppc64be_linux) || defined(VGP_ppc64le_linux) \
+      || defined(VGP_s390x_linux)
    SysRes res;
    UWord  args[5];
    args[0] = sd;
@@ -1139,7 +1136,8 @@ Int VG_(setsockopt) ( Int sd, Int level, Int optname, void *optval,
                       Int optlen)
 {
 #  if defined(VGP_x86_linux) || defined(VGP_ppc32_linux) \
-      || defined(VGP_ppc64_linux) || defined(VGP_s390x_linux)
+      || defined(VGP_ppc64be_linux) || defined(VGP_ppc64le_linux) \
+      || defined(VGP_s390x_linux)
    SysRes res;
    UWord  args[5];
    args[0] = sd;
@@ -1174,8 +1172,8 @@ Int VG_(setsockopt) ( Int sd, Int level, Int optname, void *optval,
 
 const HChar *VG_(basename)(const HChar *path)
 {
-   static HChar buf[VKI_PATH_MAX];
-   
+   static HChar *buf = NULL;
+   static SizeT  buf_len = 0;
    const HChar *p, *end;
 
    if (path == NULL  ||  
@@ -1201,6 +1199,11 @@ const HChar *VG_(basename)(const HChar *path)
 
    if (*p == '/') p++;
 
+   SizeT need = end-p+1 + 1;
+   if (need > buf_len) {
+      buf_len = (buf_len == 0) ? 500 : need;
+      buf = VG_(realloc)("basename", buf, buf_len);
+   }
    VG_(strncpy)(buf, p, end-p+1);
    buf[end-p+1] = '\0';
 
@@ -1210,7 +1213,8 @@ const HChar *VG_(basename)(const HChar *path)
 
 const HChar *VG_(dirname)(const HChar *path)
 {
-   static HChar buf[VKI_PATH_MAX];
+   static HChar *buf = NULL;
+   static SizeT  buf_len = 0;
     
    const HChar *p;
 
@@ -1242,6 +1246,11 @@ const HChar *VG_(dirname)(const HChar *path)
       p--;
    }
 
+   SizeT need = p-path+1 + 1;
+   if (need > buf_len) {
+      buf_len = (buf_len == 0) ? 500 : need;
+      buf = VG_(realloc)("dirname", buf, buf_len);
+   }
    VG_(strncpy)(buf, path, p-path+1);
    buf[p-path+1] = '\0';
 

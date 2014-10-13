@@ -199,10 +199,12 @@ vg_local_src_files := \
 	coregrind/m_debuginfo/readdwarf.c \
 	coregrind/m_debuginfo/readdwarf3.c \
 	coregrind/m_debuginfo/readelf.c \
+	coregrind/m_debuginfo/readexidx.c \
 	coregrind/m_debuginfo/readmacho.c \
 	coregrind/m_debuginfo/readpdb.c \
 	coregrind/m_debuginfo/storage.c \
 	coregrind/m_debuginfo/tytypes.c \
+	coregrind/m_deduppoolalloc.c \
 	coregrind/m_demangle/cp-demangle.c \
 	coregrind/m_demangle/cplus-dem.c \
 	coregrind/m_demangle/demangle.c \
@@ -211,7 +213,8 @@ vg_local_src_files := \
 	coregrind/m_dispatch/dispatch-x86-linux.S \
 	coregrind/m_dispatch/dispatch-amd64-linux.S \
 	coregrind/m_dispatch/dispatch-ppc32-linux.S \
-	coregrind/m_dispatch/dispatch-ppc64-linux.S \
+	coregrind/m_dispatch/dispatch-ppc64be-linux.S \
+	coregrind/m_dispatch/dispatch-ppc64le-linux.S \
 	coregrind/m_dispatch/dispatch-arm-linux.S \
 	coregrind/m_dispatch/dispatch-arm64-linux.S \
 	coregrind/m_dispatch/dispatch-x86-darwin.S \
@@ -224,7 +227,7 @@ vg_local_src_files := \
 	coregrind/m_mach/mach_traps-x86-darwin.S \
 	coregrind/m_mach/mach_traps-amd64-darwin.S \
 	coregrind/m_replacemalloc/replacemalloc_core.c \
-    coregrind/m_sbprofile.c \
+	coregrind/m_sbprofile.c \
 	coregrind/m_scheduler/sched-lock.c \
 	coregrind/m_scheduler/sched-lock-generic.c \
 	coregrind/m_scheduler/scheduler.c \
@@ -242,7 +245,8 @@ vg_local_src_files := \
 	coregrind/m_syswrap/syscall-x86-linux.S \
 	coregrind/m_syswrap/syscall-amd64-linux.S \
 	coregrind/m_syswrap/syscall-ppc32-linux.S \
-	coregrind/m_syswrap/syscall-ppc64-linux.S \
+	coregrind/m_syswrap/syscall-ppc64be-linux.S \
+	coregrind/m_syswrap/syscall-ppc64le-linux.S \
 	coregrind/m_syswrap/syscall-arm-linux.S \
 	coregrind/m_syswrap/syscall-arm64-linux.S \
 	coregrind/m_syswrap/syscall-x86-darwin.S \

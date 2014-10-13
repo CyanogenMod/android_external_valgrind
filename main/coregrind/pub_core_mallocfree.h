@@ -71,13 +71,14 @@ typedef Int ArenaId;
 // for any AltiVec- or SSE-related type.  This matches the Darwin libc.
 // Also, use 16 bytes for any PPC variant, since 16 is required to make
 // Altiveccery work right.
-#elif defined(VGP_amd64_linux)  || \
-      defined(VGP_ppc32_linux)  || \
-      defined(VGP_ppc64_linux)  || \
-      defined(VGP_s390x_linux)  || \
-      defined(VGP_mips64_linux) || \
-      defined(VGP_x86_darwin)   || \
-      defined(VGP_amd64_darwin) || \
+#elif defined(VGP_amd64_linux)    || \
+      defined(VGP_ppc32_linux)    || \
+      defined(VGP_ppc64be_linux)  || \
+      defined(VGP_ppc64le_linux)  || \
+      defined(VGP_s390x_linux)    || \
+      defined(VGP_mips64_linux)   || \
+      defined(VGP_x86_darwin)     || \
+      defined(VGP_amd64_darwin)   || \
       defined(VGP_arm64_linux)
 #  define VG_MIN_MALLOC_SZB       16
 #else
@@ -109,6 +110,16 @@ extern void* VG_(arena_memalign)( ArenaId aid, const HChar* cc,
                                   SizeT req_alignB, SizeT req_pszB );
 extern HChar* VG_(arena_strdup)  ( ArenaId aid, const HChar* cc, 
                                    const HChar* s);
+
+/* Specialised version of realloc, that shrinks the size of the block ptr from
+   its current size to req_pszB.
+   req_pszB must be <= to the current size of ptr (otherwise it will assert).
+   Compared to VG_(arena_realloc):
+     * VG_(arena_realloc_shrink) cannot increase the size of ptr.
+     * If large enough, the unused memory is made usable for other allocation.
+     * ptr is shrunk in place, so as to avoid temporary allocation and memcpy. */
+extern void VG_(arena_realloc_shrink) ( ArenaId aid,
+                                        void* ptr, SizeT req_pszB);
 
 extern SizeT VG_(arena_malloc_usable_size) ( ArenaId aid, void* payload );
 

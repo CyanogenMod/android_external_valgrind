@@ -1010,7 +1010,7 @@ AMD64Instr* AMD64Instr_ProfInc ( void ) {
    return i;
 }
 
-void ppAMD64Instr ( AMD64Instr* i, Bool mode64 ) 
+void ppAMD64Instr ( const AMD64Instr* i, Bool mode64 ) 
 {
    vassert(mode64 == True);
    switch (i->tag) {
@@ -1327,7 +1327,7 @@ void ppAMD64Instr ( AMD64Instr* i, Bool mode64 )
 
 /* --------- Helpers for register allocation. --------- */
 
-void getRegUsage_AMD64Instr ( HRegUsage* u, AMD64Instr* i, Bool mode64 )
+void getRegUsage_AMD64Instr ( HRegUsage* u, const AMD64Instr* i, Bool mode64 )
 {
    Bool unary;
    vassert(mode64 == True);
@@ -1818,7 +1818,7 @@ void mapRegs_AMD64Instr ( HRegRemap* m, AMD64Instr* i, Bool mode64 )
    source and destination to *src and *dst.  If in doubt say No.  Used
    by the register allocator to do move coalescing. 
 */
-Bool isMove_AMD64Instr ( AMD64Instr* i, HReg* src, HReg* dst )
+Bool isMove_AMD64Instr ( const AMD64Instr* i, HReg* src, HReg* dst )
 {
    switch (i->tag) {
       case Ain_Alu64R:
@@ -2264,12 +2264,12 @@ static UChar* do_ffree_st ( UChar* p, Int n )
    leave it unchanged. */
 
 Int emit_AMD64Instr ( /*MB_MOD*/Bool* is_profInc,
-                      UChar* buf, Int nbuf, AMD64Instr* i, 
-                      Bool mode64,
-                      void* disp_cp_chain_me_to_slowEP,
-                      void* disp_cp_chain_me_to_fastEP,
-                      void* disp_cp_xindir,
-                      void* disp_cp_xassisted )
+                      UChar* buf, Int nbuf, const AMD64Instr* i, 
+                      Bool mode64, VexEndness endness_host,
+                      const void* disp_cp_chain_me_to_slowEP,
+                      const void* disp_cp_chain_me_to_fastEP,
+                      const void* disp_cp_xindir,
+                      const void* disp_cp_xassisted )
 {
    UInt /*irno,*/ opc, opc_rr, subopc_imm, opc_imma, opc_cl, opc_imm, subopc;
    UInt   xtra;
@@ -2762,7 +2762,7 @@ Int emit_AMD64Instr ( /*MB_MOD*/Bool* is_profInc,
       /* movabsq $disp_cp_chain_me_to_{slow,fast}EP,%r11; */
       *p++ = 0x49;
       *p++ = 0xBB;
-      void* disp_cp_chain_me
+      const void* disp_cp_chain_me
                = i->Ain.XDirect.toFastEP ? disp_cp_chain_me_to_fastEP 
                                          : disp_cp_chain_me_to_slowEP;
       p = emit64(p, Ptr_to_ULong(disp_cp_chain_me));
@@ -3499,7 +3499,7 @@ Int emit_AMD64Instr ( /*MB_MOD*/Bool* is_profInc,
       p = doAMode_M(p, fake(4), i->Ain.EvCheck.amFailAddr);
       vassert(p - p0 == 8); /* also ensures that 0x03 offset above is ok */
       /* And crosscheck .. */
-      vassert(evCheckSzB_AMD64() == 8);
+      vassert(evCheckSzB_AMD64(endness_host) == 8);
       goto done;
    }
 
@@ -3542,7 +3542,7 @@ Int emit_AMD64Instr ( /*MB_MOD*/Bool* is_profInc,
 /* How big is an event check?  See case for Ain_EvCheck in
    emit_AMD64Instr just above.  That crosschecks what this returns, so
    we can tell if we're inconsistent. */
-Int evCheckSzB_AMD64 ( void )
+Int evCheckSzB_AMD64 ( VexEndness endness_host )
 {
    return 8;
 }
@@ -3550,10 +3550,13 @@ Int evCheckSzB_AMD64 ( void )
 
 /* NB: what goes on here has to be very closely coordinated with the
    emitInstr case for XDirect, above. */
-VexInvalRange chainXDirect_AMD64 ( void* place_to_chain,
-                                   void* disp_cp_chain_me_EXPECTED,
-                                   void* place_to_jump_to )
+VexInvalRange chainXDirect_AMD64 ( VexEndness endness_host,
+                                   void* place_to_chain,
+                                   const void* disp_cp_chain_me_EXPECTED,
+                                   const void* place_to_jump_to )
 {
+   vassert(endness_host == VexEndnessLE);
+
    /* What we're expecting to see is:
         movabsq $disp_cp_chain_me_EXPECTED, %r11
         call *%r11
@@ -3596,7 +3599,7 @@ VexInvalRange chainXDirect_AMD64 ( void* place_to_chain,
    */
    /* This is the delta we need to put into a JMP d32 insn.  It's
       relative to the start of the next insn, hence the -5.  */
-   Long delta   = (Long)((UChar*)place_to_jump_to - (UChar*)p) - (Long)5;
+   Long delta   = (Long)((const UChar *)place_to_jump_to - (const UChar*)p) - 5;
    Bool shortOK = delta >= -1000*1000*1000 && delta < 1000*1000*1000;
 
    static UInt shortCTR = 0; /* DO NOT MAKE NON-STATIC */
@@ -3636,10 +3639,13 @@ VexInvalRange chainXDirect_AMD64 ( void* place_to_chain,
 
 /* NB: what goes on here has to be very closely coordinated with the
    emitInstr case for XDirect, above. */
-VexInvalRange unchainXDirect_AMD64 ( void* place_to_unchain,
-                                     void* place_to_jump_to_EXPECTED,
-                                     void* disp_cp_chain_me )
+VexInvalRange unchainXDirect_AMD64 ( VexEndness endness_host,
+                                     void* place_to_unchain,
+                                     const void* place_to_jump_to_EXPECTED,
+                                     const void* disp_cp_chain_me )
 {
+   vassert(endness_host == VexEndnessLE);
+
    /* What we're expecting to see is either:
         (general case)
           movabsq $place_to_jump_to_EXPECTED, %r11
@@ -3672,7 +3678,7 @@ VexInvalRange unchainXDirect_AMD64 ( void* place_to_unchain,
       /* It's the short form.  Check the offset is right. */
       Int  s32 = *(Int*)(&p[1]);
       Long s64 = (Long)s32;
-      if ((UChar*)p + 5 + s64 == (UChar*)place_to_jump_to_EXPECTED) {
+      if ((UChar*)p + 5 + s64 == place_to_jump_to_EXPECTED) {
          valid = True;
          if (0)
             vex_printf("QQQ unchainXDirect_AMD64: found short form\n");
@@ -3700,9 +3706,11 @@ VexInvalRange unchainXDirect_AMD64 ( void* place_to_unchain,
 
 /* Patch the counter address into a profile inc point, as previously
    created by the Ain_ProfInc case for emit_AMD64Instr. */
-VexInvalRange patchProfInc_AMD64 ( void*  place_to_patch,
-                                   ULong* location_of_counter )
+VexInvalRange patchProfInc_AMD64 ( VexEndness endness_host,
+                                   void*  place_to_patch,
+                                   const ULong* location_of_counter )
 {
+   vassert(endness_host == VexEndnessLE);
    vassert(sizeof(ULong*) == 8);
    UChar* p = (UChar*)place_to_patch;
    vassert(p[0] == 0x49);

@@ -109,7 +109,8 @@ static void usage_NORETURN ( Bool debug_help )
 "                              to get started quickly, use --vgdb-error=0\n"
 "                              and follow the on-screen directions\n"
 "    --vgdb-stop-at=event1,event2,... invoke gdbserver for given events [none]\n"
-"         where event is one of startup exit valgrindabexit all none\n"
+"         where event is one of:\n"
+"           startup exit valgrindabexit all none\n"
 "    --track-fds=no|yes        track open file descriptors? [no]\n"
 "    --time-stamp=no|yes       add timestamps to log messages? [no]\n"
 "    --log-fd=<number>         log messages to file descriptor [2=stderr]\n"
@@ -127,9 +128,12 @@ static void usage_NORETURN ( Bool debug_help )
 "    --error-limit=no|yes      stop showing new errors if too many? [yes]\n"
 "    --error-exitcode=<number> exit code to return if errors found [0=disable]\n"
 "    --show-below-main=no|yes  continue stack traces below main() [no]\n"
+"    --default-suppressions=yes|no\n"
+"                              load default suppressions [yes]\n"
 "    --suppressions=<filename> suppress errors described in <filename>\n"
 "    --gen-suppressions=no|yes|all    print suppressions for errors? [no]\n"
 "    --db-attach=no|yes        start debugger when errors detected? [no]\n"
+"                              Note: deprecated feature\n"
 "    --db-command=<command>    command to start debugger [%s -nw %%f %%p]\n"
 "    --input-fd=<number>       file descriptor for input [0=stdin]\n"
 "    --dsymutil=no|yes         run dsymutil on Mac OS X when helpful? [no]\n"
@@ -162,6 +166,10 @@ static void usage_NORETURN ( Bool debug_help )
 "                              checks for self-modifying code: none, only for\n"
 "                              code found in stacks, for all code, or for all\n"
 "                              code except that from file-backed mappings\n"
+"    --read-inline-info=yes|no read debug info about inlined function calls\n"
+"                              and use it to do better stack traces.  [yes]\n"
+"                              on Linux/Android for Memcheck/Helgrind/DRD\n"
+"                              only.  [no] for all other tools and platforms.\n"
 "    --read-var-info=yes|no    read debug info on stack and global variables\n"
 "                              and use it to print better error messages in\n"
 "                              tools that make use of it (Memcheck, Helgrind,\n"
@@ -170,11 +178,16 @@ static void usage_NORETURN ( Bool debug_help )
 "    --vgdb-shadow-registers=no|yes   let gdb see the shadow registers [no]\n"
 "    --vgdb-prefix=<prefix>    prefix for vgdb FIFOs [%s]\n"
 "    --run-libc-freeres=no|yes free up glibc memory at exit on Linux? [yes]\n"
-"    --sim-hints=hint1,hint2,...  known hints:\n"
-"                                 lax-ioctls, enable-outer, fuse-compatible [none]\n"
+"    --sim-hints=hint1,hint2,...  activate unusual sim behaviours [none] \n"
+"         where hint is one of:\n"
+"           lax-ioctls fuse-compatible enable-outer\n"
+"           no-inner-prefix no-nptl-pthread-stackcache none\n"
 "    --fair-sched=no|yes|try   schedule threads fairly on multicore systems [no]\n"
-"    --kernel-variant=variant1,variant2,...  known variants: bproc [none]\n"
-"                              handle non-standard kernel variants\n"
+"    --kernel-variant=variant1,variant2,...\n"
+"         handle non-standard kernel variants [none]\n"
+"         where variant is one of:\n"
+"           bproc android-no-hw-tls\n"
+"           android-gpu-sgx5xx android-gpu-adreno3xx none\n"
 "    --merge-recursive-frames=<number>  merge frames between identical\n"
 "           program counters in max <number> frames) [0]\n"
 "    --num-transtab-sectors=<number> size of translated code cache [%d]\n"
@@ -372,7 +385,11 @@ static void early_process_cmd_line_options ( /*OUT*/Int* need_help,
       // Set up VG_(clo_sim_hints). This is needed a.o. for an inner
       // running in an outer, to have "no-inner-prefix" enabled
       // as early as possible.
-      else if VG_STR_CLO (str, "--sim-hints",     VG_(clo_sim_hints)) {}
+      else if VG_USETX_CLO (str, "--sim-hints",
+                            "lax-ioctls,fuse-compatible,"
+                            "enable-outer,no-inner-prefix,"
+                            "no-nptl-pthread-stackcache",
+                            VG_(clo_sim_hints)) {}
    }
 }
 
@@ -440,6 +457,13 @@ void main_process_cmd_line_options ( /*OUT*/Bool* logging_to_fd,
                             "./configure --prefix=... or --libdir=...\n");
 
    vg_assert( VG_(args_for_valgrind) );
+
+   VG_(clo_suppressions) = VG_(newXA)(VG_(malloc), "main.mpclo.4",
+                                      VG_(free), sizeof(HChar *));
+   VG_(clo_fullpath_after) = VG_(newXA)(VG_(malloc), "main.mpclo.5",
+                                        VG_(free), sizeof(HChar *));
+   VG_(clo_req_tsyms) = VG_(newXA)(VG_(malloc), "main.mpclo.6",
+                                   VG_(free), sizeof(HChar *));
 
    /* BEGIN command-line processing loop */
 
@@ -541,11 +565,9 @@ void main_process_cmd_line_options ( /*OUT*/Bool* logging_to_fd,
       }
       else if VG_INT_CLO (arg, "--vgdb-poll",      VG_(clo_vgdb_poll)) {}
       else if VG_INT_CLO (arg, "--vgdb-error",     VG_(clo_vgdb_error)) {}
-      else if VG_STR_CLO (arg, "--vgdb-stop-at", tmp_str) {
-         if (!VG_(parse_enum_set)("startup,exit,valgrindabexit", tmp_str,
-                                  &VG_(clo_vgdb_stop_at)))
-            VG_(fmsg_bad_option)(arg, "");
-      }
+      else if VG_USET_CLO (arg, "--vgdb-stop-at",
+                           "startup,exit,valgrindabexit",
+                           VG_(clo_vgdb_stop_at)) {}
       else if VG_STR_CLO (arg, "--vgdb-prefix",    VG_(clo_vgdb_prefix)) {
          VG_(arg_vgdb_prefix) = arg;
       }
@@ -593,6 +615,7 @@ void main_process_cmd_line_options ( /*OUT*/Bool* logging_to_fd,
       else if VG_BOOL_CLO(arg, "--wait-for-gdb",     VG_(clo_wait_for_gdb)) {}
       else if VG_STR_CLO (arg, "--db-command",       VG_(clo_db_command)) {}
       else if VG_BOOL_CLO(arg, "--sym-offsets",      VG_(clo_sym_offsets)) {}
+      else if VG_BOOL_CLO(arg, "--read-inline-info", VG_(clo_read_inline_info)) {}
       else if VG_BOOL_CLO(arg, "--read-var-info",    VG_(clo_read_var_info)) {}
 
       else if VG_INT_CLO (arg, "--dump-error",       VG_(clo_dump_error))   {}
@@ -617,7 +640,12 @@ void main_process_cmd_line_options ( /*OUT*/Bool* logging_to_fd,
                                                     VG_(clo_smc_check),
                                                     Vg_SmcAllNonFile);
 
-      else if VG_STR_CLO (arg, "--kernel-variant",  VG_(clo_kernel_variant)) {}
+      else if VG_USETX_CLO (arg, "--kernel-variant",
+                            "bproc,"
+                            "android-no-hw-tls,"
+                            "android-gpu-sgx5xx,"
+                            "android-gpu-adreno3xx",
+                            VG_(clo_kernel_variant)) {}
 
       else if VG_BOOL_CLO(arg, "--dsymutil",        VG_(clo_dsymutil)) {}
 
@@ -687,35 +715,21 @@ void main_process_cmd_line_options ( /*OUT*/Bool* logging_to_fd,
       else if VG_STR_CLO(arg, "--xml-user-comment",
                               VG_(clo_xml_user_comment)) {}
 
+      else if VG_BOOL_CLO(arg, "--default-suppressions",
+                          VG_(clo_default_supp)) { }
+
       else if VG_STR_CLO(arg, "--suppressions", tmp_str) {
-         if (VG_(clo_n_suppressions) >= VG_CLO_MAX_SFILES) {
-            VG_(fmsg_bad_option)(arg,
-               "Too many suppression files specified.\n"
-               "Increase VG_CLO_MAX_SFILES and recompile.\n");
-         }
-         VG_(clo_suppressions)[VG_(clo_n_suppressions)] = tmp_str;
-         VG_(clo_n_suppressions)++;
+         VG_(addToXA)(VG_(clo_suppressions), &tmp_str);
       }
 
       else if VG_STR_CLO (arg, "--fullpath-after", tmp_str) {
-         if (VG_(clo_n_fullpath_after) >= VG_CLO_MAX_FULLPATH_AFTER) {
-            VG_(fmsg_bad_option)(arg,
-               "Too many --fullpath-after= specifications.\n"
-               "Increase VG_CLO_MAX_FULLPATH_AFTER and recompile.\n");
-         }
-         VG_(clo_fullpath_after)[VG_(clo_n_fullpath_after)] = tmp_str;
-         VG_(clo_n_fullpath_after)++;
+         VG_(addToXA)(VG_(clo_fullpath_after), &tmp_str);
       }
 
       else if VG_STR_CLO (arg, "--extra-debuginfo-path",
                       VG_(clo_extra_debuginfo_path)) {}
 
       else if VG_STR_CLO(arg, "--require-text-symbol", tmp_str) {
-         if (VG_(clo_n_req_tsyms) >= VG_CLO_MAX_REQ_TSYMS) {
-            VG_(fmsg_bad_option)(arg,
-               "Too many --require-text-symbol= specifications.\n"
-               "Increase VG_CLO_MAX_REQ_TSYMS and recompile.\n");
-         }
          /* String needs to be of the form C?*C?*, where C is any
             character, but is the same both times.  Having it in this
             form facilitates finding the boundary between the sopatt
@@ -736,8 +750,7 @@ void main_process_cmd_line_options ( /*OUT*/Bool* logging_to_fd,
             VG_(fmsg_bad_option)(arg,
                "Invalid --require-text-symbol= specification.\n");
          }
-         VG_(clo_req_tsyms)[VG_(clo_n_req_tsyms)] = tmp_str;
-         VG_(clo_n_req_tsyms)++;
+         VG_(addToXA)(VG_(clo_req_tsyms), &tmp_str);
       }
 
       /* "stuvwxyz" --> stuvwxyz (binary) */
@@ -801,6 +814,12 @@ void main_process_cmd_line_options ( /*OUT*/Bool* logging_to_fd,
    }
 
    /* END command-line processing loop */
+
+   /* Notify about deprecated features */
+   if (VG_(clo_db_attach))
+      VG_(umsg)
+         ("\nWarning: --db-attach is a deprecated feature which will be\n"
+          "   removed in the next release. Use --vgdb-error=1 instead\n\n");
 
    /* Determine the path prefix for vgdb */
    if (VG_(clo_vgdb_prefix) == NULL)
@@ -1111,16 +1130,15 @@ void main_process_cmd_line_options ( /*OUT*/Bool* logging_to_fd,
 
    // Suppressions related stuff
 
-   if (VG_(clo_n_suppressions) < VG_CLO_MAX_SFILES-1 &&
+   if (VG_(clo_default_supp) &&
        (VG_(needs).core_errors || VG_(needs).tool_errors)) {
       /* If we haven't reached the max number of suppressions, load
          the default one. */
       static const HChar default_supp[] = "default.supp";
       Int len = VG_(strlen)(VG_(libdir)) + 1 + sizeof(default_supp);
-      HChar *buf = VG_(arena_malloc)(VG_AR_CORE, "main.mpclo.3", len);
+      HChar *buf = VG_(malloc)("main.mpclo.3", len);
       VG_(sprintf)(buf, "%s/%s", VG_(libdir), default_supp);
-      VG_(clo_suppressions)[VG_(clo_n_suppressions)] = buf;
-      VG_(clo_n_suppressions)++;
+      VG_(addToXA)(VG_(clo_suppressions), &buf);
    }
 
    *logging_to_fd = log_to == VgLogTo_Fd || log_to == VgLogTo_Socket;
@@ -1261,8 +1279,7 @@ static void print_preamble ( Bool logging_to_fd,
       // paste the command line (because of the "==pid==" prefixes), so we now
       // favour utility and simplicity over aesthetics.
       umsg_or_xml("%sCommand: ", xpre);
-      if (VG_(args_the_exename))
-         umsg_or_xml_arg(VG_(args_the_exename));
+      umsg_or_xml_arg(VG_(args_the_exename));
           
       for (i = 0; i < VG_(sizeXA)( VG_(args_for_client) ); i++) {
          HChar* s = *(HChar**)VG_(indexXA)( VG_(args_for_client), i );
@@ -1313,8 +1330,7 @@ static void print_preamble ( Bool logging_to_fd,
       VG_(printf_xml)("  </vargv>\n");
 
       VG_(printf_xml)("  <argv>\n");
-      if (VG_(args_the_exename))
-         VG_(printf_xml)("    <exe>%pS</exe>\n",
+      VG_(printf_xml)("    <exe>%pS</exe>\n",
                                 VG_(args_the_exename));
       for (i = 0; i < VG_(sizeXA)( VG_(args_for_client) ); i++) {
          VG_(printf_xml)(
@@ -1332,15 +1348,6 @@ static void print_preamble ( Bool logging_to_fd,
       VG_(printf_xml)("\n");
    else if (VG_(clo_verbosity) > 0)
       VG_(umsg)("\n");
-
-#  if defined(VGO_darwin) && DARWIN_VERS == DARWIN_10_8
-   /* Uh, this doesn't play nice with XML output. */
-   umsg_or_xml( "WARNING: Support on MacOS 10.8 is experimental and mostly broken.\n");
-   umsg_or_xml( "WARNING: Expect incorrect results, assertions and crashes.\n");
-   umsg_or_xml( "WARNING: In particular, Memcheck on 32-bit programs will fail to\n");
-   umsg_or_xml( "WARNING: detect any errors associated with heap-allocated data.\n");
-   umsg_or_xml( "\n" );
-#  endif
 
    if (VG_(clo_verbosity) > 1) {
       SysRes fd;
@@ -1360,26 +1367,30 @@ static void print_preamble ( Bool logging_to_fd,
       if (sr_isError(fd)) {
          VG_(message)(Vg_DebugMsg, "  can't open /proc/version\n");
       } else {
-#        define BUF_LEN    256
-         HChar version_buf[BUF_LEN];
-         Int n = VG_(read) ( sr_Res(fd), version_buf, BUF_LEN );
-         vg_assert(n <= BUF_LEN);
-         if (n > 0) {
-            version_buf[n-1] = '\0';
-            VG_(message)(Vg_DebugMsg, "  %s\n", version_buf);
-         } else {
-            VG_(message)(Vg_DebugMsg, "  (empty?)\n");
-         }
-         VG_(close)(sr_Res(fd));
-#        undef BUF_LEN
+         const SizeT bufsiz = 255;
+         HChar version_buf[bufsiz+1];
+         VG_(message)(Vg_DebugMsg, "  ");
+         Int n, fdno = sr_Res(fd);
+         do {
+            n = VG_(read)(fdno, version_buf, bufsiz);
+            if (n < 0) {
+               VG_(message)(Vg_DebugMsg, "  error reading /proc/version\n");
+               break;
+            }
+            version_buf[n] = '\0';
+            VG_(message)(Vg_DebugMsg, "%s", version_buf);
+         } while (n == bufsiz);
+         VG_(message)(Vg_DebugMsg, "\n");
+         VG_(close)(fdno);
       }
 
       VG_(machine_get_VexArchInfo)( &vex_arch, &vex_archinfo );
       VG_(message)(
          Vg_DebugMsg, 
-         "Arch and hwcaps: %s, %s\n",
-         LibVEX_ppVexArch   ( vex_arch ),
-         LibVEX_ppVexHwCaps ( vex_arch, vex_archinfo.hwcaps )
+         "Arch and hwcaps: %s, %s, %s\n",
+         LibVEX_ppVexArch    ( vex_arch ),
+         LibVEX_ppVexEndness ( vex_archinfo.endness ),
+         LibVEX_ppVexHwCaps  ( vex_arch, vex_archinfo.hwcaps )
       );
       VG_(message)(
          Vg_DebugMsg, 
@@ -1645,7 +1656,7 @@ Int valgrind_main ( Int argc, HChar **argv, HChar **envp )
    vg_assert(VKI_PAGE_SIZE <= VKI_MAX_PAGE_SIZE);
    vg_assert(VKI_PAGE_SIZE     == (1 << VKI_PAGE_SHIFT));
    vg_assert(VKI_MAX_PAGE_SIZE == (1 << VKI_MAX_PAGE_SHIFT));
-   the_iicii.clstack_top = VG_(am_startup)( the_iicii.sp_at_startup );
+   the_iicii.clstack_end = VG_(am_startup)( the_iicii.sp_at_startup );
    VG_(debugLog)(1, "main", "Address space manager is running\n");
 
    //--------------------------------------------------------------
@@ -1658,7 +1669,7 @@ Int valgrind_main ( Int argc, HChar **argv, HChar **envp )
    //--------------------------------------------------------------
    VG_(debugLog)(1, "main", "Starting the dynamic memory manager\n");
    { void* p = VG_(malloc)( "main.vm.1", 12345 );
-     if (p) VG_(free)( p );
+     VG_(free)( p );
    }
    VG_(debugLog)(1, "main", "Dynamic memory manager is running\n");
 
@@ -1742,12 +1753,7 @@ Int valgrind_main ( Int argc, HChar **argv, HChar **envp )
         VG_(err_config_error)( "Can't establish current working "
                                "directory at startup\n");
    }
-   { HChar buf[VKI_PATH_MAX+1];
-     Bool ok = VG_(get_startup_wd)( buf, sizeof(buf) );
-     vg_assert(ok);
-     buf[VKI_PATH_MAX] = 0;
-     VG_(debugLog)(1, "main", "... %s\n", buf );
-   }
+   VG_(debugLog)(1, "main", "... %s\n", VG_(get_startup_wd)() );
 
    //============================================================
    // Command line argument handling order:
@@ -1789,6 +1795,22 @@ Int valgrind_main ( Int argc, HChar **argv, HChar **envp )
    VG_(debugLog)(1, "main",
                     "(early_) Process Valgrind's command line options\n");
    early_process_cmd_line_options(&need_help, &toolname);
+
+   // BEGIN HACK
+   vg_assert(toolname != NULL);
+   vg_assert(VG_(clo_read_inline_info) == False);
+#  if !defined(VGO_darwin)
+   if (0 == VG_(strcmp)(toolname, "memcheck")
+       || 0 == VG_(strcmp)(toolname, "helgrind")
+       || 0 == VG_(strcmp)(toolname, "drd")) {
+      /* Change the default setting.  Later on (just below)
+         main_process_cmd_line_options should pick up any
+         user-supplied setting for it and will override the default
+         set here. */
+      VG_(clo_read_inline_info) = True;
+   }
+#  endif
+   // END HACK
 
    // Set default vex control params
    LibVEX_default_VexControl(& VG_(clo_vex_control));
@@ -1870,8 +1892,7 @@ Int valgrind_main ( Int argc, HChar **argv, HChar **envp )
          VG_(err_config_error)("Can't create client cmdline file in %s\n", buf2);
 
       nul[0] = 0;
-      exename = VG_(args_the_exename) ? VG_(args_the_exename)
-                                      : "unknown_exename";
+      exename = VG_(args_the_exename);
       VG_(write)(fd, exename, VG_(strlen)( exename ));
       VG_(write)(fd, nul, 1);
 
@@ -1930,6 +1951,9 @@ Int valgrind_main ( Int argc, HChar **argv, HChar **envp )
    //--------------------------------------------------------------
    VG_(debugLog)(1, "main", "Initialise the tool part 1 (pre_clo_init)\n");
    VG_(tl_pre_clo_init)();
+   // Activate var info readers, if the tool asked for it:
+   if (VG_(needs).var_info)
+      VG_(clo_read_var_info) = True;
 
    //--------------------------------------------------------------
    // If --tool and --help/--help-debug was given, now give the core+tool
@@ -1987,7 +2011,7 @@ Int valgrind_main ( Int argc, HChar **argv, HChar **envp )
       Bool  ok;
       ok = VG_(sanity_check_needs)( &s );
       if (!ok) {
-         VG_(tool_panic)(s);
+         VG_(core_panic)(s);
       }
    }
 
@@ -2020,7 +2044,8 @@ Int valgrind_main ( Int argc, HChar **argv, HChar **envp )
 
 #     if defined(VGP_x86_linux)
       iters = 10;
-#     elif defined(VGP_amd64_linux) || defined(VGP_ppc64_linux)
+#     elif defined(VGP_amd64_linux) || defined(VGP_ppc64be_linux) \
+         || defined(VGP_ppc64le_linux)
       iters = 10;
 #     elif defined(VGP_ppc32_linux)
       iters = 5;
@@ -2072,10 +2097,9 @@ Int valgrind_main ( Int argc, HChar **argv, HChar **envp )
    //--------------------------------------------------------------
    VG_(debugLog)(1, "main", "Load initial debug info\n");
 
-   tl_assert(!addr2dihandle);
+   vg_assert(!addr2dihandle);
    addr2dihandle = VG_(newXA)( VG_(malloc), "main.vm.2",
                                VG_(free), sizeof(Addr_n_ULong) );
-   tl_assert(addr2dihandle);
 
 #  if defined(VGO_linux)
    { Addr* seg_starts;
@@ -2180,12 +2204,12 @@ Int valgrind_main ( Int argc, HChar **argv, HChar **envp )
    { Addr*     seg_starts;
      Int       n_seg_starts;
 
-     tl_assert(addr2dihandle);
+     vg_assert(addr2dihandle);
 
      /* Mark the main thread as running while we tell the tool about
         the client memory so that the tool can associate that memory
         with the main thread. */
-     tl_assert(VG_(running_tid) == VG_INVALID_THREADID);
+     vg_assert(VG_(running_tid) == VG_INVALID_THREADID);
      VG_(running_tid) = tid_main;
 
      seg_starts = VG_(get_segment_starts)( &n_seg_starts );
@@ -2232,7 +2256,7 @@ Int valgrind_main ( Int argc, HChar **argv, HChar **envp )
            for (j = 0; j < n; j++) {
               Addr_n_ULong* anl = VG_(indexXA)( addr2dihandle, j );
               if (anl->a == seg->start) {
-                  tl_assert(anl->ull > 0); /* check it's a valid handle */
+                  vg_assert(anl->ull > 0); /* check it's a valid handle */
                   break;
               }
            }
@@ -2288,7 +2312,25 @@ Int valgrind_main ( Int argc, HChar **argv, HChar **envp )
 
      /* Clear the running thread indicator */
      VG_(running_tid) = VG_INVALID_THREADID;
-     tl_assert(VG_(running_tid) == VG_INVALID_THREADID);
+     vg_assert(VG_(running_tid) == VG_INVALID_THREADID);
+
+     /* Darwin only: tell the tools where the client's kernel commpage
+        is.  It would be better to do this by telling aspacemgr about
+        it -- see the now disused record_system_memory() in
+        initimg-darwin.c -- but that causes the sync checker to fail,
+        since the mapping doesn't appear in the kernel-supplied
+        process map.  So do it here instead. */
+#    if defined(VGP_amd64_darwin)
+     VG_TRACK( new_mem_startup,
+               0x7fffffe00000, 0x7ffffffff000-0x7fffffe00000,
+               True, False, True, /* r-x */
+               0 /* di_handle: no associated debug info */ );
+#    elif defined(VGP_x86_darwin)
+     VG_TRACK( new_mem_startup,
+               0xfffec000, 0xfffff000-0xfffec000,
+               True, False, True, /* r-x */
+               0 /* di_handle: no associated debug info */ );
+#    endif
    }
 
    //--------------------------------------------------------------
@@ -2340,7 +2382,7 @@ Int valgrind_main ( Int argc, HChar **argv, HChar **envp )
    //--------------------------------------------------------------
    // register client stack
    //--------------------------------------------------------------
-   VG_(clstk_id) = VG_(register_stack)(VG_(clstk_base), VG_(clstk_end));
+   VG_(clstk_id) = VG_(register_stack)(VG_(clstk_start_base), VG_(clstk_end));
 
    //--------------------------------------------------------------
    // Show the address space state so far
@@ -2581,7 +2623,7 @@ void shutdown_actions_NORETURN( ThreadId tid,
 static void final_tidyup(ThreadId tid)
 {
 #if !defined(VGO_darwin)
-#  if defined(VGP_ppc64_linux)
+#  if defined(VGP_ppc64be_linux)
    Addr r2;
 #  endif
    Addr __libc_freeres_wrapper = VG_(client___libc_freeres_wrapper);
@@ -2593,7 +2635,7 @@ static void final_tidyup(ThreadId tid)
         0 == __libc_freeres_wrapper )
       return;			/* can't/won't do it */
 
-#  if defined(VGP_ppc64_linux)
+#  if defined(VGP_ppc64be_linux)
    r2 = VG_(get_tocptr)( __libc_freeres_wrapper );
    if (r2 == 0) {
       VG_(message)(Vg_UserMsg, 
@@ -2611,13 +2653,17 @@ static void final_tidyup(ThreadId tid)
 		   "Caught __NR_exit; running __libc_freeres()\n");
       
    /* set thread context to point to libc_freeres_wrapper */
-   /* ppc64-linux note: __libc_freeres_wrapper gives us the real
+   /* ppc64be-linux note: __libc_freeres_wrapper gives us the real
       function entry point, not a fn descriptor, so can use it
       directly.  However, we need to set R2 (the toc pointer)
       appropriately. */
    VG_(set_IP)(tid, __libc_freeres_wrapper);
-#  if defined(VGP_ppc64_linux)
+#  if defined(VGP_ppc64be_linux)
    VG_(threads)[tid].arch.vex.guest_GPR2 = r2;
+#  elif  defined(VGP_ppc64le_linux)
+   /* setting GPR2 but not really needed, GPR12 is needed */
+   VG_(threads)[tid].arch.vex.guest_GPR2  = __libc_freeres_wrapper;
+   VG_(threads)[tid].arch.vex.guest_GPR12 = __libc_freeres_wrapper;
 #  endif
    /* mips-linux note: we need to set t9 */
 #  if defined(VGP_mips32_linux) || defined(VGP_mips64_linux)
@@ -2813,7 +2859,7 @@ asm("\n"
     "\ttrap\n"
     ".previous\n"
 );
-#elif defined(VGP_ppc64_linux)
+#elif defined(VGP_ppc64be_linux)
 asm("\n"
     /* PPC64 ELF ABI says '_start' points to a function descriptor.
        So we must have one, and that is what goes into the .opd section. */
@@ -2854,6 +2900,51 @@ asm("\n"
     "\toris 14,14,_start_in_C_linux@h\n"
     "\tori  14,14,_start_in_C_linux@l\n"
     "\tld 14,0(14)\n"
+    "\tmtctr 14\n"
+    "\tbctrl\n"
+    "\tnop\n"
+    "\ttrap\n"
+);
+#elif defined(VGP_ppc64le_linux)
+/* Little Endian uses ELF version 2 but in the future may also
+ * support other ELF versions.
+ */
+asm("\n"
+    "\t.align 2\n"
+    "\t.global _start\n"
+    "\t.type _start,@function\n"
+    "_start:\n"
+    "#if _CALL_ELF == 2    \n"
+    "0:  addis        2,12,.TOC.-0b@ha\n"
+    "    addi         2,2,.TOC.-0b@l\n"
+    "    .localentry  _start, .-_start\n"
+    "#endif \n"
+    /* set up the new stack in r16 */
+    "\tlis  16,   vgPlain_interim_stack@highest\n"
+    "\tori  16,16,vgPlain_interim_stack@higher\n"
+    "\tsldi 16,16,32\n"
+    "\toris 16,16,vgPlain_interim_stack@h\n"
+    "\tori  16,16,vgPlain_interim_stack@l\n"
+    "\txor  17,17,17\n"
+    "\tlis    17,("VG_STRINGIFY(VG_STACK_GUARD_SZB)" >> 16)\n"
+    "\tori 17,17,("VG_STRINGIFY(VG_STACK_GUARD_SZB)" & 0xFFFF)\n"
+    "\txor 18,18,18\n"
+    "\tlis    18,("VG_STRINGIFY(VG_STACK_ACTIVE_SZB)" >> 16)\n"
+    "\tori 18,18,("VG_STRINGIFY(VG_STACK_ACTIVE_SZB)" & 0xFFFF)\n"
+    "\tadd 16,17,16\n"
+    "\tadd 16,18,16\n"
+    "\trldicr 16,16,0,59\n"
+    /* now r16 = &vgPlain_interim_stack + VG_STACK_GUARD_SZB +
+       VG_STACK_ACTIVE_SZB rounded down to the nearest 16-byte
+       boundary.  And r1 is the original SP.  Set the SP to r16 and
+       call _start_in_C_linux, passing it the initial SP. */
+    "\tmr 3,1\n"
+    "\tmr 1,16\n"
+    "\tlis  14,   _start_in_C_linux@highest\n"
+    "\tori  14,14,_start_in_C_linux@higher\n"
+    "\tsldi 14,14,32\n"
+    "\toris 14,14,_start_in_C_linux@h\n"
+    "\tori  14,14,_start_in_C_linux@l\n"
     "\tmtctr 14\n"
     "\tbctrl\n"
     "\tnop\n"
@@ -3072,10 +3163,10 @@ void _start_in_C_linux ( UWord* pArgc )
 
    the_iicii.sp_at_startup = (Addr)pArgc;
 
-#  if defined(VGP_ppc32_linux) || defined(VGP_ppc64_linux) \
-      || defined(VGP_arm64_linux)
+#  if defined(VGP_ppc32_linux) || defined(VGP_ppc64be_linux) \
+      || defined(VGP_ppc64le_linux) || defined(VGP_arm64_linux)
    {
-      /* ppc/ppc64 can be configured with different page sizes.
+      /* ppc32/ppc64 can be configured with different page sizes.
          Determine this early.  This is an ugly hack and really should
          be moved into valgrind_main. */
       UWord *sp = &pArgc[1+argc+1];

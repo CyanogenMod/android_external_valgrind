@@ -64,6 +64,14 @@
 
 #include <sys/procfs.h>
 
+// glibc versions prior to 2.5 do not define PTRACE_GETSIGINFO on
+// the platforms we support.
+#if !((__GLIBC__ > 2) || (__GLIBC__ == 2 && __GLIBC_MINOR__ >= 5))
+#   ifndef PTRACE_GETSIGINFO
+#   define PTRACE_GETSIGINFO 0x4202
+#   endif
+#endif
+
 #if VEX_HOST_WORDSIZE == 8
 typedef Addr64 CORE_ADDR;
 #elif VEX_HOST_WORDSIZE == 4
@@ -515,7 +523,13 @@ void detach_from_all_threads (pid_t pid)
 }
 
 #  if defined(VGA_arm64)
+/* arm64 is extra special, old glibc defined kernel user_pt_regs, but
+   newer glibc instead define user_regs_struct. */
+#    ifdef HAVE_SYS_USER_REGS
+static struct user_regs_struct user_save;
+#    else
 static struct user_pt_regs user_save;
+#    endif
 #  else
 static struct user user_save;
 #  endif
@@ -554,7 +568,8 @@ Bool getregs (pid_t pid, void *regs, long regs_bsz)
       elf_gregset_t elf_regs;
       struct iovec iovec;
 
-      DEBUG(1, "getregs PTRACE_GETREGSET sizeof(elf_regs) %d\n", sizeof(elf_regs));
+      DEBUG(1, "getregs PTRACE_GETREGSET sizeof(elf_regs) %zu\n",
+            sizeof(elf_regs));
       iovec.iov_base = regs;
       iovec.iov_len =  sizeof(elf_regs);
 
@@ -669,7 +684,8 @@ Bool setregs (pid_t pid, void *regs, long regs_bsz)
 
       // setregset can never be called before getregset has done a runtime check.
       assert (has_working_ptrace_getregset == 1);
-      DEBUG(1, "setregs PTRACE_SETREGSET sizeof(elf_regs) %d\n", sizeof(elf_regs));
+      DEBUG(1, "setregs PTRACE_SETREGSET sizeof(elf_regs) %zu\n",
+            sizeof(elf_regs));
       iovec.iov_base = regs;
       iovec.iov_len =  sizeof(elf_regs);
       res = ptrace (PTRACE_SETREGSET, pid, NT_PRSTATUS, &iovec);
@@ -783,7 +799,13 @@ Bool invoker_invoke_gdbserver (pid_t pid)
    long res;
    Bool stopped;
 #  if defined(VGA_arm64)
+/* arm64 is extra special, old glibc defined kernel user_pt_regs, but
+   newer glibc instead define user_regs_struct. */
+#    ifdef HAVE_SYS_USER_REGS
+   struct user_regs_struct user_mod;
+#    else
    struct user_pt_regs user_mod;
+#    endif
 #  else
    struct user user_mod;
 #  endif
@@ -843,7 +865,7 @@ Bool invoker_invoke_gdbserver (pid_t pid)
    sp = user_mod.sp;
 #elif defined(VGA_ppc32)
    sp = user_mod.regs.gpr[1];
-#elif defined(VGA_ppc64)
+#elif defined(VGA_ppc64be) || defined(VGA_ppc64le)
    sp = user_mod.regs.gpr[1];
 #elif defined(VGA_s390x)
    sp = user_mod.regs.gprs[15];
@@ -907,7 +929,7 @@ Bool invoker_invoke_gdbserver (pid_t pid)
       I_die_here : not x86 or amd64 in x86/amd64 section/
 #endif
 
-#elif defined(VGA_ppc32) || defined(VGA_ppc64)
+#elif defined(VGA_ppc32) || defined(VGA_ppc64be) || defined(VGA_ppc64le)
       user_mod.regs.nip = shared32->invoke_gdbserver;
       user_mod.regs.trap = -1L;
       /* put check arg in register 3 */
@@ -984,7 +1006,7 @@ Bool invoker_invoke_gdbserver (pid_t pid)
 
 #elif defined(VGA_ppc32)
       assert(0); // cannot vgdb a 64 bits executable with a 32 bits exe
-#elif defined(VGA_ppc64)
+#elif defined(VGA_ppc64be)
       Addr64 func_addr;
       Addr64 toc_addr;
       int rw;
@@ -1010,6 +1032,16 @@ Bool invoker_invoke_gdbserver (pid_t pid)
       user_mod.regs.gpr[1] = sp - 220;
       user_mod.regs.gpr[2] = toc_addr;
       user_mod.regs.nip = func_addr;
+      user_mod.regs.trap = -1L;
+      /* put check arg in register 3 */
+      user_mod.regs.gpr[3] = check;
+      /* put bad_return return address in Link Register */
+      user_mod.regs.link = bad_return;
+#elif defined(VGA_ppc64le)
+      /* LE does not use the function pointer structure used in BE */
+      user_mod.regs.nip = shared64->invoke_gdbserver;
+      user_mod.regs.gpr[1] = sp - 512;
+      user_mod.regs.gpr[12] = user_mod.regs.nip;
       user_mod.regs.trap = -1L;
       /* put check arg in register 3 */
       user_mod.regs.gpr[3] = check;

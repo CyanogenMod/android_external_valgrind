@@ -93,9 +93,9 @@ EXTRA_DIST = \
 		custom_alloc.stderr.exp-s390x-mvc \
 	custom-overlap.stderr.exp custom-overlap.vgtest \
 	deep-backtrace.vgtest deep-backtrace.stderr.exp \
-	deep_templates.vgtest \
-	deep_templates.stdout.exp deep_templates.stderr.exp \
+	demangle.stderr.exp demangle.vgtest \
 	describe-block.stderr.exp describe-block.vgtest \
+	descr_belowsp.vgtest descr_belowsp.stderr.exp \
 	doublefree.stderr.exp doublefree.vgtest \
 	dw4.vgtest dw4.stderr.exp dw4.stdout.exp \
 	err_disable1.vgtest err_disable1.stderr.exp \
@@ -117,6 +117,11 @@ EXTRA_DIST = \
 	holey_buffer_too_small.stderr.exp \
 	inits.stderr.exp inits.vgtest \
 	inline.stderr.exp inline.stdout.exp inline.vgtest \
+	inlinfo.stderr.exp inlinfo.stdout.exp inlinfo.vgtest \
+	inlinfosupp.stderr.exp inlinfosupp.stdout.exp inlinfosupp.supp inlinfosupp.vgtest \
+	inlinfosuppobj.stderr.exp inlinfosuppobj.stdout.exp inlinfosuppobj.supp inlinfosuppobj.vgtest \
+	inltemplate.stderr.exp inltemplate.stdout.exp inltemplate.vgtest \
+		inltemplate.stderr.exp-old-gcc \
 	leak-0.vgtest leak-0.stderr.exp \
 	leak-cases-full.vgtest leak-cases-full.stderr.exp \
 	leak-cases-possible.vgtest leak-cases-possible.stderr.exp \
@@ -231,6 +236,8 @@ EXTRA_DIST = \
 	supp.supp \
 	suppfree.stderr.exp suppfree.supp suppfree.vgtest \
 	suppfreecollision.stderr.exp suppfreecollision.supp suppfreecollision.vgtest \
+	supponlyobj.stderr.exp supponlyobj.supp supponlyobj.vgtest \
+	suppvarinfo5.stderr.exp suppvarinfo5.supp suppvarinfo5.vgtest \
 	test-plo-no.vgtest test-plo-no.stdout.exp \
 	    test-plo-no.stderr.exp-le64 test-plo-no.stderr.exp-le32 \
 	test-plo-yes.vgtest test-plo-yes.stdout.exp \
@@ -253,6 +260,7 @@ EXTRA_DIST = \
 		varinfo5.stderr.exp-ppc64 \
 	varinfo6.vgtest varinfo6.stdout.exp varinfo6.stderr.exp \
 		varinfo6.stderr.exp-ppc64 \
+	varinforestrict.vgtest varinforestrict.stderr.exp \
 	vcpu_bz2.stdout.exp vcpu_bz2.stderr.exp vcpu_bz2.vgtest \
 	vcpu_fbench.stdout.exp vcpu_fbench.stderr.exp vcpu_fbench.vgtest \
 	vcpu_fnfns.stdout.exp vcpu_fnfns.stdout.exp-glibc28-amd64 \
@@ -290,16 +298,18 @@ check_PROGRAMS = \
 	clireq_nofill \
 	clo_redzone \
 	cond_ld_st \
+	descr_belowsp \
 	leak_cpp_interior \
 	custom_alloc \
 	custom-overlap \
+	demangle \
 	deep-backtrace \
 	describe-block \
 	doublefree error_counts errs1 exitprog execve1 execve2 erringfds \
 	err_disable1 err_disable2 err_disable3 err_disable4 \
 	err_disable_arange1 \
 	file_locking \
-	fprw fwrite inits inline \
+	fprw fwrite inits inline inlinfo inltemplate \
 	holey_buffer_too_small \
 	leak-0 \
 	leak-cases \
@@ -342,6 +352,7 @@ check_PROGRAMS = \
 	unit_libcbase unit_oset \
 	varinfo1 varinfo2 varinfo3 varinfo4 \
 	varinfo5 varinfo5so.so varinfo6 \
+	varinforestrict \
 	vcpu_fbench vcpu_fnfns \
 	wcs \
 	xml1 \
@@ -364,10 +375,6 @@ if HAVE_PTHREAD_BARRIER
 check_PROGRAMS += reach_thread_register
 endif
 
-if HAVE_GSTABS
-check_PROGRAMS += deep_templates
-endif
-
 AM_CFLAGS   += $(AM_FLAG_M3264_PRI)
 AM_CXXFLAGS += $(AM_FLAG_M3264_PRI)
 
@@ -384,11 +391,11 @@ endif
 
 leak_cpp_interior_SOURCES	= leak_cpp_interior.cpp
 
-deep_templates_SOURCES	= deep_templates.cpp
-deep_templates_CXXFLAGS	= $(AM_CFLAGS) -O -gstabs
+demangle_SOURCES = demangle.cpp
 
 dw4_CFLAGS		= $(AM_CFLAGS) -gdwarf-4 -fdebug-types-section
 
+descr_belowsp_LDADD     = -lpthread
 err_disable3_LDADD 	= -lpthread
 err_disable4_LDADD 	= -lpthread
 reach_thread_register_CFLAGS	= $(AM_CFLAGS) -O2
@@ -405,6 +412,11 @@ execve2_CFLAGS = $(AM_CFLAGS) @FLAG_W_NO_NONNULL@
 fprw_CFLAGS = $(AM_CFLAGS) @FLAG_W_NO_UNINITIALIZED@
 
 inits_CFLAGS = $(AM_CFLAGS) @FLAG_W_NO_UNINITIALIZED@
+
+inlinfo_CFLAGS = $(AM_CFLAGS) @FLAG_W_NO_UNINITIALIZED@ @FLAG_W_NO_STATIC_LOCAL_IN_INLINE@
+
+inltemplate_SOURCES = inltemplate.cpp
+inltemplate_CXXFLAGS = $(AM_CXXFLAGS) @FLAG_W_NO_UNINITIALIZED@
 
 long_namespace_xml_SOURCES = long_namespace_xml.cpp
 
@@ -483,6 +495,7 @@ else
  varinfo5so_so_LDFLAGS  = -fpic $(AM_FLAG_M3264_PRI) -shared \
 				-Wl,-soname -Wl,varinfo5so.so
 endif
+varinforestrict_CFLAGS	= $(AM_CFLAGS) -O0 -g -std=c99
 
 # Build shared object for wrap7
 wrap7_SOURCES           = wrap7.c
