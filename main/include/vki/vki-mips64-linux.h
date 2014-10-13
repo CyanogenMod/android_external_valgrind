@@ -348,6 +348,10 @@ struct vki_sigcontext {
 #define VKI_F_SETOWN_EX     15
 #define VKI_F_GETOWN_EX     16
 
+#define VKI_F_OFD_GETLK     36
+#define VKI_F_OFD_SETLK     37
+#define VKI_F_OFD_SETLKW    38
+
 #define VKI_F_GETLK64       33          /*  using 'struct flock64' */
 #define VKI_F_SETLK64       34
 #define VKI_F_SETLKW64      35
@@ -387,6 +391,7 @@ struct vki_f_owner_ex {
 
 #define VKI_SIOCSPGRP           0x8902
 #define VKI_SIOCGPGRP           0x8904
+#define VKI_SIOCATMARK          0x8905
 #define VKI_SIOCGSTAMP          0x8906      /* Get stamp (timeval) */
 #define VKI_SIOCGSTAMPNS        0x8907      /* Get stamp (timespec) */
 

@@ -160,7 +160,7 @@ ULong arm64g_calculate_flag_n ( ULong cc_op, ULong cc_dep1,
          UInt  oldC = cc_dep3;
          vassert((oldC & ~1) == 0);
          UInt  res  = argL + argR + oldC;
-         ULong nf   = res >> 31;
+         ULong nf   = (ULong)(res >> 31);
          return nf;
       }
       case ARM64G_CC_OP_ADC64: {
@@ -180,7 +180,7 @@ ULong arm64g_calculate_flag_n ( ULong cc_op, ULong cc_dep1,
          UInt  oldC = cc_dep3;
          vassert((oldC & ~1) == 0);
          UInt  res  = argL - argR - (oldC ^ 1);
-         ULong nf   = res >> 31;
+         ULong nf   = (ULong)(res >> 31);
          return nf;
       }
       case ARM64G_CC_OP_SBC64: {
@@ -507,7 +507,7 @@ ULong arm64g_calculate_flag_v ( ULong cc_op, ULong cc_dep1,
          UInt  oldC = cc_dep3;
          vassert((oldC & ~1) == 0);
          UInt  res  = argL + argR + oldC;
-         ULong vf   = ((res ^ argL) & (res ^ argR)) >> 31;
+         ULong vf   = (ULong)(((res ^ argL) & (res ^ argR)) >> 31);
          return vf;
       }
       case ARM64G_CC_OP_ADC64: {
@@ -527,7 +527,7 @@ ULong arm64g_calculate_flag_v ( ULong cc_op, ULong cc_dep1,
          UInt  oldC = cc_dep3;
          vassert((oldC & ~1) == 0);
          UInt  res  = argL - argR - (oldC ^ 1);
-         ULong vf   = ((argL ^ argR) & (argL ^ res)) >> 31;
+         ULong vf   = (ULong)(((argL ^ argR) & (argL ^ res)) >> 31);
          return vf;
       }
       case ARM64G_CC_OP_SBC64: {
@@ -677,6 +677,21 @@ ULong arm64g_calculate_condition ( /* ARM64Condcode << 4 | cc_op */
 }
 
 
+/* CALLED FROM GENERATED CODE */
+/* DIRTY HELPER (non-referentially-transparent) */
+/* Horrible hack.  On non-arm64 platforms, return 0. */
+ULong arm64g_dirtyhelper_MRS_CNTVCT_EL0 ( void )
+{
+#  if defined(__aarch64__) && !defined(__arm__)
+   ULong w = 0x5555555555555555ULL; /* overwritten */
+   __asm__ __volatile__("mrs %0, cntvct_el0" : "=r"(w));
+   return w;
+#  else
+   return 0ULL;
+#  endif
+}
+
+
 /*---------------------------------------------------------------*/
 /*--- Flag-helpers translation-time function specialisers.    ---*/
 /*--- These help iropt specialise calls the above run-time    ---*/
@@ -725,12 +740,12 @@ IRExpr* guest_arm64_spechelper ( const HChar* function_name,
          Not sure whether this is strictly necessary, but: the
          replacement IR must produce only the values 0 or 1.  Bits
          63:1 are required to be zero. */
-      IRExpr *cond_n_op, *cc_dep1, *cc_dep2, *cc_ndep;
+      IRExpr *cond_n_op, *cc_dep1, *cc_dep2  ; //, *cc_ndep;
       vassert(arity == 4);
       cond_n_op = args[0]; /* (ARM64Condcode << 4)  |  ARM64G_CC_OP_* */
       cc_dep1   = args[1];
       cc_dep2   = args[2];
-      cc_ndep   = args[3];
+      //cc_ndep   = args[3];
 
       /*---------------- SUB64 ----------------*/
 
@@ -874,46 +889,25 @@ IRExpr* guest_arm64_spechelper ( const HChar* function_name,
                                          unop(Iop_64to32, cc_dep2)));
       }
 
-      /*---------------- SBC64 ----------------*/
-
-      if (isU64(cond_n_op, (ARM64CondCS << 4) | ARM64G_CC_OP_SBC64)) {
-         /* This seems to happen a lot in softfloat code, eg __divdf3+140 */
-         /* thunk is: (dep1=argL, dep2=argR, ndep=oldC) */
-         /* HS after SBC (same as C after SBC below)
-            --> oldC ? (argL >=u argR) : (argL >u argR)
-            --> oldC ? (argR <=u argL) : (argR <u argL)
-         */
-         return
-            IRExpr_ITE(
-               binop(Iop_CmpNE64, cc_ndep, mkU64(0)),
-               /* case oldC != 0 */
-               unop(Iop_1Uto64, binop(Iop_CmpLE32U, cc_dep2, cc_dep1)),
-               /* case oldC == 0 */
-               unop(Iop_1Uto64, binop(Iop_CmpLT32U, cc_dep2, cc_dep1))
-            );
-      }
-
-      /*---------------- SBC32 ----------------*/
-
-      if (isU64(cond_n_op, (ARM64CondCS << 4) | ARM64G_CC_OP_SBC32)) {
-         /* This seems to happen a lot in softfloat code, eg __divdf3+140 */
-         /* thunk is: (dep1=argL, dep2=argR, ndep=oldC) */
-         /* HS after SBC (same as C after SBC below)
-            --> oldC ? (argL >=u argR) : (argL >u argR)
-            --> oldC ? (argR <=u argL) : (argR <u argL)
-         */
-         return
-            IRExpr_ITE(
-               binop(Iop_CmpNE64, cc_ndep, mkU64(0)),
-               /* case oldC != 0 */
-               unop(Iop_1Uto64, binop(Iop_CmpLE32U, unop(Iop_64to32, cc_dep2),
-                                                    unop(Iop_64to32, cc_dep1))),
-               /* case oldC == 0 */
-               unop(Iop_1Uto64, binop(Iop_CmpLT32U, unop(Iop_64to32, cc_dep2),
-                                                    unop(Iop_64to32, cc_dep1)))
-            );
-      }
-
+//ZZ       /*---------------- SBB ----------------*/
+//ZZ 
+//ZZ       if (isU32(cond_n_op, (ARMCondHS << 4) | ARMG_CC_OP_SBB)) {
+//ZZ          /* This seems to happen a lot in softfloat code, eg __divdf3+140 */
+//ZZ          /* thunk is: (dep1=argL, dep2=argR, ndep=oldC) */
+//ZZ          /* HS after SBB (same as C after SBB below)
+//ZZ             --> oldC ? (argL >=u argR) : (argL >u argR)
+//ZZ             --> oldC ? (argR <=u argL) : (argR <u argL)
+//ZZ          */
+//ZZ          return
+//ZZ             IRExpr_ITE(
+//ZZ                binop(Iop_CmpNE32, cc_ndep, mkU32(0)),
+//ZZ                /* case oldC != 0 */
+//ZZ                unop(Iop_1Uto32, binop(Iop_CmpLE32U, cc_dep2, cc_dep1)),
+//ZZ                /* case oldC == 0 */
+//ZZ                unop(Iop_1Uto32, binop(Iop_CmpLT32U, cc_dep2, cc_dep1))
+//ZZ             );
+//ZZ       }
+//ZZ 
 //ZZ       /*---------------- LOGIC ----------------*/
 //ZZ 
 //ZZ       if (isU32(cond_n_op, (ARMCondEQ << 4) | ARMG_CC_OP_LOGIC)) {
@@ -1199,6 +1193,28 @@ ULong LibVEX_GuestARM64_get_nzcv ( /*IN*/const VexGuestARM64State* vex_state )
 }
 
 /* VISIBLE TO LIBVEX CLIENT */
+ULong LibVEX_GuestARM64_get_fpsr ( const VexGuestARM64State* vex_state )
+{
+   UInt w32 = vex_state->guest_QCFLAG[0] | vex_state->guest_QCFLAG[1]
+              | vex_state->guest_QCFLAG[2] | vex_state->guest_QCFLAG[3];
+   ULong fpsr = 0;
+   // QC
+   if (w32 != 0)
+      fpsr |= (1 << 27);
+   return fpsr;
+}
+
+void LibVEX_GuestARM64_set_fpsr ( /*MOD*/VexGuestARM64State* vex_state,
+                                  ULong fpsr )
+{
+   // QC
+   vex_state->guest_QCFLAG[0] = (UInt)((fpsr >> 27) & 1);
+   vex_state->guest_QCFLAG[1] = 0;
+   vex_state->guest_QCFLAG[2] = 0;
+   vex_state->guest_QCFLAG[3] = 0;
+}
+
+/* VISIBLE TO LIBVEX CLIENT */
 void LibVEX_GuestARM64_initialise ( /*OUT*/VexGuestARM64State* vex_state )
 {
    vex_bzero(vex_state, sizeof(*vex_state));
@@ -1366,7 +1382,7 @@ VexGuestLayout
 
           /* Describe any sections to be regarded by Memcheck as
              'always-defined'. */
-          .n_alwaysDefd = 10,
+          .n_alwaysDefd = 9,
 
           /* flags thunk: OP is always defd, whereas DEP1 and DEP2
              have to be tracked.  See detailed comment in gdefs.h on
@@ -1380,8 +1396,7 @@ VexGuestLayout
                  /* 5 */ ALWAYSDEFD(guest_CMLEN),
                  /* 6 */ ALWAYSDEFD(guest_NRADDR),
                  /* 7 */ ALWAYSDEFD(guest_IP_AT_SYSCALL),
-                 /* 8 */ ALWAYSDEFD(guest_FPCR),
-                 /* 9 */ ALWAYSDEFD(guest_FPSR)
+                 /* 8 */ ALWAYSDEFD(guest_TPIDR_EL0)
                }
         };
 

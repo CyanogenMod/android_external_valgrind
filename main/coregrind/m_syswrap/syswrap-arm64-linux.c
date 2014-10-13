@@ -220,13 +220,10 @@ static SysRes do_clone ( ThreadId ptid,
                          Int*  child_tidptr, 
                          Addr  child_tls )
 {
-   const Bool debug = False;
-
    ThreadId     ctid = VG_(alloc_ThreadState)();
    ThreadState* ptst = VG_(get_ThreadState)(ptid);
    ThreadState* ctst = VG_(get_ThreadState)(ctid);
    UWord*       stack;
-   NSegment const* seg;
    SysRes       res;
    ULong        x0;
    vki_sigset_t blockall, savedmask;
@@ -280,28 +277,7 @@ static SysRes do_clone ( ThreadId ptid,
       See #226116. */
    ctst->os_state.threadgroup = ptst->os_state.threadgroup;
 
-   /* We don't really know where the client stack is, because its
-      allocated by the client.  The best we can do is look at the
-      memory mappings and try to derive some useful information.  We
-      assume that xsp starts near its highest possible value, and can
-      only go down to the start of the mmaped segment. */
-   seg = VG_(am_find_nsegment)((Addr)child_xsp);
-   if (seg && seg->kind != SkResvn) {
-      ctst->client_stack_highest_word = (Addr)VG_PGROUNDUP(child_xsp);
-      ctst->client_stack_szB = ctst->client_stack_highest_word - seg->start;
-   
-      VG_(register_stack)(seg->start, ctst->client_stack_highest_word);
-   
-      if (debug)
-         VG_(printf)("tid %d: guessed client stack range %#lx-%#lx\n",
-         ctid, seg->start, VG_PGROUNDUP(child_xsp));
-   } else {
-      VG_(message)(
-         Vg_UserMsg,
-         "!? New thread %d starts with sp+%#lx) unmapped\n", ctid, child_xsp
-      );
-      ctst->client_stack_szB  = 0;
-   }
+   ML_(guess_and_register_stack)(child_xsp, ctst);
 
    /* Assume the clone will succeed, and tell any tool that wants to
       know that this thread has come into existence.  If the clone
@@ -920,9 +896,7 @@ static SyscallTableEntry syscall_main_table[] = {
    LINX_(__NR_fallocate,         sys_fallocate),         // 47
    LINX_(__NR_faccessat,         sys_faccessat),         // 48
    GENX_(__NR_chdir,             sys_chdir),             // 49
-   GENX_(__NR_fchmod,            sys_fchmod),            // 52
    LINX_(__NR_fchmodat,          sys_fchmodat),          // 53
-   LINX_(__NR_fchownat,          sys_fchownat),          // 54
    LINXY(__NR_openat,            sys_openat),            // 56
    GENXY(__NR_close,             sys_close),             // 57
    LINXY(__NR_pipe2,             sys_pipe2),             // 59
@@ -936,7 +910,6 @@ static SyscallTableEntry syscall_main_table[] = {
    GENX_(__NR_write,             sys_write),             // 64
    GENXY(__NR_readv,             sys_readv),             // 65
    GENX_(__NR_writev,            sys_writev),            // 66
-   GENXY(__NR_pread64,           sys_pread64),           // 67
    GENX_(__NR_pwrite64,          sys_pwrite64),          // 68
    LINX_(__NR_pselect6,          sys_pselect6),          // 72
    LINXY(__NR_ppoll,             sys_ppoll),             // 73
@@ -953,7 +926,6 @@ static SyscallTableEntry syscall_main_table[] = {
    LINXY(__NR_timerfd_settime,   sys_timerfd_settime),   // 86
    LINXY(__NR_timerfd_gettime,   sys_timerfd_gettime),   // 87
    LINXY(__NR_capget,            sys_capget),            // 90
-   LINX_(__NR_capset,            sys_capset),            // 91
    GENX_(__NR_exit,              sys_exit),              // 93
    LINX_(__NR_exit_group,        sys_exit_group),        // 94
    LINX_(__NR_set_tid_address,   sys_set_tid_address),   // 96
@@ -978,8 +950,6 @@ static SyscallTableEntry syscall_main_table[] = {
    PLAX_(__NR_rt_sigreturn,      sys_rt_sigreturn),      // 139
    GENX_(__NR_setpriority,       sys_setpriority),       // 140
    GENX_(__NR_getpriority,       sys_getpriority),       // 141
-   GENX_(__NR_setregid,          sys_setregid),          // 143
-   GENX_(__NR_setreuid,          sys_setreuid),          // 145
    LINX_(__NR_setresuid,         sys_setresuid),         // 147
    LINXY(__NR_getresuid,         sys_getresuid),         // 148
    LINXY(__NR_getresgid,         sys_getresgid),         // 150
@@ -1043,7 +1013,8 @@ static SyscallTableEntry syscall_main_table[] = {
    PLAX_(__NR3264_fadvise64,     sys_fadvise64),         // 223
 
    GENXY(__NR_mprotect,          sys_mprotect),          // 226
-   GENX_(__NR_msync,             sys_msync),             // 227
+   GENX_(__NR_mlock,             sys_mlock),             // 228
+   GENX_(__NR_mlockall,          sys_mlockall),          // 230
    GENX_(__NR_madvise,           sys_madvise),           // 233
    GENXY(__NR_wait4,             sys_wait4),             // 260
 
@@ -1151,6 +1122,7 @@ static SyscallTableEntry syscall_main_table[] = {
 //ZZ    GENXY(__NR_munmap,            sys_munmap),         // 91
 //ZZ    GENX_(__NR_truncate,          sys_truncate),       // 92
 //ZZ    GENX_(__NR_ftruncate,         sys_ftruncate),      // 93
+//ZZ    GENX_(__NR_fchmod,            sys_fchmod),         // 94
 //ZZ 
 //ZZ    LINX_(__NR_fchown,            sys_fchown16),       // 95
 //ZZ //   GENX_(__NR_profil,            sys_ni_syscall),     // 98
@@ -1208,9 +1180,7 @@ static SyscallTableEntry syscall_main_table[] = {
 //ZZ    GENX_(__NR_fdatasync,         sys_fdatasync),      // 148
 //ZZ    LINXY(__NR__sysctl,           sys_sysctl),         // 149
 //ZZ 
-//ZZ    GENX_(__NR_mlock,             sys_mlock),          // 150
 //ZZ    GENX_(__NR_munlock,           sys_munlock),        // 151
-//ZZ    GENX_(__NR_mlockall,          sys_mlockall),       // 152
 //ZZ    LINX_(__NR_munlockall,        sys_munlockall),     // 153
 //ZZ    LINXY(__NR_sched_setparam,    sys_sched_setparam), // 154
 //ZZ 
@@ -1237,8 +1207,10 @@ static SyscallTableEntry syscall_main_table[] = {
 //ZZ    LINXY(__NR_rt_sigpending,     sys_rt_sigpending),  // 176
 //ZZ    LINXY(__NR_rt_sigtimedwait,   sys_rt_sigtimedwait),// 177
 //ZZ 
+//ZZ    GENXY(__NR_pread64,           sys_pread64),        // 180
 //ZZ    LINX_(__NR_chown,             sys_chown16),        // 182
 //ZZ 
+//ZZ    LINX_(__NR_capset,            sys_capset),         // 185
 //ZZ    LINXY(__NR_sendfile,          sys_sendfile),       // 187
 //ZZ //   GENXY(__NR_getpmsg,           sys_getpmsg),        // 188
 //ZZ //   GENX_(__NR_putpmsg,           sys_putpmsg),        // 189
@@ -1358,6 +1330,7 @@ static SyscallTableEntry syscall_main_table[] = {
 //ZZ //   LINX_(__NR_migrate_pages,    sys_migrate_pages),    // 294
 //ZZ 
 //ZZ    LINX_(__NR_mknodat,       sys_mknodat),          // 297
+//ZZ    LINX_(__NR_fchownat,       sys_fchownat),         // 298
 //ZZ    LINX_(__NR_futimesat,    sys_futimesat),        // 326 on arm
 //ZZ 
 //ZZ    PLAXY(__NR_fstatat64,    sys_fstatat64),        // 300

@@ -76,7 +76,6 @@ static HChar* string_table_strdup ( const HChar* str ) {
    if (!string_table) {
       string_table = VG_(newFM)( HG_(zalloc), "hg.sts.1",
                                  HG_(free), string_table_cmp );
-      tl_assert(string_table);
    }
    if (VG_(lookupFM)( string_table,
                       NULL, (UWord*)&copy, (UWord)str )) {
@@ -85,7 +84,6 @@ static HChar* string_table_strdup ( const HChar* str ) {
       return copy;
    } else {
       copy = HG_(strdup)("hg.sts.2", str);
-      tl_assert(copy);
       VG_(addToFM)( string_table, (UWord)copy, (UWord)copy );
       return copy;
    }
@@ -165,7 +163,6 @@ static Lock* mk_LockP_from_LockN ( Lock* lkn,
    if (!map_LockN_to_P) {
       map_LockN_to_P = VG_(newFM)( HG_(zalloc), "hg.mLPfLN.1",
                                    HG_(free), lock_unique_cmp );
-      tl_assert(map_LockN_to_P);
    }
    if (!VG_(lookupFM)( map_LockN_to_P, NULL, (UWord*)&lkp, (UWord)lkn)) {
       lkp = HG_(zalloc)( "hg.mLPfLN.2", sizeof(Lock) );
@@ -202,7 +199,6 @@ Lock** enumerate_WordSet_into_LockP_vector( WordSetU* univ_lsets,
    UWord  nLocks = HG_(cardinalityWS)(univ_lsets, lockset);
    Lock** lockPs = HG_(zalloc)( "hg.eWSiLPa",
                                 (nLocks+1) * sizeof(Lock*) );
-   tl_assert(lockPs);
    tl_assert(lockPs[nLocks] == NULL); /* pre-NULL terminated */
    UWord* lockNs  = NULL;
    UWord  nLockNs = 0;
@@ -331,8 +327,8 @@ typedef
             Thread*     thr;
             /* The first 4 fields describe the previously observed
                (should-be) ordering. */
-            Addr        shouldbe_earlier_ga;
-            Addr        shouldbe_later_ga;
+            Lock*       shouldbe_earlier_lk;
+            Lock*       shouldbe_later_lk;
             ExeContext* shouldbe_earlier_ec;
             ExeContext* shouldbe_later_ec;
             /* In principle we need to record two more stacks, from
@@ -475,6 +471,8 @@ void HG_(record_error_Race) ( Thread* thr,
      if (sect == Vg_SectGOTPLT) return;
      /* SectPLT is required on ppc32/64-linux */
      if (sect == Vg_SectPLT) return;
+     /* SectGOT is required on arm-linux */
+     if (sect == Vg_SectGOT) return;
    }
 #  endif
 
@@ -566,8 +564,8 @@ void HG_(record_error_UnlockBogus) ( Thread* thr, Addr lock_ga )
 
 void HG_(record_error_LockOrder)(
         Thread*     thr, 
-        Addr        shouldbe_earlier_ga,
-        Addr        shouldbe_later_ga,
+        Lock*       shouldbe_earlier_lk,
+        Lock*       shouldbe_later_lk,
         ExeContext* shouldbe_earlier_ec,
         ExeContext* shouldbe_later_ec,
         ExeContext* actual_earlier_ec
@@ -579,9 +577,13 @@ void HG_(record_error_LockOrder)(
    init_XError(&xe);
    xe.tag = XE_LockOrder;
    xe.XE.LockOrder.thr       = thr;
-   xe.XE.LockOrder.shouldbe_earlier_ga = shouldbe_earlier_ga;
+   xe.XE.LockOrder.shouldbe_earlier_lk 
+      = mk_LockP_from_LockN(shouldbe_earlier_lk, 
+                            False/*!allowed_to_be_invalid*/);
    xe.XE.LockOrder.shouldbe_earlier_ec = shouldbe_earlier_ec;
-   xe.XE.LockOrder.shouldbe_later_ga   = shouldbe_later_ga;
+   xe.XE.LockOrder.shouldbe_later_lk   
+      = mk_LockP_from_LockN(shouldbe_later_lk, 
+                            False/*!allowed_to_be_invalid*/);
    xe.XE.LockOrder.shouldbe_later_ec   = shouldbe_later_ec;
    xe.XE.LockOrder.actual_earlier_ec   = actual_earlier_ec;
    // FIXME: tid vs thr
@@ -764,15 +766,24 @@ static void announce_LockP ( Lock* lk )
    if (lk == Lock_INVALID)
       return; /* Can't be announced -- we know nothing about it. */
    tl_assert(lk->magic == LockP_MAGIC);
-   if (!lk->appeared_at)
-     return; /* There's nothing we can show */
 
    if (VG_(clo_xml)) {
-      /* fixme: add announcement */
+      if (lk->appeared_at) {
+         emit( "  <auxwhat>Lock at %p was first observed</auxwhat>\n",
+               (void*)lk );
+         VG_(pp_ExeContext)( lk->appeared_at );
+      }
+
    } else {
-      VG_(umsg)( "Lock at %p was first observed\n",
-                 (void*)lk->guestaddr );
-      VG_(pp_ExeContext)( lk->appeared_at );
+      if (lk->appeared_at) {
+         VG_(umsg)( " Lock at %p was first observed\n",
+                    (void*)lk->guestaddr );
+         VG_(pp_ExeContext)( lk->appeared_at );
+      } else {
+         VG_(umsg)( " Lock at %p : no stacktrace for first observation\n",
+                    (void*)lk->guestaddr );
+      }
+      HG_(get_and_pp_addrdescr) (lk->guestaddr);
       VG_(umsg)("\n");
    }
 }
@@ -865,6 +876,17 @@ void HG_(before_pp_Error) ( Error* err )
             announce_one_thread( xe->XE.Race.h2_ct );
          if (xe->XE.Race.h1_ct)
             announce_one_thread( xe->XE.Race.h1_ct );
+         if (xe->XE.Race.data_addrinfo.Addr.Block.alloc_tinfo.tnr) {
+            Thread* thr = get_admin_threads();
+            while (thr) {
+               if (thr->errmsg_index 
+                   == xe->XE.Race.data_addrinfo.Addr.Block.alloc_tinfo.tnr) {
+                  announce_one_thread (thr);
+                  break;
+               }
+               thr = thr->admin;
+            }
+         }
          break;
       default:
          tl_assert(0);
@@ -933,8 +955,8 @@ void HG_(pp_Error) ( Error* err )
          emit( "    <text>Thread #%d: lock order \"%p before %p\" "
                     "violated</text>\n",
                (Int)xe->XE.LockOrder.thr->errmsg_index,
-               (void*)xe->XE.LockOrder.shouldbe_earlier_ga,
-               (void*)xe->XE.LockOrder.shouldbe_later_ga );
+               (void*)xe->XE.LockOrder.shouldbe_earlier_lk->guestaddr,
+               (void*)xe->XE.LockOrder.shouldbe_later_lk->guestaddr );
          emit( "    <hthreadid>%d</hthreadid>\n",
                (Int)xe->XE.LockOrder.thr->errmsg_index );
          emit( "  </xwhat>\n" );
@@ -943,24 +965,26 @@ void HG_(pp_Error) ( Error* err )
              && xe->XE.LockOrder.shouldbe_later_ec) {
             emit( "  <auxwhat>Required order was established by "
                   "acquisition of lock at %p</auxwhat>\n",
-                  (void*)xe->XE.LockOrder.shouldbe_earlier_ga );
+                  (void*)xe->XE.LockOrder.shouldbe_earlier_lk->guestaddr );
             VG_(pp_ExeContext)( xe->XE.LockOrder.shouldbe_earlier_ec );
             emit( "  <auxwhat>followed by a later acquisition "
                   "of lock at %p</auxwhat>\n",
-                  (void*)xe->XE.LockOrder.shouldbe_later_ga );
+                  (void*)xe->XE.LockOrder.shouldbe_later_lk->guestaddr );
             VG_(pp_ExeContext)( xe->XE.LockOrder.shouldbe_later_ec );
          }
+         announce_LockP ( xe->XE.LockOrder.shouldbe_earlier_lk );
+         announce_LockP ( xe->XE.LockOrder.shouldbe_later_lk );
 
       } else {
 
          emit( "Thread #%d: lock order \"%p before %p\" violated\n",
                (Int)xe->XE.LockOrder.thr->errmsg_index,
-               (void*)xe->XE.LockOrder.shouldbe_earlier_ga,
-               (void*)xe->XE.LockOrder.shouldbe_later_ga );
+               (void*)xe->XE.LockOrder.shouldbe_earlier_lk->guestaddr,
+               (void*)xe->XE.LockOrder.shouldbe_later_lk->guestaddr );
          emit( "\n" );
          emit( "Observed (incorrect) order is: "
                "acquisition of lock at %p\n",
-               (void*)xe->XE.LockOrder.shouldbe_later_ga);
+               (void*)xe->XE.LockOrder.shouldbe_later_lk->guestaddr);
          if (xe->XE.LockOrder.actual_earlier_ec) {
              VG_(pp_ExeContext)(xe->XE.LockOrder.actual_earlier_ec);
          } else {
@@ -968,20 +992,23 @@ void HG_(pp_Error) ( Error* err )
          }
          emit( "\n" );
          emit(" followed by a later acquisition of lock at %p\n",
-              (void*)xe->XE.LockOrder.shouldbe_earlier_ga);
+              (void*)xe->XE.LockOrder.shouldbe_earlier_lk->guestaddr);
          VG_(pp_ExeContext)( VG_(get_error_where)(err) );
          if (xe->XE.LockOrder.shouldbe_earlier_ec
              && xe->XE.LockOrder.shouldbe_later_ec) {
             emit("\n");
             emit( "Required order was established by "
                   "acquisition of lock at %p\n",
-                  (void*)xe->XE.LockOrder.shouldbe_earlier_ga );
+                  (void*)xe->XE.LockOrder.shouldbe_earlier_lk->guestaddr );
             VG_(pp_ExeContext)( xe->XE.LockOrder.shouldbe_earlier_ec );
             emit( "\n" );
             emit( " followed by a later acquisition of lock at %p\n",
-                  (void*)xe->XE.LockOrder.shouldbe_later_ga );
+                  (void*)xe->XE.LockOrder.shouldbe_later_lk->guestaddr );
             VG_(pp_ExeContext)( xe->XE.LockOrder.shouldbe_later_ec );
          }
+         emit("\n");
+         announce_LockP ( xe->XE.LockOrder.shouldbe_earlier_lk );
+         announce_LockP ( xe->XE.LockOrder.shouldbe_later_lk );
 
       }
 
@@ -1065,12 +1092,7 @@ void HG_(pp_Error) ( Error* err )
                (Int)xe->XE.UnlockForeign.owner->errmsg_index );
          emit( "  </xwhat>\n" );
          VG_(pp_ExeContext)( VG_(get_error_where)(err) );
-
-         if (xe->XE.UnlockForeign.lock->appeared_at) {
-            emit( "  <auxwhat>Lock at %p was first observed</auxwhat>\n",
-                  (void*)xe->XE.UnlockForeign.lock->guestaddr );
-            VG_(pp_ExeContext)( xe->XE.UnlockForeign.lock->appeared_at );
-         }
+         announce_LockP ( xe->XE.UnlockForeign.lock );
 
       } else {
 
@@ -1080,11 +1102,7 @@ void HG_(pp_Error) ( Error* err )
                (void*)xe->XE.UnlockForeign.lock->guestaddr,
                (Int)xe->XE.UnlockForeign.owner->errmsg_index );
          VG_(pp_ExeContext)( VG_(get_error_where)(err) );
-         if (xe->XE.UnlockForeign.lock->appeared_at) {
-            emit( "  Lock at %p was first observed\n",
-                  (void*)xe->XE.UnlockForeign.lock->guestaddr );
-            VG_(pp_ExeContext)( xe->XE.UnlockForeign.lock->appeared_at );
-         }
+         announce_LockP ( xe->XE.UnlockForeign.lock );
 
       }
 
@@ -1106,11 +1124,7 @@ void HG_(pp_Error) ( Error* err )
                (Int)xe->XE.UnlockUnlocked.thr->errmsg_index );
          emit( "  </xwhat>\n" );
          VG_(pp_ExeContext)( VG_(get_error_where)(err) );
-         if (xe->XE.UnlockUnlocked.lock->appeared_at) {
-            emit( "  <auxwhat>Lock at %p was first observed</auxwhat>\n",
-                  (void*)xe->XE.UnlockUnlocked.lock->guestaddr );
-            VG_(pp_ExeContext)( xe->XE.UnlockUnlocked.lock->appeared_at );
-         }
+         announce_LockP ( xe->XE.UnlockUnlocked.lock);
 
       } else {
 
@@ -1118,11 +1132,7 @@ void HG_(pp_Error) ( Error* err )
                (Int)xe->XE.UnlockUnlocked.thr->errmsg_index,
                (void*)xe->XE.UnlockUnlocked.lock->guestaddr );
          VG_(pp_ExeContext)( VG_(get_error_where)(err) );
-         if (xe->XE.UnlockUnlocked.lock->appeared_at) {
-            emit( "  Lock at %p was first observed\n",
-                  (void*)xe->XE.UnlockUnlocked.lock->guestaddr );
-            VG_(pp_ExeContext)( xe->XE.UnlockUnlocked.lock->appeared_at );
-         }
+         announce_LockP ( xe->XE.UnlockUnlocked.lock);
 
       }
 
@@ -1298,18 +1308,22 @@ Bool HG_(error_matches_suppression) ( Error* err, Supp* su )
    }
 }
 
-Bool HG_(get_extra_suppression_info) ( Error* err,
+SizeT HG_(get_extra_suppression_info) ( Error* err,
                                        /*OUT*/HChar* buf, Int nBuf )
 {
+   tl_assert(nBuf >= 1);
    /* Do nothing */
-   return False;
+   buf[0] = '\0';
+   return 0;
 }
 
-Bool HG_(print_extra_suppression_use) ( Supp* su,
+SizeT HG_(print_extra_suppression_use) ( Supp* su,
                                         /*OUT*/HChar* buf, Int nBuf )
 {
+   tl_assert(nBuf >= 1);
    /* Do nothing */
-   return False;
+   buf[0] = '\0';
+   return 0;
 }
 
 void HG_(update_extra_suppression_use) ( Error* err, Supp* su )

@@ -35,7 +35,6 @@
 #include "drd_suppression.h"      // drd_start_suppression()
 #include "drd_thread.h"
 #include "pub_tool_basics.h"      // Bool
-#include "pub_tool_debuginfo.h"   // VG_(describe_IP)()
 #include "pub_tool_libcassert.h"
 #include "pub_tool_libcassert.h"  // tl_assert()
 #include "pub_tool_libcprint.h"   // VG_(message)()
@@ -376,6 +375,10 @@ static Bool handle_client_request(ThreadId vg_tid, UWord* arg, UWord* ret)
 
    case VG_USERREQ__POST_MUTEX_UNLOCK:
       DRD_(thread_leave_synchr)(drd_tid);
+      break;
+
+   case VG_USERREQ__DRD_IGNORE_MUTEX_ORDERING:
+      DRD_(mutex_ignore_ordering)(arg[1]);
       break;
 
    case VG_USERREQ__PRE_SPIN_INIT_OR_UNLOCK:

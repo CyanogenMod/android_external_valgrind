@@ -41,55 +41,12 @@
 #include "pub_tool_libcassert.h"
 #include "pub_tool_libcprint.h"
 #include "pub_tool_tooliface.h"
+#include "pub_tool_guest.h"         // VexGuestArchState
 
 #include "mc_include.h"
 
-#undef MC_SIZEOF_GUEST_STATE
+#define MC_SIZEOF_GUEST_STATE  sizeof(VexGuestArchState)
 
-#if defined(VGA_x86)
-# include "libvex_guest_x86.h"
-# define MC_SIZEOF_GUEST_STATE sizeof(VexGuestX86State)
-#endif
-
-#if defined(VGA_amd64)
-# include "libvex_guest_amd64.h"
-# define MC_SIZEOF_GUEST_STATE sizeof(VexGuestAMD64State)
-#endif
-
-#if defined(VGA_ppc32)
-# include "libvex_guest_ppc32.h"
-# define MC_SIZEOF_GUEST_STATE sizeof(VexGuestPPC32State)
-#endif
-
-#if defined(VGA_ppc64)
-# include "libvex_guest_ppc64.h"
-# define MC_SIZEOF_GUEST_STATE sizeof(VexGuestPPC64State)
-#endif
-
-#if defined(VGA_s390x)
-# include "libvex_guest_s390x.h"
-# define MC_SIZEOF_GUEST_STATE sizeof(VexGuestS390XState)
-#endif
-
-#if defined(VGA_arm)
-# include "libvex_guest_arm.h"
-# define MC_SIZEOF_GUEST_STATE sizeof(VexGuestARMState)
-#endif
-
-#if defined(VGA_arm64)
-# include "libvex_guest_arm64.h"
-# define MC_SIZEOF_GUEST_STATE sizeof(VexGuestARM64State)
-#endif
-
-#if defined(VGA_mips32)
-# include "libvex_guest_mips32.h"
-# define MC_SIZEOF_GUEST_STATE sizeof(VexGuestMIPS32State)
-#endif
-
-#if defined(VGA_mips64)
-# include "libvex_guest_mips64.h"
-# define MC_SIZEOF_GUEST_STATE sizeof(VexGuestMIPS64State)
-#endif
 
 static inline Bool host_is_big_endian ( void ) {
    UInt x = 0x11223344;
@@ -150,7 +107,7 @@ static Int get_otrack_shadow_offset_wrk ( Int offset, Int szB )
 {
    /* -------------------- ppc64 -------------------- */
 
-#  if defined(VGA_ppc64)
+#  if defined(VGA_ppc64be) || defined(VGA_ppc64le)
 
 #  define GOF(_fieldname) \
       (offsetof(VexGuestPPC64State,guest_##_fieldname))
@@ -160,7 +117,12 @@ static Int get_otrack_shadow_offset_wrk ( Int offset, Int szB )
    Int  sz   = szB;
    Int  o    = offset;
    tl_assert(sz > 0);
+
+#if defined(VGA_ppc64be)
    tl_assert(host_is_big_endian());
+#elif defined(VGA_ppc64le)
+   tl_assert(host_is_little_endian());
+#endif
 
    if (sz == 8 || sz == 4) {
       /* The point of this is to achieve
@@ -168,7 +130,11 @@ static Int get_otrack_shadow_offset_wrk ( Int offset, Int szB )
             return GOF(GPRn);
          by testing ox instead of o, and setting ox back 4 bytes when sz == 4.
       */
+#if defined(VGA_ppc64le)
+      Int ox = o;
+#else
       Int ox = sz == 8 ? o : (o - 4);
+#endif
       if (ox == GOF(GPR0)) return ox;
       if (ox == GOF(GPR1)) return ox;
       if (ox == GOF(GPR2)) return ox;
@@ -368,7 +334,6 @@ static Int get_otrack_shadow_offset_wrk ( Int offset, Int szB )
    Int  o  = offset;
    Int  sz = szB;
    tl_assert(sz > 0);
-   tl_assert(host_is_big_endian());
 
    if (o == GOF(GPR0) && sz == 4) return o;
    if (o == GOF(GPR1) && sz == 4) return o;
@@ -1053,7 +1018,7 @@ static Int get_otrack_shadow_offset_wrk ( Int offset, Int szB )
    if (o >= GOF(Q31)  && o+sz <= GOF(Q31)+SZB(Q31)) return GOF(Q31);
 
    if (o == GOF(FPCR) && sz == 4) return -1; // untracked
-   if (o == GOF(FPSR) && sz == 4) return -1; // untracked
+   if (o == GOF(QCFLAG) && sz == 16) return o;
 
    if (o == GOF(CMSTART) && sz == 8) return -1; // untracked
    if (o == GOF(CMLEN)   && sz == 8) return -1; // untracked
@@ -1282,7 +1247,7 @@ static Int get_otrack_shadow_offset_wrk ( Int offset, Int szB )
 IRType MC_(get_otrack_reg_array_equiv_int_type) ( IRRegArray* arr )
 {
    /* -------------------- ppc64 -------------------- */
-#  if defined(VGA_ppc64)
+#  if defined(VGA_ppc64be) || defined(VGA_ppc64le)
    /* The redir stack. */
    if (arr->base == offsetof(VexGuestPPC64State,guest_REDIR_STACK[0])
        && arr->elemTy == Ity_I64

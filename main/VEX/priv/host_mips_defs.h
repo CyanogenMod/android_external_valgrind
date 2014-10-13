@@ -325,6 +325,7 @@ typedef enum {
 
    Min_Load,       /* zero-extending load a 8|16|32 bit value from mem */
    Min_Store,      /* store a 8|16|32 bit value to mem */
+   Min_Cas,        /* compare and swap */
    Min_LoadL,      /* mips Load Linked Word - LL */
    Min_StoreC,     /* mips Store Conditional Word - SC */
 
@@ -521,6 +522,13 @@ typedef struct {
       } LoadL;
       struct {
          UChar sz;   /* 4|8 */
+         HReg  old;
+         HReg  addr;
+         HReg  expd;
+         HReg  data;
+      } Cas;
+      struct {
+         UChar sz;   /* 4|8 */
          MIPSAMode *dst;
          HReg src;
       } StoreC;
@@ -649,6 +657,8 @@ extern MIPSInstr *MIPSInstr_LoadL(UChar sz, HReg dst, MIPSAMode * src,
                                   Bool mode64);
 extern MIPSInstr *MIPSInstr_StoreC(UChar sz, MIPSAMode * dst, HReg src,
                                    Bool mode64);
+extern MIPSInstr *MIPSInstr_Cas(UChar sz, HReg old, HReg addr,
+                                HReg expd, HReg data, Bool mode64);
 
 extern MIPSInstr *MIPSInstr_Call ( MIPSCondCode, Addr64, UInt, HReg, RetLoc );
 extern MIPSInstr *MIPSInstr_CallAlways ( MIPSCondCode, Addr64, UInt, RetLoc );
@@ -695,20 +705,21 @@ extern MIPSInstr *MIPSInstr_EvCheck(MIPSAMode* amCounter,
                                     MIPSAMode* amFailAddr );
 extern MIPSInstr *MIPSInstr_ProfInc( void );
 
-extern void ppMIPSInstr(MIPSInstr *, Bool mode64);
+extern void ppMIPSInstr(const MIPSInstr *, Bool mode64);
 
 /* Some functions that insulate the register allocator from details
    of the underlying instruction set. */
-extern void       getRegUsage_MIPSInstr (HRegUsage *, MIPSInstr *, Bool);
-extern void       mapRegs_MIPSInstr     (HRegRemap *, MIPSInstr *, Bool mode64);
-extern Bool       isMove_MIPSInstr      (MIPSInstr *, HReg *, HReg *);
-extern Int        emit_MIPSInstr        (/*MB_MOD*/Bool* is_profInc,
-                                         UChar* buf, Int nbuf, MIPSInstr* i,
-                                         Bool mode64,
-                                         void* disp_cp_chain_me_to_slowEP,
-                                         void* disp_cp_chain_me_to_fastEP,
-                                         void* disp_cp_xindir,
-                                         void* disp_cp_xassisted );
+extern void getRegUsage_MIPSInstr (HRegUsage *, const MIPSInstr *, Bool);
+extern void mapRegs_MIPSInstr     (HRegRemap *, MIPSInstr *, Bool mode64);
+extern Bool isMove_MIPSInstr      (const MIPSInstr *, HReg *, HReg *);
+extern Int        emit_MIPSInstr (/*MB_MOD*/Bool* is_profInc,
+                                  UChar* buf, Int nbuf, const MIPSInstr* i,
+                                  Bool mode64,
+                                  VexEndness endness_host,
+                                  const void* disp_cp_chain_me_to_slowEP,
+                                  const void* disp_cp_chain_me_to_fastEP,
+                                  const void* disp_cp_xindir,
+                                  const void* disp_cp_xassisted );
 
 extern void genSpill_MIPS ( /*OUT*/ HInstr ** i1, /*OUT*/ HInstr ** i2,
                             HReg rreg, Int offset, Bool);
@@ -718,8 +729,8 @@ extern void genReload_MIPS( /*OUT*/ HInstr ** i1, /*OUT*/ HInstr ** i2,
 extern void        getAllocableRegs_MIPS (Int *, HReg **, Bool mode64);
 extern HInstrArray *iselSB_MIPS          ( IRSB*,
                                            VexArch,
-                                           VexArchInfo*,
-                                           VexAbiInfo*,
+                                           const VexArchInfo*,
+                                           const VexAbiInfo*,
                                            Int offs_Host_EvC_Counter,
                                            Int offs_Host_EvC_FailAddr,
                                            Bool chainingAllowed,
@@ -731,25 +742,28 @@ extern HInstrArray *iselSB_MIPS          ( IRSB*,
    and so assumes that they are both <= 128, and so can use the short
    offset encoding.  This is all checked with assertions, so in the
    worst case we will merely assert at startup. */
-extern Int evCheckSzB_MIPS ( void );
+extern Int evCheckSzB_MIPS ( VexEndness endness_host );
 
 /* Perform a chaining and unchaining of an XDirect jump. */
-extern VexInvalRange chainXDirect_MIPS ( void* place_to_chain,
-                                         void* disp_cp_chain_me_EXPECTED,
-                                         void* place_to_jump_to,
+extern VexInvalRange chainXDirect_MIPS ( VexEndness endness_host,
+                                         void* place_to_chain,
+                                         const void* disp_cp_chain_me_EXPECTED,
+                                         const void* place_to_jump_to,
                                          Bool  mode64 );
 
-extern VexInvalRange unchainXDirect_MIPS ( void* place_to_unchain,
-                                           void* place_to_jump_to_EXPECTED,
-                                           void* disp_cp_chain_me,
+extern VexInvalRange unchainXDirect_MIPS ( VexEndness endness_host,
+                                           void* place_to_unchain,
+                                           const void* place_to_jump_to_EXPECTED,
+                                           const void* disp_cp_chain_me,
                                            Bool  mode64 );
 
 /* Patch the counter location into an existing ProfInc point. */
-extern VexInvalRange patchProfInc_MIPS ( void*  place_to_patch,
-                                         ULong* location_of_counter,
+extern VexInvalRange patchProfInc_MIPS ( VexEndness endness_host,
+                                         void*  place_to_patch,
+                                         const ULong* location_of_counter,
                                          Bool  mode64 );
 
-#endif            /* ndef __LIBVEX_HOST_MIPS_HDEFS_H */
+#endif /* ndef __VEX_HOST_MIPS_DEFS_H */
 
 /*---------------------------------------------------------------*/
 /*--- end                                    host-mips_defs.h ---*/

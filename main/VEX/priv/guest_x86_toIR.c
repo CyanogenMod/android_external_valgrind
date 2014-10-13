@@ -195,11 +195,11 @@
    given insn. */
 
 /* We need to know this to do sub-register accesses correctly. */
-static Bool host_is_bigendian;
+static VexEndness host_endness;
 
 /* Pointer to the guest code area (points to start of BB, not to the
    insn being processed). */
-static UChar* guest_code;
+static const UChar* guest_code;
 
 /* The guest address corresponding to guest_code[0]. */
 static Addr32 guest_EIP_bbstart;
@@ -405,7 +405,7 @@ static UInt getSDisp8 ( Int delta )
 
 static UInt getSDisp16 ( Int delta0 )
 {
-   UChar* eip = (UChar*)(&guest_code[delta0]);
+   const UChar* eip = &guest_code[delta0];
    UInt d = *eip++;
    d |= ((*eip++) << 8);
    return extend_s_16to32(d);
@@ -452,7 +452,7 @@ static Int integerGuestRegOffset ( Int sz, UInt archreg )
    vassert(archreg < 8);
 
    /* Correct for little-endian host only. */
-   vassert(!host_is_bigendian);
+   vassert(host_endness == VexEndnessLE);
 
    if (sz == 4 || sz == 2 || (sz == 1 && archreg < 4)) {
       switch (archreg) {
@@ -515,7 +515,7 @@ static Int xmmGuestRegOffset ( UInt xmmreg )
 static Int xmmGuestRegLane16offset ( UInt xmmreg, Int laneno )
 {
    /* Correct for little-endian host only. */
-   vassert(!host_is_bigendian);
+   vassert(host_endness == VexEndnessLE);
    vassert(laneno >= 0 && laneno < 8);
    return xmmGuestRegOffset( xmmreg ) + 2 * laneno;
 }
@@ -523,7 +523,7 @@ static Int xmmGuestRegLane16offset ( UInt xmmreg, Int laneno )
 static Int xmmGuestRegLane32offset ( UInt xmmreg, Int laneno )
 {
    /* Correct for little-endian host only. */
-   vassert(!host_is_bigendian);
+   vassert(host_endness == VexEndnessLE);
    vassert(laneno >= 0 && laneno < 4);
    return xmmGuestRegOffset( xmmreg ) + 4 * laneno;
 }
@@ -531,7 +531,7 @@ static Int xmmGuestRegLane32offset ( UInt xmmreg, Int laneno )
 static Int xmmGuestRegLane64offset ( UInt xmmreg, Int laneno )
 {
    /* Correct for little-endian host only. */
-   vassert(!host_is_bigendian);
+   vassert(host_endness == VexEndnessLE);
    vassert(laneno >= 0 && laneno < 2);
    return xmmGuestRegOffset( xmmreg ) + 8 * laneno;
 }
@@ -7940,7 +7940,7 @@ static void gen_SEGV_if_not_16_aligned ( IRTemp effective_addr )
 
    Same for BTS, BTR
 */
-static Bool can_be_used_with_LOCK_prefix ( UChar* opc )
+static Bool can_be_used_with_LOCK_prefix ( const UChar* opc )
 {
    switch (opc[0]) {
       case 0x00: case 0x01: case 0x08: case 0x09:
@@ -8078,7 +8078,7 @@ DisResult disInstr_X86_WRK (
    HChar     dis_buf[50];
    Int       am_sz, d_sz, n_prefixes;
    DisResult dres;
-   UChar*    insn; /* used in SSE decoders */
+   const UChar* insn; /* used in SSE decoders */
 
    /* The running delta */
    Int delta = (Int)delta64;
@@ -8114,7 +8114,7 @@ DisResult disInstr_X86_WRK (
 
    /* Spot "Special" instructions (see comment at top of file). */
    {
-      UChar* code = (UChar*)(guest_code + delta);
+      const UChar* code = guest_code + delta;
       /* Spot the 12-byte preamble:
          C1C703   roll $3,  %edi
          C1C70D   roll $13, %edi
@@ -8186,7 +8186,7 @@ DisResult disInstr_X86_WRK (
    /* Handle a couple of weird-ass NOPs that have been observed in the
       wild. */
    {
-      UChar* code = (UChar*)(guest_code + delta);
+      const UChar* code = guest_code + delta;
       /* Sun's JVM 1.5.0 uses the following as a NOP:
          26 2E 64 65 90  %es:%cs:%fs:%gs:nop */
       if (code[0] == 0x26 && code[1] == 0x2E && code[2] == 0x64 
@@ -8282,7 +8282,7 @@ DisResult disInstr_X86_WRK (
       allowed. */
 
    if (pfx_lock) {
-      if (can_be_used_with_LOCK_prefix( (UChar*)&guest_code[delta] )) {
+     if (can_be_used_with_LOCK_prefix( &guest_code[delta] )) {
          DIP("lock ");
       } else {
          *expect_CAS = False;
@@ -8301,7 +8301,7 @@ DisResult disInstr_X86_WRK (
    /* Note, this doesn't handle SSE2 or SSE3.  That is handled in a
       later section, further on. */
 
-   insn = (UChar*)&guest_code[delta];
+   insn = &guest_code[delta];
 
    /* Treat fxsave specially.  It should be doable even on an SSE0
       (Pentium-II class) CPU.  Hence be prepared to handle it on
@@ -9351,7 +9351,7 @@ DisResult disInstr_X86_WRK (
    if (insn[0] == 0x0F && insn[1] == 0x53) {
       vassert(sz == 4);
       delta = dis_SSE_E_to_G_unary_all( sorb, delta+2, 
-                                        "rcpps", Iop_Recip32Fx4 );
+                                        "rcpps", Iop_RecipEst32Fx4 );
       goto decode_success;
    }
 
@@ -9359,7 +9359,7 @@ DisResult disInstr_X86_WRK (
    if (insn[0] == 0xF3 && insn[1] == 0x0F && insn[2] == 0x53) {
       vassert(sz == 4);
       delta = dis_SSE_E_to_G_unary_lo32( sorb, delta+3, 
-                                         "rcpss", Iop_Recip32F0x4 );
+                                         "rcpss", Iop_RecipEst32F0x4 );
       goto decode_success;
    }
 
@@ -9367,7 +9367,7 @@ DisResult disInstr_X86_WRK (
    if (insn[0] == 0x0F && insn[1] == 0x52) {
       vassert(sz == 4);
       delta = dis_SSE_E_to_G_unary_all( sorb, delta+2, 
-                                        "rsqrtps", Iop_RSqrt32Fx4 );
+                                        "rsqrtps", Iop_RSqrtEst32Fx4 );
       goto decode_success;
    }
 
@@ -9375,7 +9375,7 @@ DisResult disInstr_X86_WRK (
    if (insn[0] == 0xF3 && insn[1] == 0x0F && insn[2] == 0x52) {
       vassert(sz == 4);
       delta = dis_SSE_E_to_G_unary_lo32( sorb, delta+3, 
-                                         "rsqrtss", Iop_RSqrt32F0x4 );
+                                         "rsqrtss", Iop_RSqrtEst32F0x4 );
       goto decode_success;
    }
 
@@ -9537,7 +9537,7 @@ DisResult disInstr_X86_WRK (
    if (0 == (archinfo->hwcaps & VEX_HWCAPS_X86_SSE2))
       goto after_sse_decoders; /* no SSE2 capabilities */
 
-   insn = (UChar*)&guest_code[delta];
+   insn = &guest_code[delta];
 
    /* 66 0F 58 = ADDPD -- add 32Fx4 from R/M to R */
    if (sz == 2 && insn[0] == 0x0F && insn[1] == 0x58) {
@@ -11784,7 +11784,7 @@ DisResult disInstr_X86_WRK (
    if (0 == (archinfo->hwcaps & VEX_HWCAPS_X86_SSE2))
       goto after_sse_decoders; /* no SSE3 capabilities */
 
-   insn = (UChar*)&guest_code[delta];
+   insn = &guest_code[delta];
 
    /* F3 0F 12 = MOVSLDUP -- move from E (mem or xmm) to G (xmm),
       duplicating some lanes (2:2:0:0). */
@@ -15415,13 +15415,13 @@ DisResult disInstr_X86 ( IRSB*        irsb_IN,
                          Bool         (*resteerOkFn) ( void*, Addr64 ),
                          Bool         resteerCisOk,
                          void*        callback_opaque,
-                         UChar*       guest_code_IN,
+                         const UChar* guest_code_IN,
                          Long         delta,
                          Addr64       guest_IP,
                          VexArch      guest_arch,
                          VexArchInfo* archinfo,
                          VexAbiInfo*  abiinfo,
-                         Bool         host_bigendian_IN,
+                         VexEndness   host_endness_IN,
                          Bool         sigill_diag_IN )
 {
    Int       i, x1, x2;
@@ -15432,7 +15432,7 @@ DisResult disInstr_X86 ( IRSB*        irsb_IN,
    vassert(guest_arch == VexArchX86);
    guest_code           = guest_code_IN;
    irsb                 = irsb_IN;
-   host_is_bigendian    = host_bigendian_IN;
+   host_endness         = host_endness_IN;
    guest_EIP_curr_instr = (Addr32)guest_IP;
    guest_EIP_bbstart    = (Addr32)toUInt(guest_IP - delta);
 

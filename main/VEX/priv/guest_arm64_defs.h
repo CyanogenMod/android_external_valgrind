@@ -44,13 +44,13 @@ DisResult disInstr_ARM64 ( IRSB*        irbb,
                            Bool         (*resteerOkFn) ( void*, Addr64 ),
                            Bool         resteerCisOk,
                            void*        callback_opaque,
-                           UChar*       guest_code,
+                           const UChar* guest_code,
                            Long         delta,
                            Addr64       guest_IP,
                            VexArch      guest_arch,
                            VexArchInfo* archinfo,
                            VexAbiInfo*  abiinfo,
-                           Bool         host_bigendian,
+                           VexEndness   host_endness,
                            Bool         sigill_diag );
 
 /* Used by the optimiser to specialise calls to helpers. */
@@ -108,6 +108,11 @@ ULong arm64g_calculate_condition ( /* ARM64Condcode << 4 | cc_op */
 //ZZ extern 
 //ZZ UInt armg_calculate_flag_qc ( UInt resL1, UInt resL2,
 //ZZ                               UInt resR1, UInt resR2 );
+
+
+/* --- DIRTY HELPERS --- */
+
+extern ULong arm64g_dirtyhelper_MRS_CNTVCT_EL0 ( void );
 
 
 /*---------------------------------------------------------*/
