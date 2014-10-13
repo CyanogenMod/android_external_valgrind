@@ -48,10 +48,7 @@ Bool   VG_(clo_error_limit)    = True;
 Int    VG_(clo_error_exitcode) = 0;
 HChar *VG_(clo_error_markers)[2] = {NULL, NULL};
 
-#if defined(VGPV_arm_linux_android) \
-    || defined(VGPV_x86_linux_android) \
-    || defined(VGPV_mips32_linux_android) \
-    || defined(VGPV_arm64_linux_android)
+#if defined(__ANDROID__)
 VgVgdb VG_(clo_vgdb)           = Vg_VgdbNo; // currently disabled on Android
 #else
 VgVgdb VG_(clo_vgdb)           = Vg_VgdbYes;
