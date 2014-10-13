@@ -80,9 +80,10 @@
    fills in the immediate field.
    s390x r1/SVC r2   r3   r4   r5   r6   r7   n/a  n/a  r2        (== ARG1)
 
+          NUM   ARG1 ARG2 ARG3 ARG4 ARG5 ARG6 ARG7 ARG8 RESULT
    DARWIN:
-   x86    eax +4   +8   +12  +16  +20  +24  +28  +32  edx:eax, eflags.c
-   amd64  rax rdi  rsi  rdx  rcx  r8   r9   +8   +16  rdx:rax, rflags.c
+   x86    eax   +4   +8   +12  +16  +20  +24  +28  +32  edx:eax, eflags.c
+   amd64  rax   rdi  rsi  rdx  rcx  r8   r9   +8   +16  rdx:rax, rflags.c
 
    For x86-darwin, "+N" denotes "in memory at N(%esp)"; ditto
    amd64-darwin.  Apparently 0(%esp) is some kind of return address
@@ -441,7 +442,7 @@ void getSyscallArgsFromGuestState ( /*OUT*/SyscallArgs*       canonical,
    canonical->arg7  = 0;
    canonical->arg8  = 0;
 
-#elif defined(VGP_ppc64_linux)
+#elif defined(VGP_ppc64be_linux) || defined(VGP_ppc64le_linux)
    VexGuestPPC64State* gst = (VexGuestPPC64State*)gst_vanilla;
    canonical->sysno = gst->guest_GPR0;
    canonical->arg1  = gst->guest_GPR3;
@@ -551,9 +552,9 @@ void getSyscallArgsFromGuestState ( /*OUT*/SyscallArgs*       canonical,
       canonical->arg7  = stack[8];
       canonical->arg8  = stack[9];
       
-      PRINT("SYSCALL[%d,?](%s) syscall(%s, ...); please stand by...\n",
+      PRINT("SYSCALL[%d,?](0) syscall(%s, ...); please stand by...\n",
             VG_(getpid)(), /*tid,*/
-            VG_SYSNUM_STRING(0), VG_SYSNUM_STRING(canonical->sysno));
+            VG_SYSNUM_STRING(canonical->sysno));
    }
 
    // Here we determine what kind of syscall it was by looking at the
@@ -630,9 +631,9 @@ void getSyscallArgsFromGuestState ( /*OUT*/SyscallArgs*       canonical,
       canonical->arg7  = stack[2];
       canonical->arg8  = stack[3];
       
-      PRINT("SYSCALL[%d,?](%s) syscall(%s, ...); please stand by...\n",
+      PRINT("SYSCALL[%d,?](0) syscall(%s, ...); please stand by...\n",
             VG_(getpid)(), /*tid,*/
-            VG_SYSNUM_STRING(0), VG_SYSNUM_STRING(canonical->sysno));
+            VG_SYSNUM_STRING(canonical->sysno));
    }
 
    // no canonical->sysno adjustment needed
@@ -687,7 +688,7 @@ void putSyscallArgsIntoGuestState ( /*IN*/ SyscallArgs*       canonical,
    gst->guest_GPR7 = canonical->arg5;
    gst->guest_GPR8 = canonical->arg6;
 
-#elif defined(VGP_ppc64_linux)
+#elif defined(VGP_ppc64be_linux) || defined(VGP_ppc64le_linux)
    VexGuestPPC64State* gst = (VexGuestPPC64State*)gst_vanilla;
    gst->guest_GPR0 = canonical->sysno;
    gst->guest_GPR3 = canonical->arg1;
@@ -818,7 +819,7 @@ void getSyscallStatusFromGuestState ( /*OUT*/SyscallStatus*     canonical,
    canonical->sres = VG_(mk_SysRes_ppc32_linux)( gst->guest_GPR3, cr0so );
    canonical->what = SsComplete;
 
-#  elif defined(VGP_ppc64_linux)
+#  elif defined(VGP_ppc64be_linux) || defined(VGP_ppc64le_linux)
    VexGuestPPC64State* gst   = (VexGuestPPC64State*)gst_vanilla;
    UInt                cr    = LibVEX_GuestPPC64_get_CR( gst );
    UInt                cr0so = (cr >> 28) & 1;
@@ -976,7 +977,7 @@ void putSyscallStatusIntoGuestState ( /*IN*/ ThreadId tid,
    VG_TRACK( post_reg_write, Vg_CoreSysCall, tid, 
              OFFSET_ppc32_CR0_0, sizeof(UChar) );
 
-#  elif defined(VGP_ppc64_linux)
+#  elif defined(VGP_ppc64be_linux) || defined(VGP_ppc64le_linux)
    VexGuestPPC64State* gst = (VexGuestPPC64State*)gst_vanilla;
    UInt old_cr = LibVEX_GuestPPC64_get_CR(gst);
    vg_assert(canonical->what == SsComplete);
@@ -1181,7 +1182,7 @@ void getSyscallArgLayout ( /*OUT*/SyscallArgLayout* layout )
    layout->uu_arg7  = -1; /* impossible value */
    layout->uu_arg8  = -1; /* impossible value */
 
-#elif defined(VGP_ppc64_linux)
+#elif defined(VGP_ppc64be_linux) || defined(VGP_ppc64le_linux)
    layout->o_sysno  = OFFSET_ppc64_GPR0;
    layout->o_arg1   = OFFSET_ppc64_GPR3;
    layout->o_arg2   = OFFSET_ppc64_GPR4;
@@ -1290,7 +1291,7 @@ void bad_before ( ThreadId              tid,
                   /*OUT*/UWord*         flags )
 {
    VG_(dmsg)("WARNING: unhandled syscall: %s\n",
-      VG_SYSNUM_STRING_EXTRA(args->sysno));
+      VG_SYSNUM_STRING(args->sysno));
    if (VG_(clo_verbosity) > 1) {
       VG_(get_and_pp_StackTrace)(tid, VG_(clo_backtrace_size));
    }
@@ -1987,7 +1988,7 @@ void ML_(fixup_guest_state_to_restart_syscall) ( ThreadArchState* arch )
       vg_assert(p[0] == 0x0F && p[1] == 0x05);
    }
 
-#elif defined(VGP_ppc32_linux) || defined(VGP_ppc64_linux)
+#elif defined(VGP_ppc32_linux) || defined(VGP_ppc64be_linux)
    arch->vex.guest_CIA -= 4;             // sizeof(ppc32 instr)
 
    /* Make sure our caller is actually sane, and we're really backing
@@ -2004,6 +2005,25 @@ void ML_(fixup_guest_state_to_restart_syscall) ( ThreadArchState* arch )
                       arch->vex.guest_CIA + 0ULL, p[0], p[1], p[2], p[3]);
 
       vg_assert(p[0] == 0x44 && p[1] == 0x0 && p[2] == 0x0 && p[3] == 0x2);
+   }
+
+#elif defined(VGP_ppc64le_linux)
+   arch->vex.guest_CIA -= 4;             // sizeof(ppc32 instr)
+
+   /* Make sure our caller is actually sane, and we're really backing
+      back over a syscall.
+
+      sc == 44 00 00 02
+   */
+   {
+      UChar *p = (UChar *)arch->vex.guest_CIA;
+
+      if (p[3] != 0x44 || p[2] != 0x0 || p[1] != 0x0 || p[0] != 0x02)
+         VG_(message)(Vg_DebugMsg,
+                      "?! restarting over syscall at %#llx %02x %02x %02x %02x\n",
+                      arch->vex.guest_CIA + 0ULL, p[3], p[2], p[1], p[0]);
+
+      vg_assert(p[3] == 0x44 && p[2] == 0x0 && p[1] == 0x0 && p[0] == 0x2);
    }
 
 #elif defined(VGP_arm_linux)
@@ -2379,6 +2399,8 @@ void ML_(wqthread_continue_NORETURN)(ThreadId tid)
    sci->status = convert_SysRes_to_SyscallStatus( VG_(mk_SysRes_Success)(0) );
    sci->flags |= SfNoWriteResult;
    VG_(post_syscall)(tid);
+
+   ML_(sync_mappings)("in", "ML_(wqthread_continue_NORETURN)", 0);
 
    sci->status.what = SsIdle;
 

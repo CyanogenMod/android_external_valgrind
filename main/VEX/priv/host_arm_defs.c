@@ -1034,7 +1034,7 @@ static const HChar* showARMNeonDataSize_wrk ( UInt size )
    }
 }
 
-static const HChar* showARMNeonDataSize ( ARMInstr* i )
+static const HChar* showARMNeonDataSize ( const ARMInstr* i )
 {
    switch (i->tag) {
       case ARMin_NBinary:
@@ -1551,7 +1551,7 @@ ARMInstr* ARMInstr_ProfInc ( void ) {
 
 /* ... */
 
-void ppARMInstr ( ARMInstr* i ) {
+void ppARMInstr ( const ARMInstr* i ) {
    switch (i->tag) {
       case ARMin_Alu:
          vex_printf("%-4s  ", showARMAluOp(i->ARMin.Alu.op));
@@ -2018,7 +2018,7 @@ void ppARMInstr ( ARMInstr* i ) {
 
 /* --------- Helpers for register allocation. --------- */
 
-void getRegUsage_ARMInstr ( HRegUsage* u, ARMInstr* i, Bool mode64 )
+void getRegUsage_ARMInstr ( HRegUsage* u, const ARMInstr* i, Bool mode64 )
 {
    vassert(mode64 == False);
    initHRegUsage(u);
@@ -2523,7 +2523,7 @@ void mapRegs_ARMInstr ( HRegRemap* m, ARMInstr* i, Bool mode64 )
    source and destination to *src and *dst.  If in doubt say No.  Used
    by the register allocator to do move coalescing. 
 */
-Bool isMove_ARMInstr ( ARMInstr* i, HReg* src, HReg* dst )
+Bool isMove_ARMInstr ( const ARMInstr* i, HReg* src, HReg* dst )
 {
    /* Moves between integer regs */
    switch (i->tag) {
@@ -2970,12 +2970,12 @@ static UInt* do_load_or_store32 ( UInt* p,
    leave it unchanged. */
 
 Int emit_ARMInstr ( /*MB_MOD*/Bool* is_profInc,
-                    UChar* buf, Int nbuf, ARMInstr* i, 
-                    Bool mode64,
-                    void* disp_cp_chain_me_to_slowEP,
-                    void* disp_cp_chain_me_to_fastEP,
-                    void* disp_cp_xindir,
-                    void* disp_cp_xassisted )
+                    UChar* buf, Int nbuf, const ARMInstr* i, 
+                    Bool mode64, VexEndness endness_host,
+                    const void* disp_cp_chain_me_to_slowEP,
+                    const void* disp_cp_chain_me_to_fastEP,
+                    const void* disp_cp_xindir,
+                    const void* disp_cp_xassisted )
 {
    UInt* p = (UInt*)buf;
    vassert(nbuf >= 32);
@@ -3238,7 +3238,7 @@ Int emit_ARMInstr ( /*MB_MOD*/Bool* is_profInc,
          /* movw r12, lo16(VG_(disp_cp_chain_me_to_{slowEP,fastEP})) */
          /* movt r12, hi16(VG_(disp_cp_chain_me_to_{slowEP,fastEP})) */
          /* blx  r12  (A1) */
-         void* disp_cp_chain_me
+         const void* disp_cp_chain_me
                   = i->ARMin.XDirect.toFastEP ? disp_cp_chain_me_to_fastEP 
                                               : disp_cp_chain_me_to_slowEP;
          p = imm32_to_iregNo_EXACTLY2(p, /*r*/12,
@@ -4644,7 +4644,7 @@ Int emit_ARMInstr ( /*MB_MOD*/Bool* is_profInc,
          /* nofail: */
 
          /* Crosscheck */
-         vassert(evCheckSzB_ARM() == (UChar*)p - (UChar*)p0);
+         vassert(evCheckSzB_ARM(endness_host) == (UChar*)p - (UChar*)p0);
          goto done;
       }
 
@@ -4695,7 +4695,7 @@ Int emit_ARMInstr ( /*MB_MOD*/Bool* is_profInc,
 /* How big is an event check?  See case for ARMin_EvCheck in
    emit_ARMInstr just above.  That crosschecks what this returns, so
    we can tell if we're inconsistent. */
-Int evCheckSzB_ARM ( void )
+Int evCheckSzB_ARM ( VexEndness endness_host )
 {
    return 24;
 }
@@ -4703,10 +4703,13 @@ Int evCheckSzB_ARM ( void )
 
 /* NB: what goes on here has to be very closely coordinated with the
    emitInstr case for XDirect, above. */
-VexInvalRange chainXDirect_ARM ( void* place_to_chain,
-                                 void* disp_cp_chain_me_EXPECTED,
-                                 void* place_to_jump_to )
+VexInvalRange chainXDirect_ARM ( VexEndness endness_host,
+                                 void* place_to_chain,
+                                 const void* disp_cp_chain_me_EXPECTED,
+                                 const void* place_to_jump_to )
 {
+   vassert(endness_host == VexEndnessLE);
+
    /* What we're expecting to see is:
         movw r12, lo16(disp_cp_chain_me_to_EXPECTED)
         movt r12, hi16(disp_cp_chain_me_to_EXPECTED)
@@ -4748,7 +4751,7 @@ VexInvalRange chainXDirect_ARM ( void* place_to_chain,
 
    /* This is the delta we need to put into a B insn.  It's relative
       to the start of the next-but-one insn, hence the -8.  */
-   Long delta   = (Long)((UChar*)place_to_jump_to - (UChar*)p) - (Long)8;
+   Long delta   = (Long)((const UChar *)place_to_jump_to - (const UChar*)p) - 8;
    Bool shortOK = delta >= -30*1000*1000 && delta < 30*1000*1000;
    vassert(0 == (delta & (Long)3));
 
@@ -4783,10 +4786,13 @@ VexInvalRange chainXDirect_ARM ( void* place_to_chain,
 
 /* NB: what goes on here has to be very closely coordinated with the
    emitInstr case for XDirect, above. */
-VexInvalRange unchainXDirect_ARM ( void* place_to_unchain,
-                                   void* place_to_jump_to_EXPECTED,
-                                   void* disp_cp_chain_me )
+VexInvalRange unchainXDirect_ARM ( VexEndness endness_host,
+                                   void* place_to_unchain,
+                                   const void* place_to_jump_to_EXPECTED,
+                                   const void* disp_cp_chain_me )
 {
+   vassert(endness_host == VexEndnessLE);
+
    /* What we're expecting to see is:
         (general case)
           movw r12, lo16(place_to_jump_to_EXPECTED)
@@ -4818,7 +4824,7 @@ VexInvalRange unchainXDirect_ARM ( void* place_to_unchain,
       /* It's the short form.  Check the displacement is right. */
       Int simm24 = p[0] & 0x00FFFFFF;
       simm24 <<= 8; simm24 >>= 8;
-      if ((UChar*)p + (simm24 << 2) + 8 == (UChar*)place_to_jump_to_EXPECTED) {
+      if ((UChar*)p + (simm24 << 2) + 8 == place_to_jump_to_EXPECTED) {
          valid = True;
          if (0)
             vex_printf("QQQ unchainXDirect_ARM: found short form\n");
@@ -4844,9 +4850,11 @@ VexInvalRange unchainXDirect_ARM ( void* place_to_unchain,
 
 /* Patch the counter address into a profile inc point, as previously
    created by the ARMin_ProfInc case for emit_ARMInstr. */
-VexInvalRange patchProfInc_ARM ( void*  place_to_patch,
-                                 ULong* location_of_counter )
+VexInvalRange patchProfInc_ARM ( VexEndness endness_host,
+                                 void*  place_to_patch,
+                                 const ULong* location_of_counter )
 {
+   vassert(endness_host == VexEndnessLE);
    vassert(sizeof(ULong*) == 4);
    UInt* p = (UInt*)place_to_patch;
    vassert(0 == (3 & (HWord)p));

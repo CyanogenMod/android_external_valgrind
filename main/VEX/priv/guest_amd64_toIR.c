@@ -185,11 +185,11 @@
    that we don't have to pass them around endlessly. */
 
 /* We need to know this to do sub-register accesses correctly. */
-static Bool host_is_bigendian;
+static VexEndness host_endness;
 
 /* Pointer to the guest code area (points to start of BB, not to the
    insn being processed). */
-static UChar* guest_code;
+static const UChar* guest_code;
 
 /* The guest address corresponding to guest_code[0]. */
 static Addr64 guest_RIP_bbstart;
@@ -975,7 +975,7 @@ Int offsetIReg ( Int sz, UInt reg, Bool irregular )
 
 static IRExpr* getIRegCL ( void )
 {
-   vassert(!host_is_bigendian);
+   vassert(host_endness == VexEndnessLE);
    return IRExpr_Get( OFFB_RCX, Ity_I8 );
 }
 
@@ -984,7 +984,7 @@ static IRExpr* getIRegCL ( void )
 
 static void putIRegAH ( IRExpr* e )
 {
-   vassert(!host_is_bigendian);
+   vassert(host_endness == VexEndnessLE);
    vassert(typeOfIRExpr(irsb->tyenv, e) == Ity_I8);
    stmt( IRStmt_Put( OFFB_RAX+1, e ) );
 }
@@ -1006,7 +1006,7 @@ static const HChar* nameIRegRAX ( Int sz )
 
 static IRExpr* getIRegRAX ( Int sz )
 {
-   vassert(!host_is_bigendian);
+   vassert(host_endness == VexEndnessLE);
    switch (sz) {
       case 1: return IRExpr_Get( OFFB_RAX, Ity_I8 );
       case 2: return IRExpr_Get( OFFB_RAX, Ity_I16 );
@@ -1019,7 +1019,7 @@ static IRExpr* getIRegRAX ( Int sz )
 static void putIRegRAX ( Int sz, IRExpr* e )
 {
    IRType ty = typeOfIRExpr(irsb->tyenv, e);
-   vassert(!host_is_bigendian);
+   vassert(host_endness == VexEndnessLE);
    switch (sz) {
       case 8: vassert(ty == Ity_I64);
               stmt( IRStmt_Put( OFFB_RAX, e ));
@@ -1054,7 +1054,7 @@ static const HChar* nameIRegRDX ( Int sz )
 
 static IRExpr* getIRegRDX ( Int sz )
 {
-   vassert(!host_is_bigendian);
+   vassert(host_endness == VexEndnessLE);
    switch (sz) {
       case 1: return IRExpr_Get( OFFB_RDX, Ity_I8 );
       case 2: return IRExpr_Get( OFFB_RDX, Ity_I16 );
@@ -1066,7 +1066,7 @@ static IRExpr* getIRegRDX ( Int sz )
 
 static void putIRegRDX ( Int sz, IRExpr* e )
 {
-   vassert(!host_is_bigendian);
+   vassert(host_endness == VexEndnessLE);
    vassert(typeOfIRExpr(irsb->tyenv, e) == szToITy(sz));
    switch (sz) {
       case 8: stmt( IRStmt_Put( OFFB_RDX, e ));
@@ -1108,7 +1108,7 @@ static const HChar* nameIReg64 ( UInt regno )
 
 static IRExpr* getIReg32 ( UInt regno )
 {
-   vassert(!host_is_bigendian);
+   vassert(host_endness == VexEndnessLE);
    return unop(Iop_64to32,
                IRExpr_Get( integerGuestReg64Offset(regno),
                            Ity_I64 ));
@@ -1132,7 +1132,7 @@ static const HChar* nameIReg32 ( UInt regno )
 
 static IRExpr* getIReg16 ( UInt regno )
 {
-   vassert(!host_is_bigendian);
+   vassert(host_endness == VexEndnessLE);
    return IRExpr_Get( integerGuestReg64Offset(regno),
                       Ity_I16 );
 }
@@ -1253,7 +1253,7 @@ static UInt eregOfRexRM ( Prefix pfx, UChar mod_reg_rm )
 static UInt offsetIRegG ( Int sz, Prefix pfx, UChar mod_reg_rm )
 {
    UInt reg;
-   vassert(!host_is_bigendian);
+   vassert(host_endness == VexEndnessLE);
    vassert(IS_VALID_PFX(pfx));
    vassert(sz == 8 || sz == 4 || sz == 2 || sz == 1);
    reg = gregOfRexRM( pfx, mod_reg_rm );
@@ -1332,7 +1332,7 @@ const HChar* nameIRegV ( Int sz, Prefix pfx )
 static UInt offsetIRegE ( Int sz, Prefix pfx, UChar mod_reg_rm )
 {
    UInt reg;
-   vassert(!host_is_bigendian);
+   vassert(host_endness == VexEndnessLE);
    vassert(IS_VALID_PFX(pfx));
    vassert(sz == 8 || sz == 4 || sz == 2 || sz == 1);
    reg = eregOfRexRM( pfx, mod_reg_rm );
@@ -1401,7 +1401,7 @@ static Int ymmGuestRegOffset ( UInt ymmreg )
 static Int xmmGuestRegOffset ( UInt xmmreg )
 {
    /* Correct for little-endian host only. */
-   vassert(!host_is_bigendian);
+   vassert(host_endness == VexEndnessLE);
    return ymmGuestRegOffset( xmmreg );
 }
 
@@ -1411,7 +1411,7 @@ static Int xmmGuestRegOffset ( UInt xmmreg )
 static Int xmmGuestRegLane16offset ( UInt xmmreg, Int laneno )
 {
    /* Correct for little-endian host only. */
-   vassert(!host_is_bigendian);
+   vassert(host_endness == VexEndnessLE);
    vassert(laneno >= 0 && laneno < 8);
    return xmmGuestRegOffset( xmmreg ) + 2 * laneno;
 }
@@ -1419,7 +1419,7 @@ static Int xmmGuestRegLane16offset ( UInt xmmreg, Int laneno )
 static Int xmmGuestRegLane32offset ( UInt xmmreg, Int laneno )
 {
    /* Correct for little-endian host only. */
-   vassert(!host_is_bigendian);
+   vassert(host_endness == VexEndnessLE);
    vassert(laneno >= 0 && laneno < 4);
    return xmmGuestRegOffset( xmmreg ) + 4 * laneno;
 }
@@ -1427,7 +1427,7 @@ static Int xmmGuestRegLane32offset ( UInt xmmreg, Int laneno )
 static Int xmmGuestRegLane64offset ( UInt xmmreg, Int laneno )
 {
    /* Correct for little-endian host only. */
-   vassert(!host_is_bigendian);
+   vassert(host_endness == VexEndnessLE);
    vassert(laneno >= 0 && laneno < 2);
    return xmmGuestRegOffset( xmmreg ) + 8 * laneno;
 }
@@ -1435,7 +1435,7 @@ static Int xmmGuestRegLane64offset ( UInt xmmreg, Int laneno )
 static Int ymmGuestRegLane128offset ( UInt ymmreg, Int laneno )
 {
    /* Correct for little-endian host only. */
-   vassert(!host_is_bigendian);
+   vassert(host_endness == VexEndnessLE);
    vassert(laneno >= 0 && laneno < 2);
    return ymmGuestRegOffset( ymmreg ) + 16 * laneno;
 }
@@ -1443,7 +1443,7 @@ static Int ymmGuestRegLane128offset ( UInt ymmreg, Int laneno )
 static Int ymmGuestRegLane64offset ( UInt ymmreg, Int laneno )
 {
    /* Correct for little-endian host only. */
-   vassert(!host_is_bigendian);
+   vassert(host_endness == VexEndnessLE);
    vassert(laneno >= 0 && laneno < 4);
    return ymmGuestRegOffset( ymmreg ) + 8 * laneno;
 }
@@ -1451,7 +1451,7 @@ static Int ymmGuestRegLane64offset ( UInt ymmreg, Int laneno )
 static Int ymmGuestRegLane32offset ( UInt ymmreg, Int laneno )
 {
    /* Correct for little-endian host only. */
-   vassert(!host_is_bigendian);
+   vassert(host_endness == VexEndnessLE);
    vassert(laneno >= 0 && laneno < 8);
    return ymmGuestRegOffset( ymmreg ) + 4 * laneno;
 }
@@ -9868,7 +9868,7 @@ static void gen_SEGV_if_not_32_aligned ( IRTemp effective_addr ) {
 
    Same for BTS, BTR
 */
-static Bool can_be_used_with_LOCK_prefix ( UChar* opc )
+static Bool can_be_used_with_LOCK_prefix ( const UChar* opc )
 {
    switch (opc[0]) {
       case 0x00: case 0x01: case 0x08: case 0x09:
@@ -12671,13 +12671,13 @@ Long dis_ESC_0F__SSE2 ( Bool* decode_OK,
       /* F3 0F 52 = RSQRTSS -- approx reciprocal sqrt 32F0x4 from R/M to R */
       if (haveF3no66noF2(pfx) && sz == 4) {
          delta = dis_SSE_E_to_G_unary_lo32( vbi, pfx, delta, 
-                                            "rsqrtss", Iop_RSqrt32F0x4 );
+                                            "rsqrtss", Iop_RSqrtEst32F0x4 );
          goto decode_success;
       }
       /* 0F 52 = RSQRTPS -- approx reciprocal sqrt 32Fx4 from R/M to R */
       if (haveNo66noF2noF3(pfx) && sz == 4) {
          delta = dis_SSE_E_to_G_unary_all( vbi, pfx, delta, 
-                                           "rsqrtps", Iop_RSqrt32Fx4 );
+                                           "rsqrtps", Iop_RSqrtEst32Fx4 );
          goto decode_success;
       }
       break;
@@ -12686,13 +12686,13 @@ Long dis_ESC_0F__SSE2 ( Bool* decode_OK,
       /* F3 0F 53 = RCPSS -- approx reciprocal 32F0x4 from R/M to R */
       if (haveF3no66noF2(pfx) && sz == 4) {
          delta = dis_SSE_E_to_G_unary_lo32( vbi, pfx, delta,
-                                            "rcpss", Iop_Recip32F0x4 );
+                                            "rcpss", Iop_RecipEst32F0x4 );
          goto decode_success;
       }
       /* 0F 53 = RCPPS -- approx reciprocal 32Fx4 from R/M to R */
       if (haveNo66noF2noF3(pfx) && sz == 4) {
          delta = dis_SSE_E_to_G_unary_all( vbi, pfx, delta,
-                                           "rcpps", Iop_Recip32Fx4 );
+                                           "rcpps", Iop_RecipEst32Fx4 );
          goto decode_success;
       }
       break;
@@ -13575,11 +13575,12 @@ Long dis_ESC_0F__SSE2 ( Bool* decode_OK,
          DIP("%sfxsave %s\n", sz==8 ? "rex64/" : "", dis_buf);
 
          /* Uses dirty helper: 
-               void amd64g_do_FXSAVE ( VexGuestAMD64State*, ULong ) */
+              void amd64g_do_FXSAVE_ALL_EXCEPT_XMM ( VexGuestAMD64State*,
+                                                     ULong ) */
          d = unsafeIRDirty_0_N ( 
                 0/*regparms*/, 
-                "amd64g_dirtyhelper_FXSAVE", 
-                &amd64g_dirtyhelper_FXSAVE,
+                "amd64g_dirtyhelper_FXSAVE_ALL_EXCEPT_XMM",
+                &amd64g_dirtyhelper_FXSAVE_ALL_EXCEPT_XMM,
                 mkIRExprVec_2( IRExpr_BBPTR(), mkexpr(addr) )
              );
 
@@ -13589,7 +13590,7 @@ Long dis_ESC_0F__SSE2 ( Bool* decode_OK,
          d->mSize = 464; /* according to recent Intel docs */
 
          /* declare we're reading guest state */
-         d->nFxState = 7;
+         d->nFxState = 6;
          vex_bzero(&d->fxState, sizeof(d->fxState));
 
          d->fxState[0].fx     = Ifx_Read;
@@ -13613,23 +13614,24 @@ Long dis_ESC_0F__SSE2 ( Bool* decode_OK,
          d->fxState[4].size   = sizeof(ULong);
 
          d->fxState[5].fx     = Ifx_Read;
-         d->fxState[5].offset = OFFB_YMM0;
-         d->fxState[5].size   = sizeof(U128);
-         /* plus 15 more of the above, spaced out in YMM sized steps */
-         d->fxState[5].nRepeats  = 15; 
-         d->fxState[5].repeatLen = sizeof(U256);
+         d->fxState[5].offset = OFFB_SSEROUND;
+         d->fxState[5].size   = sizeof(ULong);
 
-         d->fxState[6].fx     = Ifx_Read;
-         d->fxState[6].offset = OFFB_SSEROUND;
-         d->fxState[6].size   = sizeof(ULong);
-
-         /* Be paranoid ... this assertion tries to ensure the 16 %ymm
-            images are packed back-to-back.  If not, the settings for
-            d->fxState[5] are wrong. */
-         vassert(32 == sizeof(U256));
-         vassert(OFFB_YMM15 == (OFFB_YMM0 + 15 * 32));
-
+         /* Call the helper.  This creates all parts of the in-memory
+            image except for the XMM[0..15] array, which we do
+            separately, in order that any undefinedness in the XMM
+            registers is tracked separately by Memcheck and does not
+            "infect" the in-memory shadow for the other parts of the
+            image (FPTOP, FPREGS, FPTAGS, FPROUND, FC3210,
+            SSEROUND). */
          stmt( IRStmt_Dirty(d) );
+
+         /* And now the XMMs themselves. */
+         UInt xmm;
+         for (xmm = 0; xmm < 16; xmm++) {
+            storeLE( binop(Iop_Add64, mkexpr(addr), mkU64(160 + xmm * 16)),
+                     getXMMReg(xmm) );
+         }
 
          goto decode_success;
       }
@@ -13650,14 +13652,15 @@ Long dis_ESC_0F__SSE2 ( Bool* decode_OK,
          DIP("%sfxrstor %s\n", sz==8 ? "rex64/" : "", dis_buf);
 
          /* Uses dirty helper: 
-               VexEmNote amd64g_do_FXRSTOR ( VexGuestAMD64State*, ULong )
+              VexEmNote amd64g_do_FXRSTOR_ALL_EXCEPT_XMM ( VexGuestAMD64State*,
+                                                           ULong )
             NOTE:
-               the VexEmNote value is simply ignored
+              the VexEmNote value is simply ignored
          */
          d = unsafeIRDirty_0_N ( 
                 0/*regparms*/, 
-                "amd64g_dirtyhelper_FXRSTOR", 
-                &amd64g_dirtyhelper_FXRSTOR,
+                "amd64g_dirtyhelper_FXRSTOR_ALL_EXCEPT_XMM", 
+                &amd64g_dirtyhelper_FXRSTOR_ALL_EXCEPT_XMM,
                 mkIRExprVec_2( IRExpr_BBPTR(), mkexpr(addr) )
              );
 
@@ -13667,7 +13670,7 @@ Long dis_ESC_0F__SSE2 ( Bool* decode_OK,
          d->mSize = 464; /* according to recent Intel docs */
 
          /* declare we're writing guest state */
-         d->nFxState = 7;
+         d->nFxState = 6;
          vex_bzero(&d->fxState, sizeof(d->fxState));
 
          d->fxState[0].fx     = Ifx_Write;
@@ -13691,23 +13694,25 @@ Long dis_ESC_0F__SSE2 ( Bool* decode_OK,
          d->fxState[4].size   = sizeof(ULong);
 
          d->fxState[5].fx     = Ifx_Write;
-         d->fxState[5].offset = OFFB_YMM0;
-         d->fxState[5].size   = sizeof(U128);
-         /* plus 15 more of the above, spaced out in YMM sized steps */
-         d->fxState[5].nRepeats  = 15; 
-         d->fxState[5].repeatLen = sizeof(U256);
+         d->fxState[5].offset = OFFB_SSEROUND;
+         d->fxState[5].size   = sizeof(ULong);
 
-         d->fxState[6].fx     = Ifx_Write;
-         d->fxState[6].offset = OFFB_SSEROUND;
-         d->fxState[6].size   = sizeof(ULong);
-
-         /* Be paranoid ... this assertion tries to ensure the 16 %ymm
-            images are packed back-to-back.  If not, the settings for
-            d->fxState[5] are wrong. */
-         vassert(32 == sizeof(U256));
-         vassert(OFFB_YMM15 == (OFFB_YMM0 + 15 * 32));
-
+         /* Call the helper.  This reads all parts of the in-memory
+            image except for the XMM[0..15] array, which we do
+            separately, in order that any undefinedness in the XMM
+            registers is tracked separately by Memcheck and does not
+            "infect" the in-guest-state shadow for the other parts of the
+            image (FPTOP, FPREGS, FPTAGS, FPROUND, FC3210,
+            SSEROUND). */
          stmt( IRStmt_Dirty(d) );
+
+         /* And now the XMMs themselves. */
+         UInt xmm;
+         for (xmm = 0; xmm < 16; xmm++) {
+            putXMMReg(xmm, loadLE(Ity_V128,
+                                  binop(Iop_Add64, mkexpr(addr),
+                                                   mkU64(160 + xmm * 16))));
+         }
 
          goto decode_success;
       }
@@ -21107,6 +21112,18 @@ Long dis_ESC_0F (
          putIRegRDX(4, mkU32(0));
          return delta;
       }
+      /* BEGIN HACKY SUPPORT FOR xend */
+      /* 0F 01 D5 = XEND */
+      if (modrm == 0xD5 && (archinfo->hwcaps & VEX_HWCAPS_AMD64_AVX)) {
+         /* We are never in an transaction (xbegin immediately aborts).
+            So this just always generates a General Protection Fault. */
+         delta += 1;
+         jmp_lit(dres, Ijk_SigSEGV, guest_RIP_bbstart + delta);
+         vassert(dres->whatNext == Dis_StopHere);
+         DIP("xend\n");
+         return delta;
+      }
+      /* END HACKY SUPPORT FOR xend */
       /* BEGIN HACKY SUPPORT FOR xtest */
       /* 0F 01 D6 = XTEST */
       if (modrm == 0xD6 && (archinfo->hwcaps & VEX_HWCAPS_AMD64_AVX)) {
@@ -24353,19 +24370,20 @@ Long dis_ESC_0F__VEX (
       /* VRSQRTSS xmm3/m64(E), xmm2(V), xmm1(G) = VEX.NDS.LIG.F3.0F.WIG 52 /r */
       if (haveF3no66noF2(pfx)) {
          delta = dis_AVX128_E_V_to_G_lo32_unary(
-                    uses_vvvv, vbi, pfx, delta, "vrsqrtss", Iop_RSqrt32F0x4 );
+                    uses_vvvv, vbi, pfx, delta, "vrsqrtss",
+                    Iop_RSqrtEst32F0x4 );
          goto decode_success;
       }
       /* VRSQRTPS xmm2/m128(E), xmm1(G) = VEX.NDS.128.0F.WIG 52 /r */
       if (haveNo66noF2noF3(pfx) && 0==getVexL(pfx)/*128*/) {
          delta = dis_AVX128_E_to_G_unary_all(
-                    uses_vvvv, vbi, pfx, delta, "vrsqrtps", Iop_RSqrt32Fx4 );
+                    uses_vvvv, vbi, pfx, delta, "vrsqrtps", Iop_RSqrtEst32Fx4 );
          goto decode_success;
       }
       /* VRSQRTPS ymm2/m256(E), ymm1(G) = VEX.NDS.256.0F.WIG 52 /r */
       if (haveNo66noF2noF3(pfx) && 1==getVexL(pfx)/*256*/) {
          delta = dis_AVX256_E_to_G_unary_all(
-                    uses_vvvv, vbi, pfx, delta, "vrsqrtps", Iop_RSqrt32Fx8 );
+                    uses_vvvv, vbi, pfx, delta, "vrsqrtps", Iop_RSqrtEst32Fx8 );
          goto decode_success;
       }
       break;
@@ -24374,19 +24392,19 @@ Long dis_ESC_0F__VEX (
       /* VRCPSS xmm3/m64(E), xmm2(V), xmm1(G) = VEX.NDS.LIG.F3.0F.WIG 53 /r */
       if (haveF3no66noF2(pfx)) {
          delta = dis_AVX128_E_V_to_G_lo32_unary(
-                    uses_vvvv, vbi, pfx, delta, "vrcpss", Iop_Recip32F0x4 );
+                    uses_vvvv, vbi, pfx, delta, "vrcpss", Iop_RecipEst32F0x4 );
          goto decode_success;
       }
       /* VRCPPS xmm2/m128(E), xmm1(G) = VEX.NDS.128.0F.WIG 53 /r */
       if (haveNo66noF2noF3(pfx) && 0==getVexL(pfx)/*128*/) {
          delta = dis_AVX128_E_to_G_unary_all(
-                    uses_vvvv, vbi, pfx, delta, "vrcpps", Iop_Recip32Fx4 );
+                    uses_vvvv, vbi, pfx, delta, "vrcpps", Iop_RecipEst32Fx4 );
          goto decode_success;
       }
       /* VRCPPS ymm2/m256(E), ymm1(G) = VEX.NDS.256.0F.WIG 53 /r */
       if (haveNo66noF2noF3(pfx) && 1==getVexL(pfx)/*256*/) {
          delta = dis_AVX256_E_to_G_unary_all(
-                    uses_vvvv, vbi, pfx, delta, "vrcpps", Iop_Recip32Fx8 );
+                    uses_vvvv, vbi, pfx, delta, "vrcpps", Iop_RecipEst32Fx8 );
          goto decode_success;
       }
       break;
@@ -31149,7 +31167,7 @@ DisResult disInstr_AMD64_WRK (
 
    /* Spot "Special" instructions (see comment at top of file). */
    {
-      UChar* code = (UChar*)(guest_code + delta);
+      const UChar* code = guest_code + delta;
       /* Spot the 16-byte preamble:
          48C1C703   rolq $3,  %rdi
          48C1C70D   rolq $13, %rdi
@@ -31361,7 +31379,7 @@ DisResult disInstr_AMD64_WRK (
       leading escapes.  Check that any LOCK prefix is actually
       allowed. */
    if (haveLOCK(pfx)) {
-      if (can_be_used_with_LOCK_prefix( (UChar*)&guest_code[delta] )) {
+      if (can_be_used_with_LOCK_prefix( &guest_code[delta] )) {
          DIP("lock ");
       } else {
          *expect_CAS = False;
@@ -31482,7 +31500,7 @@ DisResult disInstr_AMD64_WRK (
       SSE2 as a minimum so there is no point distinguishing SSE1 vs
       SSE2. */
 
-   insn = (UChar*)&guest_code[delta];
+   insn = &guest_code[delta];
 
    /* FXSAVE is spuriously at the start here only because it is
       thusly placed in guest-x86/toIR.c. */
@@ -31739,13 +31757,13 @@ DisResult disInstr_AMD64 ( IRSB*        irsb_IN,
                            Bool         (*resteerOkFn) ( void*, Addr64 ),
                            Bool         resteerCisOk,
                            void*        callback_opaque,
-                           UChar*       guest_code_IN,
+                           const UChar* guest_code_IN,
                            Long         delta,
                            Addr64       guest_IP,
                            VexArch      guest_arch,
                            VexArchInfo* archinfo,
                            VexAbiInfo*  abiinfo,
-                           Bool         host_bigendian_IN,
+                           VexEndness   host_endness_IN,
                            Bool         sigill_diag_IN )
 {
    Int       i, x1, x2;
@@ -31756,7 +31774,7 @@ DisResult disInstr_AMD64 ( IRSB*        irsb_IN,
    vassert(guest_arch == VexArchAMD64);
    guest_code           = guest_code_IN;
    irsb                 = irsb_IN;
-   host_is_bigendian    = host_bigendian_IN;
+   host_endness         = host_endness_IN;
    guest_RIP_curr_instr = guest_IP;
    guest_RIP_bbstart    = guest_IP - delta;
 

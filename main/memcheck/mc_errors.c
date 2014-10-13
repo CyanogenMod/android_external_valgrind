@@ -75,6 +75,7 @@ typedef
       Err_Overlap,
       Err_Leak,
       Err_IllegalMempool,
+      Err_FishyValue,
    }
    MC_ErrorTag;
 
@@ -178,6 +179,15 @@ struct _MC_Error {
          AddrInfo ai;
       } IllegalMempool;
 
+      // A fishy function argument value
+      // An argument value is considered fishy if the corresponding
+      // parameter has SizeT type and the value when interpreted as a
+      // signed number is negative.
+     struct {
+         const HChar *function_name;
+         const HChar *argument_name;
+         SizeT value;
+      } FishyValue;
    } Err;
 };
 
@@ -238,10 +248,23 @@ static const HChar* xml_leak_kind ( Reachedness lossmode )
    return loss;
 }
 
-Bool MC_(parse_leak_kinds) ( const HChar* str0, UInt* lks )
+const HChar* MC_(parse_leak_kinds_tokens) = 
+   "reachable,possible,indirect,definite";
+
+UInt MC_(all_Reachedness)(void)
 {
-   return VG_(parse_enum_set)("reachable,possible,indirect,definite",
-                              str0, lks);
+   static UInt all;
+
+   if (all == 0) {
+      // Compute a set with all values by doing a parsing of the "all" keyword.
+      Bool parseok = VG_(parse_enum_set)(MC_(parse_leak_kinds_tokens),
+                                         True,/*allow_all*/
+                                         "all",
+                                         &all);
+      tl_assert (parseok && all);
+   }
+
+   return all;
 }
 
 static const HChar* pp_Reachedness_for_leak_kinds(Reachedness r)
@@ -282,6 +305,12 @@ HChar * MC_(snprintf_delta) (HChar * buf, Int size,
                              SizeT current_val, SizeT old_val, 
                              LeakCheckDeltaMode delta_mode)
 {
+   // Make sure the buffer size is large enough. With old_val == 0 and
+   // current_val == ULLONG_MAX the delta including inserted commas is:
+   // 18,446,744,073,709,551,615
+   // whose length is 26. Therefore:
+   tl_assert(size >= 26 + 4 + 1);
+
    if (delta_mode == LCD_Any)
       buf[0] = '\0';
    else if (current_val >= old_val)
@@ -297,24 +326,24 @@ static void pp_LossRecord(UInt n_this_record, UInt n_total_records,
 {
    // char arrays to produce the indication of increase/decrease in case
    // of delta_mode != LCD_Any
-   HChar d_bytes[20];
-   HChar d_direct_bytes[20];
-   HChar d_indirect_bytes[20];
-   HChar d_num_blocks[20];
+   HChar d_bytes[31];
+   HChar d_direct_bytes[31];
+   HChar d_indirect_bytes[31];
+   HChar d_num_blocks[31];
 
-   MC_(snprintf_delta) (d_bytes, 20, 
+   MC_(snprintf_delta) (d_bytes, sizeof(d_bytes),
                         lr->szB + lr->indirect_szB, 
                         lr->old_szB + lr->old_indirect_szB,
                         MC_(detect_memory_leaks_last_delta_mode));
-   MC_(snprintf_delta) (d_direct_bytes, 20,
+   MC_(snprintf_delta) (d_direct_bytes, sizeof(d_direct_bytes),
                         lr->szB,
                         lr->old_szB,
                         MC_(detect_memory_leaks_last_delta_mode));
-   MC_(snprintf_delta) (d_indirect_bytes, 20,
+   MC_(snprintf_delta) (d_indirect_bytes, sizeof(d_indirect_bytes),
                         lr->indirect_szB,
                         lr->old_indirect_szB,
                         MC_(detect_memory_leaks_last_delta_mode));
-   MC_(snprintf_delta) (d_num_blocks, 20,
+   MC_(snprintf_delta) (d_num_blocks, sizeof(d_num_blocks),
                         (SizeT) lr->num_blocks,
                         (SizeT) lr->old_num_blocks,
                         MC_(detect_memory_leaks_last_delta_mode));
@@ -609,7 +638,7 @@ void MC_(pp_Error) ( Error* err )
                      extra->Err.Overlap.dst, extra->Err.Overlap.src );
             } else {
                emit( "  <what>Source and destination overlap "
-                     "in %s(%#lx, %#lx, %lu)</what>\n",
+                     "in %pS(%#lx, %#lx, %lu)</what>\n",
                      VG_(get_error_string)(err),
                      extra->Err.Overlap.dst, extra->Err.Overlap.src,
                      extra->Err.Overlap.szB );
@@ -617,7 +646,7 @@ void MC_(pp_Error) ( Error* err )
             VG_(pp_ExeContext)( VG_(get_error_where)(err) );
          } else {
             if (extra->Err.Overlap.szB == 0) {
-               emit( "Source and destination overlap in %pS(%#lx, %#lx)\n",
+               emit( "Source and destination overlap in %s(%#lx, %#lx)\n",
                      VG_(get_error_string)(err),
                      extra->Err.Overlap.dst, extra->Err.Overlap.src );
             } else {
@@ -654,6 +683,27 @@ void MC_(pp_Error) ( Error* err )
          pp_LossRecord (n_this_record, n_total_records, lr, xml);
          break;
       }
+
+      case Err_FishyValue:
+         if (xml) {
+            emit( "  <kind>FishyValue</kind>\n" );
+            emit( "  <what>");
+            emit( "Argument '%s' of function %s has a fishy "
+                  "(possibly negative) value: %ld\n",
+                  extra->Err.FishyValue.argument_name,
+                  extra->Err.FishyValue.function_name,
+                  (SSizeT)extra->Err.FishyValue.value);
+            emit( "</what>");
+            VG_(pp_ExeContext)( VG_(get_error_where)(err) );
+         } else {
+            emit( "Argument '%s' of function %s has a fishy "
+                  "(possibly negative) value: %ld\n",
+                  extra->Err.FishyValue.argument_name,
+                  extra->Err.FishyValue.function_name,
+                  (SSizeT)extra->Err.FishyValue.value);
+            VG_(pp_ExeContext)( VG_(get_error_where)(err) );
+         }
+         break;
 
       default: 
          VG_(printf)("Error:\n  unknown Memcheck error code %d\n",
@@ -796,6 +846,7 @@ void MC_(record_freemismatch_error) ( ThreadId tid, MC_Chunk* mc )
    ai->Addr.Block.block_szB  = mc->szB;
    ai->Addr.Block.rwoffset   = 0;
    ai->Addr.Block.allocated_at = MC_(allocated_at) (mc);
+   VG_(initThreadInfo) (&ai->Addr.Block.alloc_tinfo);
    ai->Addr.Block.freed_at = MC_(freed_at) (mc);
    VG_(maybe_record_error)( tid, Err_FreeMismatch, mc->data, /*s*/NULL,
                             &extra );
@@ -833,6 +884,25 @@ Bool MC_(record_leak_error) ( ThreadId tid, UInt n_this_record,
    VG_(unique_error) ( tid, Err_Leak, /*Addr*/0, /*s*/NULL, &extra,
                        lr->key.allocated_at, print_record,
                        /*allow_GDB_attach*/False, count_error );
+}
+
+Bool MC_(record_fishy_value_error) ( ThreadId tid, const HChar *function_name,
+                                     const HChar *argument_name, SizeT value)
+{
+   MC_Error extra;
+
+   tl_assert(VG_INVALID_THREADID != tid);
+
+   if ((SSizeT)value >= 0) return False;  // not a fishy value
+
+   extra.Err.FishyValue.function_name = function_name;
+   extra.Err.FishyValue.argument_name = argument_name;
+   extra.Err.FishyValue.value = value;
+
+   VG_(maybe_record_error)( 
+      tid, Err_FishyValue, /*addr*/0, /*s*/NULL, &extra );
+
+   return True;
 }
 
 void MC_(record_user_error) ( ThreadId tid, Addr a,
@@ -903,6 +973,12 @@ Bool MC_(eq_Error) ( VgRes res, Error* e1, Error* e2 )
       case Err_Overlap:
       case Err_Cond:
          return True;
+
+      case Err_FishyValue:
+         return VG_STREQ(extra1->Err.FishyValue.function_name,
+                         extra2->Err.FishyValue.function_name) &&
+                VG_STREQ(extra1->Err.FishyValue.argument_name,
+                         extra2->Err.FishyValue.argument_name);
 
       case Err_Addr:
          return ( extra1->Err.Addr.szB == extra2->Err.Addr.szB
@@ -979,6 +1055,7 @@ static void describe_addr ( Addr a, /*OUT*/AddrInfo* ai )
          ai->Addr.Block.block_szB  = mc->szB;
          ai->Addr.Block.rwoffset   = (Word)a - (Word)mc->data;
          ai->Addr.Block.allocated_at = MC_(allocated_at)(mc);
+         VG_(initThreadInfo) (&ai->Addr.Block.alloc_tinfo);
          ai->Addr.Block.freed_at = MC_(freed_at)(mc);
          return;
       }
@@ -992,6 +1069,7 @@ static void describe_addr ( Addr a, /*OUT*/AddrInfo* ai )
       ai->Addr.Block.block_szB  = mc->szB;
       ai->Addr.Block.rwoffset   = (Word)a - (Word)mc->data;
       ai->Addr.Block.allocated_at = MC_(allocated_at)(mc);
+      VG_(initThreadInfo) (&ai->Addr.Block.alloc_tinfo);
       ai->Addr.Block.freed_at = MC_(freed_at)(mc);
       return;
    }
@@ -1033,6 +1111,7 @@ UInt MC_(update_Error_extra)( Error* err )
    //case Err_Value:
    //case Err_Cond:
    case Err_Overlap:
+   case Err_FishyValue:
    // For Err_Leaks the returned size does not matter -- they are always
    // shown with VG_(unique_error)() so they 'extra' not copied.  But
    // we make it consistent with the others.
@@ -1125,6 +1204,7 @@ static Bool client_block_maybe_describe( Addr a,
          ai->Addr.Block.block_szB  = cgbs[i].size;
          ai->Addr.Block.rwoffset   = (Word)(a) - (Word)(cgbs[i].start);
          ai->Addr.Block.allocated_at = cgbs[i].where;
+         VG_(initThreadInfo) (&ai->Addr.Block.alloc_tinfo);
          ai->Addr.Block.freed_at = VG_(null_ExeContext)();;
          return True;
       }
@@ -1152,6 +1232,7 @@ static Bool mempool_block_maybe_describe( Addr a,
                ai->Addr.Block.block_szB  = mc->szB;
                ai->Addr.Block.rwoffset   = (Word)a - (Word)mc->data;
                ai->Addr.Block.allocated_at = MC_(allocated_at)(mc);
+               VG_(initThreadInfo) (&ai->Addr.Block.alloc_tinfo);
                ai->Addr.Block.freed_at = MC_(freed_at)(mc);
                return True;
             }
@@ -1186,6 +1267,7 @@ typedef
       OverlapSupp,   // Overlapping blocks in memcpy(), strcpy(), etc
       LeakSupp,      // Something to be suppressed in a leak check.
       MempoolSupp,   // Memory pool suppression.
+      FishyValueSupp,// Fishy value suppression.
    } 
    MC_SuppKind;
 
@@ -1213,6 +1295,7 @@ Bool MC_(is_recognised_suppression) ( const HChar* name, Supp* su )
    else if (VG_STREQ(name, "Value4"))  skind = Value4Supp;
    else if (VG_STREQ(name, "Value8"))  skind = Value8Supp;
    else if (VG_STREQ(name, "Value16")) skind = Value16Supp;
+   else if (VG_STREQ(name, "FishyValue")) skind = FishyValueSupp;
    else 
       return False;
 
@@ -1234,6 +1317,11 @@ struct _MC_LeakSuppExtra {
    UInt  leak_search_gen;
 };
 
+typedef struct {
+   const HChar *function_name;
+   const HChar *argument_name;
+} MC_FishyValueExtra;
+
 Bool MC_(read_extra_suppression_info) ( Int fd, HChar** bufpp,
                                         SizeT* nBufp, Int* lineno, Supp *su )
 {
@@ -1248,7 +1336,7 @@ Bool MC_(read_extra_suppression_info) ( Int fd, HChar** bufpp,
       // We might have the optional match-leak-kinds line
       MC_LeakSuppExtra* lse;
       lse = VG_(malloc)("mc.resi.2", sizeof(MC_LeakSuppExtra));
-      lse->match_leak_kinds = RallS;
+      lse->match_leak_kinds = MC_(all_Reachedness)();
       lse->blocks_suppressed = 0;
       lse->bytes_suppressed = 0;
       lse->leak_search_gen = 0;
@@ -1259,12 +1347,41 @@ Bool MC_(read_extra_suppression_info) ( Int fd, HChar** bufpp,
          i = 17;
          while ((*bufpp)[i] && VG_(isspace((*bufpp)[i])))
             i++;
-         if (!MC_(parse_leak_kinds)((*bufpp)+i, &lse->match_leak_kinds)) {
+         if (!VG_(parse_enum_set)(MC_(parse_leak_kinds_tokens),
+                                  True/*allow_all*/,
+                                  (*bufpp)+i, &lse->match_leak_kinds)) {
             return False;
          }
       } else {
          return False; // unknown extra line.
       }
+   } else if (VG_(get_supp_kind)(su) == FishyValueSupp) {
+      MC_FishyValueExtra *extra;
+      HChar *p, *function_name, *argument_name = NULL;
+
+      eof = VG_(get_line) ( fd, bufpp, nBufp, lineno );
+      if (eof) return True;
+
+      // The suppression string is: function_name(argument_name)
+      function_name = VG_(strdup)("mv.resi.4", *bufpp);
+      p = VG_(strchr)(function_name, '(');
+      if (p != NULL) {
+         *p++ = '\0';
+         argument_name = p;
+         p = VG_(strchr)(p, ')');
+         if (p != NULL)
+            *p = '\0';
+      }
+      if (p == NULL) {    // malformed suppression string
+         VG_(free)(function_name);
+         return False;
+      }
+
+      extra = VG_(malloc)("mc.resi.3", sizeof *extra);
+      extra->function_name = function_name;
+      extra->argument_name = argument_name;
+
+      VG_(set_supp_extra)(su, extra);
    }
    return True;
 }
@@ -1334,6 +1451,16 @@ Bool MC_(error_matches_suppression) ( Error* err, Supp* su )
       case MempoolSupp:
          return (ekind == Err_IllegalMempool);
 
+      case FishyValueSupp: {
+         MC_FishyValueExtra *supp_extra = VG_(get_supp_extra)(su);
+
+         return (ekind == Err_FishyValue) &&
+                VG_STREQ(extra->Err.FishyValue.function_name,
+                         supp_extra->function_name) &&
+                VG_STREQ(extra->Err.FishyValue.argument_name,
+                         supp_extra->argument_name);
+      }
+
       default:
          VG_(printf)("Error:\n"
                      "  unknown suppression type %d\n",
@@ -1357,6 +1484,7 @@ const HChar* MC_(get_error_name) ( Error* err )
    case Err_Overlap:        return "Overlap";
    case Err_Leak:           return "Leak";
    case Err_Cond:           return "Cond";
+   case Err_FishyValue:     return "FishyValue";
    case Err_Addr: {
       MC_Error* extra = VG_(get_error_extra)(err);
       switch ( extra->Err.Addr.szB ) {
@@ -1383,45 +1511,51 @@ const HChar* MC_(get_error_name) ( Error* err )
    }
 }
 
-Bool MC_(get_extra_suppression_info) ( Error* err,
-                                       /*OUT*/HChar* buf, Int nBuf )
+SizeT MC_(get_extra_suppression_info) ( Error* err,
+                                        /*OUT*/HChar* buf, Int nBuf )
 {
    ErrorKind ekind = VG_(get_error_kind )(err);
    tl_assert(buf);
-   tl_assert(nBuf >= 16); // stay sane
+   tl_assert(nBuf >= 1);
+
    if (Err_RegParam == ekind || Err_MemParam == ekind) {
       const HChar* errstr = VG_(get_error_string)(err);
       tl_assert(errstr);
-      VG_(snprintf)(buf, nBuf-1, "%s", errstr);
-      return True;
+      return VG_(snprintf)(buf, nBuf, "%s", errstr);
    } else if (Err_Leak == ekind) {
       MC_Error* extra = VG_(get_error_extra)(err);
-      VG_(snprintf)
-         (buf, nBuf-1, "match-leak-kinds: %s",
+      return VG_(snprintf) (buf, nBuf, "match-leak-kinds: %s",
           pp_Reachedness_for_leak_kinds(extra->Err.Leak.lr->key.state));
-      return True;
+   } else if (Err_FishyValue == ekind) {
+      MC_Error* extra = VG_(get_error_extra)(err);
+      return VG_(snprintf) (buf, nBuf, "%s(%s)",
+                            extra->Err.FishyValue.function_name,
+                            extra->Err.FishyValue.argument_name);
    } else {
-      return False;
+      buf[0] = '\0';
+      return 0;
    }
 }
 
-Bool MC_(print_extra_suppression_use) ( Supp *su,
-                                        /*OUT*/HChar *buf, Int nBuf )
+SizeT MC_(print_extra_suppression_use) ( Supp *su,
+                                         /*OUT*/HChar *buf, Int nBuf )
 {
+   tl_assert(nBuf >= 1);
+
    if (VG_(get_supp_kind)(su) == LeakSupp) {
       MC_LeakSuppExtra *lse = (MC_LeakSuppExtra*) VG_(get_supp_extra) (su);
 
       if (lse->leak_search_gen == MC_(leak_search_gen)
           && lse->blocks_suppressed > 0) {
-         VG_(snprintf) (buf, nBuf-1, 
-                        "suppressed: %'lu bytes in %'lu blocks",
-                        lse->bytes_suppressed,
-                        lse->blocks_suppressed);
-         return True;
-      } else
-         return False;
-   } else
-      return False;
+         return VG_(snprintf) (buf, nBuf,
+                               "suppressed: %'lu bytes in %'lu blocks",
+                               lse->bytes_suppressed,
+                               lse->blocks_suppressed);
+      }
+   }
+
+   buf[0] = '\0';
+   return 0;
 }
 
 void MC_(update_extra_suppression_use) ( Error* err, Supp* su)
@@ -1430,7 +1564,7 @@ void MC_(update_extra_suppression_use) ( Error* err, Supp* su)
       MC_LeakSuppExtra *lse = (MC_LeakSuppExtra*) VG_(get_supp_extra) (su);
       MC_Error* extra = VG_(get_error_extra)(err);
 
-      tl_assert (lse->leak_search_gen = MC_(leak_search_gen));
+      tl_assert (lse->leak_search_gen == MC_(leak_search_gen));
       lse->blocks_suppressed += extra->Err.Leak.lr->num_blocks;
       lse->bytes_suppressed 
          += extra->Err.Leak.lr->szB + extra->Err.Leak.lr->indirect_szB;

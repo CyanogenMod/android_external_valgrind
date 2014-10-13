@@ -493,9 +493,9 @@ static void set_CEnt ( DiImage* img, UInt entNo, DiOffT off )
       // Tell the lib the max number of output bytes it can write.
       // After the call, this holds the number of bytes actually written,
       // and it's an error if it is different.
-      UInt out_len = len;
+      lzo_uint out_len = len;
       Int lzo_rc = lzo1x_decompress_safe(rx_data, rx_zdata_len,
-                                         &ce->data[0], (lzo_uint*)&out_len,
+                                         &ce->data[0], &out_len,
                                          NULL);
       Bool ok = lzo_rc == LZO_E_OK && out_len == len;
       if (!ok) goto server_fail;
@@ -571,7 +571,7 @@ static UChar get_slowcase ( DiImage* img, DiOffT off )
 }
 
 // This is called a lot, so do the usual fast/slow split stuff on it. */
-static UChar get ( DiImage* img, DiOffT off )
+static inline UChar get ( DiImage* img, DiOffT off )
 {
    /* Most likely case is, it's in the ces[0] position. */
    /* ML_(img_from_local_file) requests a read for ces[0] when
@@ -718,7 +718,7 @@ DiImage* ML_(img_from_di_server)(const HChar* filename,
    return img;
 
   fail:
-   if (req) free_Frame(req);
+   free_Frame(req);
    if (res) {
       UChar* reason = NULL;
       if (parse_Frame_asciiz(res, "FAIL", &reason)) {
@@ -877,7 +877,7 @@ Int ML_(img_strcmp_c)(DiImage* img, DiOffT off1, const HChar* str2)
    ensure_valid(img, off1, 1, "ML_(img_strcmp_c)");
    while (True) {
       UChar c1 = get(img, off1);
-      UChar c2 = *(UChar*)str2;
+      UChar c2 = *(const UChar*)str2;
       if (c1 < c2) return -1;
       if (c1 > c2) return 1;
       if (c1 == 0) return 0;
@@ -1006,8 +1006,8 @@ UInt ML_(img_calc_gnu_debuglink_crc32)(DiImage* img)
       ULong crc32 = 0;
       if (!parse_Frame_le64(res, "CROK", &crc32)) goto remote_crc_fail;
       if ((crc32 & ~0xFFFFFFFFULL) != 0) goto remote_crc_fail;
-      if (req) free_Frame(req);
-      if (res) free_Frame(res);
+      free_Frame(req);
+      free_Frame(res);
       return (UInt)crc32;
      remote_crc_fail:
 

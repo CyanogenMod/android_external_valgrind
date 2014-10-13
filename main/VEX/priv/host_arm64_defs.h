@@ -35,14 +35,12 @@
 #include "libvex.h"                      // VexArch
 #include "host_generic_regs.h"           // HReg
 
-//ZZ extern UInt arm_hwcaps;
-
 
 /* --------- Registers. --------- */
 
-//ZZ /* The usual HReg abstraction.
-//ZZ    There are 16 general purpose regs.
-//ZZ */
+/* The usual HReg abstraction.
+    There are 31 general purpose regs.
+*/
 
 extern void ppHRegARM64 ( HReg );
 
@@ -54,7 +52,7 @@ extern HReg hregARM64_X4  ( void );
 extern HReg hregARM64_X5  ( void );
 extern HReg hregARM64_X6  ( void );
 extern HReg hregARM64_X7  ( void );
-//ZZ extern HReg hregARM_R8  ( void );
+extern HReg hregARM64_X8  ( void );
 extern HReg hregARM64_X9  ( void );
 extern HReg hregARM64_X10 ( void );
 extern HReg hregARM64_X11 ( void );
@@ -79,6 +77,8 @@ extern HReg hregARM64_D13 ( void );
 extern HReg hregARM64_Q16 ( void );
 extern HReg hregARM64_Q17 ( void );
 extern HReg hregARM64_Q18 ( void );
+extern HReg hregARM64_Q19 ( void );
+extern HReg hregARM64_Q20 ( void );
 
 /* Number of registers used arg passing in function calls */
 #define ARM64_N_ARGREGS 8   /* x0 .. x7 */
@@ -307,247 +307,150 @@ typedef
 
 typedef
    enum {
-      ARM64vecb_ADD64x2=120,
-      ARM64vecb_ADD32x4,
-      ARM64vecb_ADD16x8,
-      ARM64vecb_ADD8x16,
-      ARM64vecb_SUB64x2,
-      ARM64vecb_SUB32x4,
-      ARM64vecb_SUB16x8,
-      ARM64vecb_SUB8x16,
-      ARM64vecb_MUL32x4,
-      ARM64vecb_MUL16x8,
-      ARM64vecb_MUL8x16,
-      ARM64vecb_FADD64x2,
-      ARM64vecb_FSUB64x2,
-      ARM64vecb_FMUL64x2,
-      ARM64vecb_FDIV64x2,
-      ARM64vecb_FADD32x4,
-      ARM64vecb_FSUB32x4,
-      ARM64vecb_FMUL32x4,
-      ARM64vecb_FDIV32x4,
-      ARM64vecb_UMAX32x4,
-      ARM64vecb_UMAX16x8,
-      ARM64vecb_UMAX8x16,
-      ARM64vecb_UMIN32x4,
-      ARM64vecb_UMIN16x8,
-      ARM64vecb_UMIN8x16,
-      ARM64vecb_UMULL32x2,
-      ARM64vecb_UMULL16x4,
-      ARM64vecb_UMULL8x8,
-      ARM64vecb_SMAX32x4,
-      ARM64vecb_SMAX16x8,
-      ARM64vecb_SMAX8x16,
-      ARM64vecb_SMIN32x4,
-      ARM64vecb_SMIN16x8,
-      ARM64vecb_SMIN8x16,
+      ARM64vecb_ADD64x2=120, ARM64vecb_ADD32x4,
+      ARM64vecb_ADD16x8,     ARM64vecb_ADD8x16,
+      ARM64vecb_SUB64x2,     ARM64vecb_SUB32x4,
+      ARM64vecb_SUB16x8,     ARM64vecb_SUB8x16,
+                             ARM64vecb_MUL32x4,
+      ARM64vecb_MUL16x8,     ARM64vecb_MUL8x16,
+      ARM64vecb_FADD64x2,    ARM64vecb_FADD32x4,
+      ARM64vecb_FSUB64x2,    ARM64vecb_FSUB32x4,
+      ARM64vecb_FMUL64x2,    ARM64vecb_FMUL32x4,
+      ARM64vecb_FDIV64x2,    ARM64vecb_FDIV32x4,
+                             ARM64vecb_UMAX32x4,
+      ARM64vecb_UMAX16x8,    ARM64vecb_UMAX8x16,
+                             ARM64vecb_UMIN32x4,
+      ARM64vecb_UMIN16x8,    ARM64vecb_UMIN8x16,
+                             ARM64vecb_SMAX32x4,
+      ARM64vecb_SMAX16x8,    ARM64vecb_SMAX8x16,
+                             ARM64vecb_SMIN32x4,
+      ARM64vecb_SMIN16x8,    ARM64vecb_SMIN8x16,
       ARM64vecb_AND,
       ARM64vecb_ORR,
       ARM64vecb_XOR,
-      ARM64vecb_CMEQ64x2,
-      ARM64vecb_CMEQ32x4,
-      ARM64vecb_CMEQ16x8,
-      ARM64vecb_CMEQ8x16,
-      ARM64vecb_CMHI64x2, /* >u */
-      ARM64vecb_CMHI32x4,
-      ARM64vecb_CMHI16x8,
-      ARM64vecb_CMHI8x16,
-      ARM64vecb_CMGT64x2, /* >s */
-      ARM64vecb_CMGT32x4,
-      ARM64vecb_CMGT16x8,
-      ARM64vecb_CMGT8x16,
-      ARM64vecb_FCMEQ64x2,
-      ARM64vecb_FCMEQ32x4,
-      ARM64vecb_FCMGE64x2,
-      ARM64vecb_FCMGE32x4,
-      ARM64vecb_FCMGT64x2,
-      ARM64vecb_FCMGT32x4,
+      ARM64vecb_CMEQ64x2,    ARM64vecb_CMEQ32x4,
+      ARM64vecb_CMEQ16x8,    ARM64vecb_CMEQ8x16,
+      ARM64vecb_CMHI64x2,    ARM64vecb_CMHI32x4, /* >u */
+      ARM64vecb_CMHI16x8,    ARM64vecb_CMHI8x16,
+      ARM64vecb_CMGT64x2,    ARM64vecb_CMGT32x4, /* >s */
+      ARM64vecb_CMGT16x8,    ARM64vecb_CMGT8x16,
+      ARM64vecb_FCMEQ64x2,   ARM64vecb_FCMEQ32x4,
+      ARM64vecb_FCMGE64x2,   ARM64vecb_FCMGE32x4,
+      ARM64vecb_FCMGT64x2,   ARM64vecb_FCMGT32x4,
       ARM64vecb_TBL1,
+      ARM64vecb_UZP164x2,    ARM64vecb_UZP132x4,
+      ARM64vecb_UZP116x8,    ARM64vecb_UZP18x16,
+      ARM64vecb_UZP264x2,    ARM64vecb_UZP232x4,
+      ARM64vecb_UZP216x8,    ARM64vecb_UZP28x16,
+      ARM64vecb_ZIP132x4,    ARM64vecb_ZIP116x8,
+      ARM64vecb_ZIP18x16,    ARM64vecb_ZIP232x4,
+      ARM64vecb_ZIP216x8,    ARM64vecb_ZIP28x16,
+                             ARM64vecb_PMUL8x16,
+                             ARM64vecb_PMULL8x8,
+                             ARM64vecb_UMULL2DSS,
+      ARM64vecb_UMULL4SHH,   ARM64vecb_UMULL8HBB,
+                             ARM64vecb_SMULL2DSS,
+      ARM64vecb_SMULL4SHH,   ARM64vecb_SMULL8HBB,
+      ARM64vecb_SQADD64x2,   ARM64vecb_SQADD32x4,
+      ARM64vecb_SQADD16x8,   ARM64vecb_SQADD8x16,
+      ARM64vecb_UQADD64x2,   ARM64vecb_UQADD32x4,
+      ARM64vecb_UQADD16x8,   ARM64vecb_UQADD8x16,
+      ARM64vecb_SQSUB64x2,   ARM64vecb_SQSUB32x4,
+      ARM64vecb_SQSUB16x8,   ARM64vecb_SQSUB8x16,
+      ARM64vecb_UQSUB64x2,   ARM64vecb_UQSUB32x4,
+      ARM64vecb_UQSUB16x8,   ARM64vecb_UQSUB8x16,
+                             ARM64vecb_SQDMULL2DSS,
+      ARM64vecb_SQDMULL4SHH,
+                             ARM64vecb_SQDMULH32x4,
+      ARM64vecb_SQDMULH16x8,
+                             ARM64vecb_SQRDMULH32x4,
+      ARM64vecb_SQRDMULH16x8,
+      ARM64vecb_SQSHL64x2,   ARM64vecb_SQSHL32x4,
+      ARM64vecb_SQSHL16x8,   ARM64vecb_SQSHL8x16,
+      ARM64vecb_UQSHL64x2,   ARM64vecb_UQSHL32x4,
+      ARM64vecb_UQSHL16x8,   ARM64vecb_UQSHL8x16,
+      ARM64vecb_SQRSHL64x2,  ARM64vecb_SQRSHL32x4,
+      ARM64vecb_SQRSHL16x8,  ARM64vecb_SQRSHL8x16,
+      ARM64vecb_UQRSHL64x2,  ARM64vecb_UQRSHL32x4,
+      ARM64vecb_UQRSHL16x8,  ARM64vecb_UQRSHL8x16,
+      ARM64vecb_SSHL64x2,    ARM64vecb_SSHL32x4,
+      ARM64vecb_SSHL16x8,    ARM64vecb_SSHL8x16, 
+      ARM64vecb_USHL64x2,    ARM64vecb_USHL32x4,
+      ARM64vecb_USHL16x8,    ARM64vecb_USHL8x16, 
+      ARM64vecb_SRSHL64x2,   ARM64vecb_SRSHL32x4,
+      ARM64vecb_SRSHL16x8,   ARM64vecb_SRSHL8x16, 
+      ARM64vecb_URSHL64x2,   ARM64vecb_URSHL32x4,
+      ARM64vecb_URSHL16x8,   ARM64vecb_URSHL8x16, 
       ARM64vecb_INVALID
    }
    ARM64VecBinOp;
 
 typedef
    enum {
-      ARM64vecu_FNEG64x2=300,
-      ARM64vecu_FNEG32x4,
-      ARM64vecu_FABS64x2,
-      ARM64vecu_FABS32x4,
-      ARM64vecu_VMOVL8U,
-      ARM64vecu_VMOVL16U,
-      ARM64vecu_VMOVL32U,
-      ARM64vecu_VMOVL8S,
-      ARM64vecu_VMOVL16S,
-      ARM64vecu_VMOVL32S,
+      ARM64vecmo_SUQADD64x2=300, ARM64vecmo_SUQADD32x4,
+      ARM64vecmo_SUQADD16x8,     ARM64vecmo_SUQADD8x16,
+      ARM64vecmo_USQADD64x2,     ARM64vecmo_USQADD32x4,
+      ARM64vecmo_USQADD16x8,     ARM64vecmo_USQADD8x16,
+      ARM64vecmo_INVALID
+   }
+   ARM64VecModifyOp;
+
+typedef
+   enum {
+      ARM64vecu_FNEG64x2=350, ARM64vecu_FNEG32x4,
+      ARM64vecu_FABS64x2,     ARM64vecu_FABS32x4,
       ARM64vecu_NOT,
-      ARM64vecu_CNT,
-      ARM64vecu_UADDLV8x16,
-      ARM64vecu_UADDLV16x8,
-      ARM64vecu_UADDLV32x4,
-      ARM64vecu_SADDLV8x16,
-      ARM64vecu_SADDLV16x8,
-      ARM64vecu_SADDLV32x4,
+      ARM64vecu_ABS64x2,      ARM64vecu_ABS32x4,
+      ARM64vecu_ABS16x8,      ARM64vecu_ABS8x16,
+      ARM64vecu_CLS32x4,      ARM64vecu_CLS16x8,      ARM64vecu_CLS8x16, 
+      ARM64vecu_CLZ32x4,      ARM64vecu_CLZ16x8,      ARM64vecu_CLZ8x16, 
+      ARM64vecu_CNT8x16,
+      ARM64vecu_RBIT,
+      ARM64vecu_REV1616B,
+      ARM64vecu_REV3216B,     ARM64vecu_REV328H,
+      ARM64vecu_REV6416B,     ARM64vecu_REV648H,      ARM64vecu_REV644S,
+      ARM64vecu_URECPE32x4,
+      ARM64vecu_URSQRTE32x4,
       ARM64vecu_INVALID
    }
    ARM64VecUnaryOp;
 
 typedef
    enum {
-      ARM64vecsh_USHR64x2=350,
-      ARM64vecsh_USHR32x4,
-      ARM64vecsh_USHR16x8,
-      ARM64vecsh_USHR8x16,
-      ARM64vecsh_SSHR64x2,
-      ARM64vecsh_SSHR32x4,
-      ARM64vecsh_SSHR16x8,
-      ARM64vecsh_SSHR8x16,
-      ARM64vecsh_SHL64x2,
-      ARM64vecsh_SHL32x4,
-      ARM64vecsh_SHL16x8,
-      ARM64vecsh_SHL8x16,
-      ARM64vecsh_INVALID
+      ARM64vecshi_USHR64x2=400, ARM64vecshi_USHR32x4,
+      ARM64vecshi_USHR16x8,     ARM64vecshi_USHR8x16,
+      ARM64vecshi_SSHR64x2,     ARM64vecshi_SSHR32x4,
+      ARM64vecshi_SSHR16x8,     ARM64vecshi_SSHR8x16,
+      ARM64vecshi_SHL64x2,      ARM64vecshi_SHL32x4,
+      ARM64vecshi_SHL16x8,      ARM64vecshi_SHL8x16,
+      /* These narrowing shifts zero out the top half of the destination
+         register. */
+      ARM64vecshi_SQSHRN2SD,    ARM64vecshi_SQSHRN4HS,   ARM64vecshi_SQSHRN8BH,
+      ARM64vecshi_UQSHRN2SD,    ARM64vecshi_UQSHRN4HS,   ARM64vecshi_UQSHRN8BH,
+      ARM64vecshi_SQSHRUN2SD,   ARM64vecshi_SQSHRUN4HS,  ARM64vecshi_SQSHRUN8BH,
+      ARM64vecshi_SQRSHRN2SD,   ARM64vecshi_SQRSHRN4HS,  ARM64vecshi_SQRSHRN8BH,
+      ARM64vecshi_UQRSHRN2SD,   ARM64vecshi_UQRSHRN4HS,  ARM64vecshi_UQRSHRN8BH,
+      ARM64vecshi_SQRSHRUN2SD,  ARM64vecshi_SQRSHRUN4HS, ARM64vecshi_SQRSHRUN8BH,
+      /* Saturating left shifts, of various flavours. */
+      ARM64vecshi_UQSHL64x2,    ARM64vecshi_UQSHL32x4,
+      ARM64vecshi_UQSHL16x8,    ARM64vecshi_UQSHL8x16, 
+      ARM64vecshi_SQSHL64x2,    ARM64vecshi_SQSHL32x4,
+      ARM64vecshi_SQSHL16x8,    ARM64vecshi_SQSHL8x16, 
+      ARM64vecshi_SQSHLU64x2,   ARM64vecshi_SQSHLU32x4,
+      ARM64vecshi_SQSHLU16x8,   ARM64vecshi_SQSHLU8x16, 
+      ARM64vecshi_INVALID
    }
-   ARM64VecShiftOp;
+   ARM64VecShiftImmOp;
 
-//ZZ extern const HChar* showARMVfpUnaryOp ( ARMVfpUnaryOp op );
-//ZZ 
-//ZZ typedef
-//ZZ    enum {
-//ZZ       ARMneon_VAND=90,
-//ZZ       ARMneon_VORR,
-//ZZ       ARMneon_VXOR,
-//ZZ       ARMneon_VADD,
-//ZZ       ARMneon_VADDFP,
-//ZZ       ARMneon_VRHADDS,
-//ZZ       ARMneon_VRHADDU,
-//ZZ       ARMneon_VPADDFP,
-//ZZ       ARMneon_VABDFP,
-//ZZ       ARMneon_VSUB,
-//ZZ       ARMneon_VSUBFP,
-//ZZ       ARMneon_VMAXU,
-//ZZ       ARMneon_VMAXS,
-//ZZ       ARMneon_VMAXF,
-//ZZ       ARMneon_VMINU,
-//ZZ       ARMneon_VMINS,
-//ZZ       ARMneon_VMINF,
-//ZZ       ARMneon_VQADDU,
-//ZZ       ARMneon_VQADDS,
-//ZZ       ARMneon_VQSUBU,
-//ZZ       ARMneon_VQSUBS,
-//ZZ       ARMneon_VCGTU,
-//ZZ       ARMneon_VCGTS,
-//ZZ       ARMneon_VCGEU,
-//ZZ       ARMneon_VCGES,
-//ZZ       ARMneon_VCGTF,
-//ZZ       ARMneon_VCGEF,
-//ZZ       ARMneon_VCEQ,
-//ZZ       ARMneon_VCEQF,
-//ZZ       ARMneon_VEXT,
-//ZZ       ARMneon_VMUL,
-//ZZ       ARMneon_VMULFP,
-//ZZ       ARMneon_VMULLU,
-//ZZ       ARMneon_VMULLS,
-//ZZ       ARMneon_VMULP,
-//ZZ       ARMneon_VMULLP,
-//ZZ       ARMneon_VQDMULH,
-//ZZ       ARMneon_VQRDMULH,
-//ZZ       ARMneon_VPADD,
-//ZZ       ARMneon_VPMINU,
-//ZZ       ARMneon_VPMINS,
-//ZZ       ARMneon_VPMINF,
-//ZZ       ARMneon_VPMAXU,
-//ZZ       ARMneon_VPMAXS,
-//ZZ       ARMneon_VPMAXF,
-//ZZ       ARMneon_VTBL,
-//ZZ       ARMneon_VQDMULL,
-//ZZ       ARMneon_VRECPS,
-//ZZ       ARMneon_VRSQRTS,
-//ZZ       /* ... */
-//ZZ    }
-//ZZ    ARMNeonBinOp;
-//ZZ 
-//ZZ typedef
-//ZZ    enum {
-//ZZ       ARMneon_VSHL=150,
-//ZZ       ARMneon_VSAL, /* Yah, not SAR but SAL */
-//ZZ       ARMneon_VQSHL,
-//ZZ       ARMneon_VQSAL
-//ZZ    }
-//ZZ    ARMNeonShiftOp;
-//ZZ 
-//ZZ typedef
-//ZZ    enum {
-//ZZ       ARMneon_COPY=160,
-//ZZ       ARMneon_COPYLU,
-//ZZ       ARMneon_COPYLS,
-//ZZ       ARMneon_COPYN,
-//ZZ       ARMneon_COPYQNSS,
-//ZZ       ARMneon_COPYQNUS,
-//ZZ       ARMneon_COPYQNUU,
-//ZZ       ARMneon_NOT,
-//ZZ       ARMneon_EQZ,
-//ZZ       ARMneon_DUP,
-//ZZ       ARMneon_PADDLS,
-//ZZ       ARMneon_PADDLU,
-//ZZ       ARMneon_CNT,
-//ZZ       ARMneon_CLZ,
-//ZZ       ARMneon_CLS,
-//ZZ       ARMneon_VCVTxFPxINT,
-//ZZ       ARMneon_VQSHLNSS,
-//ZZ       ARMneon_VQSHLNUU,
-//ZZ       ARMneon_VQSHLNUS,
-//ZZ       ARMneon_VCVTFtoU,
-//ZZ       ARMneon_VCVTFtoS,
-//ZZ       ARMneon_VCVTUtoF,
-//ZZ       ARMneon_VCVTStoF,
-//ZZ       ARMneon_VCVTFtoFixedU,
-//ZZ       ARMneon_VCVTFtoFixedS,
-//ZZ       ARMneon_VCVTFixedUtoF,
-//ZZ       ARMneon_VCVTFixedStoF,
-//ZZ       ARMneon_VCVTF16toF32,
-//ZZ       ARMneon_VCVTF32toF16,
-//ZZ       ARMneon_REV16,
-//ZZ       ARMneon_REV32,
-//ZZ       ARMneon_REV64,
-//ZZ       ARMneon_ABS,
-//ZZ       ARMneon_VNEGF,
-//ZZ       ARMneon_VRECIP,
-//ZZ       ARMneon_VRECIPF,
-//ZZ       ARMneon_VABSFP,
-//ZZ       ARMneon_VRSQRTEFP,
-//ZZ       ARMneon_VRSQRTE
-//ZZ       /* ... */
-//ZZ    }
-//ZZ    ARMNeonUnOp;
-//ZZ 
-//ZZ typedef
-//ZZ    enum {
-//ZZ       ARMneon_SETELEM=200,
-//ZZ       ARMneon_GETELEMU,
-//ZZ       ARMneon_GETELEMS,
-//ZZ       ARMneon_VDUP,
-//ZZ    }
-//ZZ    ARMNeonUnOpS;
-//ZZ 
-//ZZ typedef
-//ZZ    enum {
-//ZZ       ARMneon_TRN=210,
-//ZZ       ARMneon_ZIP,
-//ZZ       ARMneon_UZP
-//ZZ       /* ... */
-//ZZ    }
-//ZZ    ARMNeonDualOp;
-//ZZ 
-//ZZ extern const HChar* showARMNeonBinOp ( ARMNeonBinOp op );
-//ZZ extern const HChar* showARMNeonUnOp ( ARMNeonUnOp op );
-//ZZ extern const HChar* showARMNeonUnOpS ( ARMNeonUnOpS op );
-//ZZ extern const HChar* showARMNeonShiftOp ( ARMNeonShiftOp op );
-//ZZ extern const HChar* showARMNeonDualOp ( ARMNeonDualOp op );
-//ZZ extern const HChar* showARMNeonBinOpDataType ( ARMNeonBinOp op );
-//ZZ extern const HChar* showARMNeonUnOpDataType ( ARMNeonUnOp op );
-//ZZ extern const HChar* showARMNeonUnOpSDataType ( ARMNeonUnOpS op );
-//ZZ extern const HChar* showARMNeonShiftOpDataType ( ARMNeonShiftOp op );
-//ZZ extern const HChar* showARMNeonDualOpDataType ( ARMNeonDualOp op );
+typedef
+   enum {
+      ARM64vecna_XTN=450,
+      ARM64vecna_SQXTN,
+      ARM64vecna_UQXTN,
+      ARM64vecna_SQXTUN,
+      ARM64vecna_INVALID
+   }
+   ARM64VecNarrowOp;
 
 typedef
    enum {
@@ -575,7 +478,6 @@ typedef
       ARM64in_LdrEX,
       ARM64in_StrEX,
       ARM64in_MFence,
-//ZZ       ARMin_CLREX,
       /* ARM64in_V*: scalar ops involving vector registers */
       ARM64in_VLdStS,   /* 32-bit FP load/store, with imm offset  */
       ARM64in_VLdStD,   /* 64-bit FP load/store, with imm offset  */
@@ -590,34 +492,24 @@ typedef
       ARM64in_VCmpD,
       ARM64in_VCmpS,
       ARM64in_FPCR,
+      ARM64in_FPSR,
       /* ARM64in_V*V: vector ops on vector registers */
       ARM64in_VBinV,
+      ARM64in_VModifyV,
       ARM64in_VUnaryV,
       ARM64in_VNarrowV,
       ARM64in_VShiftImmV,
-//ZZ       ARMin_VAluS,
-//ZZ       ARMin_VCMovD,
-//ZZ       ARMin_VCMovS,
-//ZZ       ARMin_VXferD,
-//ZZ       ARMin_VXferS,
-//ZZ       ARMin_VCvtID,
-//ZZ       /* Neon */
-//ZZ       ARMin_NLdStD,
-//ZZ       ARMin_NUnary,
-//ZZ       ARMin_NUnaryS,
-//ZZ       ARMin_NDual,
-//ZZ       ARMin_NBinary,
-//ZZ       ARMin_NBinaryS,
-//ZZ       ARMin_NShift,
-//ZZ       ARMin_NShl64, // special case 64-bit shift of Dreg by immediate
+      ARM64in_VExtV,
       ARM64in_VImmQ,
       ARM64in_VDfromX,    /* Move an Xreg to a Dreg */
+      ARM64in_VQfromX,    /* Move an Xreg to a Qreg lo64, and zero hi64 */
       ARM64in_VQfromXX,   /* Move 2 Xregs to a Qreg */
       ARM64in_VXfromQ,    /* Move half a Qreg to an Xreg */
+      ARM64in_VXfromDorS, /* Move Dreg or Sreg(ZX) to an Xreg */
       ARM64in_VMov,       /* vector reg-reg move, 16, 8 or 4 bytes */
       /* infrastructure */
-      ARM64in_EvCheck,     /* Event check */
-//ZZ       ARMin_ProfInc      /* 64-bit profile counter increment */
+      ARM64in_EvCheck,    /* Event check */
+      ARM64in_ProfInc     /* 64-bit profile counter increment */
    }
    ARM64InstrTag;
 
@@ -773,9 +665,6 @@ typedef
             total nuclear overkill, but better safe than sorry. */
          struct {
          } MFence;
-//ZZ          /* A CLREX instruction. */
-//ZZ          struct {
-//ZZ          } CLREX;
          /* --- INSTRUCTIONS INVOLVING VECTOR REGISTERS --- */
          /* 32-bit Fp load/store */
          struct {
@@ -859,6 +748,11 @@ typedef
             Bool toFPCR;
             HReg iReg;
          } FPCR;
+         /* Move a 32-bit value to/from the FPSR */
+         struct {
+            Bool toFPSR;
+            HReg iReg;
+         } FPSR;
          /* binary vector operation on vector registers */
          struct {
             ARM64VecBinOp op;
@@ -866,6 +760,13 @@ typedef
             HReg          argL;
             HReg          argR;
          } VBinV;
+         /* binary vector operation on vector registers.
+            Dst reg is also a src. */
+         struct {
+            ARM64VecModifyOp op;
+            HReg             mod;
+            HReg             arg;
+         } VModifyV;
          /* unary vector operation on vector registers */
          struct {
             ARM64VecUnaryOp op;
@@ -873,121 +774,30 @@ typedef
             HReg            arg;
          } VUnaryV;
          /* vector narrowing, Q -> Q.  Result goes in the bottom half
-            of dst and the top half is zeroed out.  Iow is XTN. */
+            of dst and the top half is zeroed out.  Iow one of the
+            XTN family. */
         struct {
-           UInt dszBlg2; // 0: 16to8_x8  1: 32to16_x4  2: 64to32_x2
-           HReg dst;     // Q reg
-           HReg src;     // Q reg
+           ARM64VecNarrowOp op;
+           UInt             dszBlg2; // 0: 16to8_x8  1: 32to16_x4  2: 64to32_x2
+           HReg             dst;     // Q reg
+           HReg             src;     // Q reg
         } VNarrowV;
-        /* Vector shift by immediate.  |amt| needs to be > 0 and <
-           implied lane size of |op|.  Zero shifts and out of range
-           shifts are not allowed. */
+        /* Vector shift by immediate.  For left shifts, |amt| must be
+           >= 0 and < implied lane size of |op|.  For right shifts,
+           |amt| must be > 0 and <= implied lane size of |op|.  Shifts
+           beyond these ranges are not allowed. */
         struct {
-           ARM64VecShiftOp op;
-           HReg            dst;
-           HReg            src;
-           UInt            amt;
+           ARM64VecShiftImmOp op;
+           HReg               dst;
+           HReg               src;
+           UInt               amt;
         } VShiftImmV;
-//ZZ          /* 32-bit FP binary arithmetic */
-//ZZ          struct {
-//ZZ             ARMVfpOp op;
-//ZZ             HReg     dst;
-//ZZ             HReg     argL;
-//ZZ             HReg     argR;
-//ZZ          } VAluS;
-//ZZ          /* 64-bit FP mov src to dst on the given condition, which may
-//ZZ             not be ARMcc_AL. */
-//ZZ          struct {
-//ZZ             ARMCondCode cond;
-//ZZ             HReg        dst;
-//ZZ             HReg        src;
-//ZZ          } VCMovD;
-//ZZ          /* 32-bit FP mov src to dst on the given condition, which may
-//ZZ             not be ARMcc_AL. */
-//ZZ          struct {
-//ZZ             ARMCondCode cond;
-//ZZ             HReg        dst;
-//ZZ             HReg        src;
-//ZZ          } VCMovS;
-//ZZ          /* Transfer a VFP D reg to/from two integer registers (VMOV) */
-//ZZ          struct {
-//ZZ             Bool toD;
-//ZZ             HReg dD;
-//ZZ             HReg rHi;
-//ZZ             HReg rLo;
-//ZZ          } VXferD;
-//ZZ          /* Transfer a VFP S reg to/from an integer register (VMOV) */
-//ZZ          struct {
-//ZZ             Bool toS;
-//ZZ             HReg fD;
-//ZZ             HReg rLo;
-//ZZ          } VXferS;
-//ZZ          /* Convert between 32-bit ints and 64-bit FP values (both ways
-//ZZ             and both signednesses). (FSITOD, FUITOD, FTOSID, FTOUID) */
-//ZZ          struct {
-//ZZ             Bool iToD; /* True: I32->F64.  False: F64->I32 */
-//ZZ             Bool syned; /* True: I32 is signed.  False: I32 is unsigned */
-//ZZ             HReg dst;
-//ZZ             HReg src;
-//ZZ          } VCvtID;
-//ZZ          /* Neon data processing instruction: 3 registers of the same
-//ZZ             length */
-//ZZ          struct {
-//ZZ             ARMNeonBinOp op;
-//ZZ             HReg dst;
-//ZZ             HReg argL;
-//ZZ             HReg argR;
-//ZZ             UInt size;
-//ZZ             Bool Q;
-//ZZ          } NBinary;
-//ZZ          struct {
-//ZZ             ARMNeonBinOp op;
-//ZZ             ARMNRS* dst;
-//ZZ             ARMNRS* argL;
-//ZZ             ARMNRS* argR;
-//ZZ             UInt size;
-//ZZ             Bool Q;
-//ZZ          } NBinaryS;
-//ZZ          struct {
-//ZZ             ARMNeonShiftOp op;
-//ZZ             HReg dst;
-//ZZ             HReg argL;
-//ZZ             HReg argR;
-//ZZ             UInt size;
-//ZZ             Bool Q;
-//ZZ          } NShift;
-//ZZ          struct {
-//ZZ             HReg dst;
-//ZZ             HReg src;
-//ZZ             UInt amt; /* 1..63 only */
-//ZZ          } NShl64;
-//ZZ          struct {
-//ZZ             Bool isLoad;
-//ZZ             HReg dD;
-//ZZ             ARMAModeN *amode;
-//ZZ          } NLdStD
-//ZZ          struct {
-//ZZ             ARMNeonUnOpS op;
-//ZZ             ARMNRS*  dst;
-//ZZ             ARMNRS*  src;
-//ZZ             UInt size;
-//ZZ             Bool Q;
-//ZZ          } NUnaryS;
-//ZZ          struct {
-//ZZ             ARMNeonUnOp op;
-//ZZ             HReg  dst;
-//ZZ             HReg  src;
-//ZZ             UInt size;
-//ZZ             Bool Q;
-//ZZ          } NUnary;
-//ZZ          /* Takes two arguments and modifies them both. */
-//ZZ          struct {
-//ZZ             ARMNeonDualOp op;
-//ZZ             HReg  arg1;
-//ZZ             HReg  arg2;
-//ZZ             UInt size;
-//ZZ             Bool Q;
-//ZZ          } NDual;
+        struct {
+           HReg dst;
+           HReg srcLo;
+           HReg srcHi;
+           UInt amtB;
+        } VExtV;
          struct {
             HReg   rQ;
             UShort imm; /* Same 1-bit-per-byte encoding as IR */
@@ -998,6 +808,10 @@ typedef
          } VDfromX;
          struct {
             HReg rQ;
+            HReg rXlo;
+         } VQfromX;
+         struct {
+            HReg rQ;
             HReg rXhi;
             HReg rXlo;
          } VQfromXX;
@@ -1006,6 +820,11 @@ typedef
             HReg rQ;
             UInt laneNo; /* either 0 or 1 */
          } VXfromQ;
+         struct {
+            HReg rX;
+            HReg rDorS;
+            Bool fromD;
+         } VXfromDorS;
          /* MOV dst, src -- reg-reg move for vector registers */
          struct {
             UInt szB; // 16=mov qD,qS;  8=mov dD,dS;  4=mov sD,sS
@@ -1016,30 +835,28 @@ typedef
             ARM64AMode* amCounter;
             ARM64AMode* amFailAddr;
          } EvCheck;
-//ZZ          struct {
-//ZZ             /* No fields.  The address of the counter to inc is
-//ZZ                installed later, post-translation, by patching it in,
-//ZZ                as it is not known at translation time. */
-//ZZ          } ProfInc;
+         struct {
+            /* No fields.  The address of the counter to inc is
+               installed later, post-translation, by patching it in,
+               as it is not known at translation time. */
+         } ProfInc;
       } ARM64in;
    }
    ARM64Instr;
 
-//ZZ 
+
 extern ARM64Instr* ARM64Instr_Arith   ( HReg, HReg, ARM64RIA*, Bool isAdd );
 extern ARM64Instr* ARM64Instr_Cmp     ( HReg, ARM64RIA*, Bool is64 );
 extern ARM64Instr* ARM64Instr_Logic   ( HReg, HReg, ARM64RIL*, ARM64LogicOp );
 extern ARM64Instr* ARM64Instr_Test    ( HReg, ARM64RIL* );
 extern ARM64Instr* ARM64Instr_Shift   ( HReg, HReg, ARM64RI6*, ARM64ShiftOp );
 extern ARM64Instr* ARM64Instr_Unary   ( HReg, HReg, ARM64UnaryOp );
-//ZZ extern ARMInstr* ARMInstr_CmpOrTst ( Bool isCmp, HReg, ARMRI84* );
 extern ARM64Instr* ARM64Instr_MovI    ( HReg, HReg );
 extern ARM64Instr* ARM64Instr_Imm64   ( HReg, ULong );
 extern ARM64Instr* ARM64Instr_LdSt64  ( Bool isLoad, HReg, ARM64AMode* );
 extern ARM64Instr* ARM64Instr_LdSt32  ( Bool isLoad, HReg, ARM64AMode* );
 extern ARM64Instr* ARM64Instr_LdSt16  ( Bool isLoad, HReg, ARM64AMode* );
 extern ARM64Instr* ARM64Instr_LdSt8   ( Bool isLoad, HReg, ARM64AMode* );
-//ZZ extern ARMInstr* ARMInstr_Ld8S     ( ARMCondCode, HReg, ARMAMode2* );
 extern ARM64Instr* ARM64Instr_XDirect ( Addr64 dstGA, ARM64AMode* amPC,
                                         ARM64CondCode cond, Bool toFastEP );
 extern ARM64Instr* ARM64Instr_XIndir  ( HReg dstGA, ARM64AMode* amPC,
@@ -1057,7 +874,6 @@ extern ARM64Instr* ARM64Instr_Mul     ( HReg dst, HReg argL, HReg argR,
 extern ARM64Instr* ARM64Instr_LdrEX   ( Int szB );
 extern ARM64Instr* ARM64Instr_StrEX   ( Int szB );
 extern ARM64Instr* ARM64Instr_MFence  ( void );
-//ZZ extern ARMInstr* ARMInstr_CLREX    ( void );
 extern ARM64Instr* ARM64Instr_VLdStS  ( Bool isLoad, HReg sD, HReg rN,
                                         UInt uimm12 /* 0 .. 16380, 0 % 4 */ );
 extern ARM64Instr* ARM64Instr_VLdStD  ( Bool isLoad, HReg dD, HReg rN,
@@ -1074,53 +890,44 @@ extern ARM64Instr* ARM64Instr_VBinS   ( ARM64FpBinOp op, HReg, HReg, HReg );
 extern ARM64Instr* ARM64Instr_VCmpD   ( HReg argL, HReg argR );
 extern ARM64Instr* ARM64Instr_VCmpS   ( HReg argL, HReg argR );
 extern ARM64Instr* ARM64Instr_FPCR    ( Bool toFPCR, HReg iReg );
+extern ARM64Instr* ARM64Instr_FPSR    ( Bool toFPSR, HReg iReg );
 extern ARM64Instr* ARM64Instr_VBinV   ( ARM64VecBinOp op, HReg, HReg, HReg );
+extern ARM64Instr* ARM64Instr_VModifyV ( ARM64VecModifyOp, HReg, HReg );
 extern ARM64Instr* ARM64Instr_VUnaryV ( ARM64VecUnaryOp op, HReg, HReg );
-extern ARM64Instr* ARM64Instr_VNarrowV ( UInt dszBlg2, HReg dst, HReg src );
-extern ARM64Instr* ARM64Instr_VShiftImmV ( ARM64VecShiftOp op,
+extern ARM64Instr* ARM64Instr_VNarrowV ( ARM64VecNarrowOp op, UInt dszBlg2,
+                                         HReg dst, HReg src );
+extern ARM64Instr* ARM64Instr_VShiftImmV ( ARM64VecShiftImmOp op,
                                            HReg dst, HReg src, UInt amt );
-//ZZ extern ARMInstr* ARMInstr_VAluS    ( ARMVfpOp op, HReg, HReg, HReg );
-//ZZ extern ARMInstr* ARMInstr_VCMovD   ( ARMCondCode, HReg dst, HReg src );
-//ZZ extern ARMInstr* ARMInstr_VCMovS   ( ARMCondCode, HReg dst, HReg src );
-//ZZ extern ARMInstr* ARMInstr_VXferD   ( Bool toD, HReg dD, HReg rHi, HReg rLo );
-//ZZ extern ARMInstr* ARMInstr_VXferS   ( Bool toS, HReg fD, HReg rLo );
-//ZZ extern ARMInstr* ARMInstr_VCvtID   ( Bool iToD, Bool syned,
-//ZZ                                      HReg dst, HReg src );
-//ZZ extern ARMInstr* ARMInstr_NLdStD   ( Bool isLoad, HReg, ARMAModeN* );
-//ZZ extern ARMInstr* ARMInstr_NUnary   ( ARMNeonUnOp, HReg, HReg, UInt, Bool );
-//ZZ extern ARMInstr* ARMInstr_NUnaryS  ( ARMNeonUnOpS, ARMNRS*, ARMNRS*,
-//ZZ                                      UInt, Bool );
-//ZZ extern ARMInstr* ARMInstr_NDual    ( ARMNeonDualOp, HReg, HReg, UInt, Bool );
-//ZZ extern ARMInstr* ARMInstr_NBinary  ( ARMNeonBinOp, HReg, HReg, HReg,
-//ZZ                                      UInt, Bool );
-//ZZ extern ARMInstr* ARMInstr_NShift   ( ARMNeonShiftOp, HReg, HReg, HReg,
-//ZZ                                      UInt, Bool );
-//ZZ extern ARMInstr* ARMInstr_NShl64   ( HReg, HReg, UInt );
+extern ARM64Instr* ARM64Instr_VExtV   ( HReg dst,
+                                        HReg srcLo, HReg srcHi, UInt amtB );
 extern ARM64Instr* ARM64Instr_VImmQ   ( HReg, UShort );
 extern ARM64Instr* ARM64Instr_VDfromX ( HReg rD, HReg rX );
+extern ARM64Instr* ARM64Instr_VQfromX ( HReg rQ, HReg rXlo );
 extern ARM64Instr* ARM64Instr_VQfromXX( HReg rQ, HReg rXhi, HReg rXlo );
 extern ARM64Instr* ARM64Instr_VXfromQ ( HReg rX, HReg rQ, UInt laneNo );
+extern ARM64Instr* ARM64Instr_VXfromDorS ( HReg rX, HReg rDorS, Bool fromD );
 extern ARM64Instr* ARM64Instr_VMov    ( UInt szB, HReg dst, HReg src );
 
 extern ARM64Instr* ARM64Instr_EvCheck ( ARM64AMode* amCounter,
                                         ARM64AMode* amFailAddr );
-//ZZ extern ARMInstr* ARMInstr_ProfInc  ( void );
+extern ARM64Instr* ARM64Instr_ProfInc ( void );
 
-extern void ppARM64Instr ( ARM64Instr* );
+extern void ppARM64Instr ( const ARM64Instr* );
 
 
 /* Some functions that insulate the register allocator from details
    of the underlying instruction set. */
-extern void getRegUsage_ARM64Instr ( HRegUsage*, ARM64Instr*, Bool );
+extern void getRegUsage_ARM64Instr ( HRegUsage*, const ARM64Instr*, Bool );
 extern void mapRegs_ARM64Instr     ( HRegRemap*, ARM64Instr*, Bool );
-extern Bool isMove_ARM64Instr      ( ARM64Instr*, HReg*, HReg* );
+extern Bool isMove_ARM64Instr      ( const ARM64Instr*, HReg*, HReg* );
 extern Int  emit_ARM64Instr        ( /*MB_MOD*/Bool* is_profInc,
-                                     UChar* buf, Int nbuf, ARM64Instr* i,
+                                     UChar* buf, Int nbuf, const ARM64Instr* i,
                                      Bool mode64,
-                                     void* disp_cp_chain_me_to_slowEP,
-                                     void* disp_cp_chain_me_to_fastEP,
-                                     void* disp_cp_xindir,
-                                     void* disp_cp_xassisted );
+                                     VexEndness endness_host,
+                                     const void* disp_cp_chain_me_to_slowEP,
+                                     const void* disp_cp_chain_me_to_fastEP,
+                                     const void* disp_cp_xindir,
+                                     const void* disp_cp_xassisted );
 
 extern void genSpill_ARM64  ( /*OUT*/HInstr** i1, /*OUT*/HInstr** i2,
                               HReg rreg, Int offset, Bool );
@@ -1130,8 +937,8 @@ extern void genReload_ARM64 ( /*OUT*/HInstr** i1, /*OUT*/HInstr** i2,
 extern void getAllocableRegs_ARM64 ( Int*, HReg** );
 extern HInstrArray* iselSB_ARM64 ( IRSB*, 
                                    VexArch,
-                                   VexArchInfo*,
-                                   VexAbiInfo*,
+                                   const VexArchInfo*,
+                                   const VexAbiInfo*,
                                    Int offs_Host_EvC_Counter,
                                    Int offs_Host_EvC_FailAddr,
                                    Bool chainingAllowed,
@@ -1141,20 +948,23 @@ extern HInstrArray* iselSB_ARM64 ( IRSB*,
 /* How big is an event check?  This is kind of a kludge because it
    depends on the offsets of host_EvC_FAILADDR and
    host_EvC_COUNTER. */
-extern Int evCheckSzB_ARM64 ( void );
+extern Int evCheckSzB_ARM64 ( VexEndness endness_host );
 
 /* Perform a chaining and unchaining of an XDirect jump. */
-extern VexInvalRange chainXDirect_ARM64 ( void* place_to_chain,
-                                          void* disp_cp_chain_me_EXPECTED,
-                                          void* place_to_jump_to );
+extern VexInvalRange chainXDirect_ARM64 ( VexEndness endness_host,
+                                          void* place_to_chain,
+                                          const void* disp_cp_chain_me_EXPECTED,
+                                          const void* place_to_jump_to );
 
-extern VexInvalRange unchainXDirect_ARM64 ( void* place_to_unchain,
-                                            void* place_to_jump_to_EXPECTED,
-                                            void* disp_cp_chain_me );
+extern VexInvalRange unchainXDirect_ARM64 ( VexEndness endness_host,
+                                            void* place_to_unchain,
+                                            const void* place_to_jump_to_EXPECTED,
+                                            const void* disp_cp_chain_me );
 
-//ZZ /* Patch the counter location into an existing ProfInc point. */
-//ZZ extern VexInvalRange patchProfInc_ARM ( void*  place_to_patch,
-//ZZ                                         ULong* location_of_counter );
+/* Patch the counter location into an existing ProfInc point. */
+extern VexInvalRange patchProfInc_ARM64 ( VexEndness endness_host,
+                                          void*  place_to_patch,
+                                          const ULong* location_of_counter );
 
 
 #endif /* ndef __VEX_HOST_ARM64_DEFS_H */

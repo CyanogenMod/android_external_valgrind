@@ -138,11 +138,11 @@ static void ocache_sarp_Clear_Origins ( Addr, UWord ); /* fwds */
 
    On 64-bit machines it's more complicated.  If we followed the same basic
    scheme we'd have a four-level table which would require too many memory
-   accesses.  So instead the top-level map table has 2^19 entries (indexed
-   using bits 16..34 of the address);  this covers the bottom 32GB.  Any
-   accesses above 32GB are handled with a slow, sparse auxiliary table.
+   accesses.  So instead the top-level map table has 2^20 entries (indexed
+   using bits 16..35 of the address);  this covers the bottom 64GB.  Any
+   accesses above 64GB are handled with a slow, sparse auxiliary table.
    Valgrind's address space manager tries very hard to keep things below
-   this 32GB barrier so that performance doesn't suffer too much.
+   this 64GB barrier so that performance doesn't suffer too much.
 
    Note that this file has a lot of different functions for reading and
    writing shadow memory.  Only a couple are strictly necessary (eg.
@@ -578,7 +578,6 @@ static AuxMapEnt* find_or_alloc_in_auxmap ( Addr a )
    a &= ~(Addr)0xFFFF;
 
    nyu = (AuxMapEnt*) VG_(OSetGen_AllocNode)( auxmap_L2, sizeof(AuxMapEnt) );
-   tl_assert(nyu);
    nyu->base = a;
    nyu->sm   = &sm_distinguished[SM_DIST_NOACCESS];
    VG_(OSetGen_Insert)( auxmap_L2, nyu );
@@ -1089,7 +1088,6 @@ static void init_gIgnoredAddressRanges ( void )
       return;
    gIgnoredAddressRanges = VG_(newRangeMap)( VG_(malloc), "mc.igIAR.1",
                                              VG_(free), IAR_NotIgnored );
-   tl_assert(gIgnoredAddressRanges != NULL);
 }
 
 INLINE Bool MC_(in_ignored_range) ( Addr a )
@@ -1286,7 +1284,7 @@ void mc_LOADV_128_or_256_slow ( /*OUT*/ULong* res,
    /* "at least one of the addresses is invalid" */
    ok = False;
    for (j = 0; j < szL; j++)
-      ok |= pessim[j] != V_BITS8_DEFINED;
+      ok |= pessim[j] != V_BITS64_DEFINED;
    tl_assert(ok);
 
    if (0 == (a & (szB - 1)) && n_addrs_bad < szB) {
@@ -2414,7 +2412,6 @@ static void init_ocacheL2 ( void )
       = VG_(OSetGen_Create)( offsetof(OCacheLine,tag), 
                              NULL, /* fast cmp */
                              ocacheL2_malloc, "mc.ioL2", ocacheL2_free);
-   tl_assert(ocacheL2);
    stats__ocacheL2_n_nodes = 0;
 }
 
@@ -2450,7 +2447,6 @@ static void ocacheL2_add_line ( OCacheLine* line )
    OCacheLine* copy;
    tl_assert(is_valid_oc_tag(line->tag));
    copy = VG_(OSetGen_AllocNode)( ocacheL2, sizeof(OCacheLine) );
-   tl_assert(copy);
    *copy = *line;
    stats__ocacheL2_refs++;
    VG_(OSetGen_Insert)( ocacheL2, copy );
@@ -5173,8 +5169,15 @@ static Bool mc_expensive_sanity_check ( void )
 /*--- Command line args                                    ---*/
 /*------------------------------------------------------------*/
 
-
+/* --partial-loads-ok: enable by default on MacOS.  The MacOS system
+   graphics libraries are heavily vectorised, and not enabling this by
+   default causes lots of false errors. */
+#if defined(VGO_darwin)
+Bool          MC_(clo_partial_loads_ok)       = True;
+#else
 Bool          MC_(clo_partial_loads_ok)       = False;
+#endif
+
 Long          MC_(clo_freelist_vol)           = 20*1000*1000LL;
 Long          MC_(clo_freelist_big_blocks)    =  1*1000*1000LL;
 LeakCheckMode MC_(clo_leak_check)             = LC_Summary;
@@ -5187,13 +5190,13 @@ Int           MC_(clo_malloc_fill)            = -1;
 Int           MC_(clo_free_fill)              = -1;
 KeepStacktraces MC_(clo_keep_stacktraces)     = KS_alloc_then_free;
 Int           MC_(clo_mc_level)               = 2;
+Bool          MC_(clo_show_mismatched_frees)  = True;
 
-static Bool MC_(parse_leak_heuristics) ( const HChar *str0, UInt *lhs )
-{
-   return  VG_(parse_enum_set) ("-,stdstring,newarray,multipleinheritance",
-                                str0, lhs);
-}
-
+static const HChar * MC_(parse_leak_heuristics_tokens) =
+   "-,stdstring,length64,newarray,multipleinheritance";
+/* The first heuristic value (LchNone) has no keyword, as this is
+   a fake heuristic used to collect the blocks found without any
+   heuristic. */
 
 static Bool mc_process_cmd_line_options(const HChar* arg)
 {
@@ -5239,21 +5242,18 @@ static Bool mc_process_cmd_line_options(const HChar* arg)
    }
 
         if VG_BOOL_CLO(arg, "--partial-loads-ok", MC_(clo_partial_loads_ok)) {}
-   else if VG_STR_CLO(arg, "--errors-for-leak-kinds" , tmp_str) {
-      if (!MC_(parse_leak_kinds)(tmp_str, &MC_(clo_error_for_leak_kinds)))
-         return False;
-   }
-   else if VG_STR_CLO(arg, "--show-leak-kinds", tmp_str) {
-      if (!MC_(parse_leak_kinds)(tmp_str, &MC_(clo_show_leak_kinds)))
-         return False;
-   }
-   else if VG_STR_CLO(arg, "--leak-check-heuristics", tmp_str) {
-      if (!MC_(parse_leak_heuristics)(tmp_str, &MC_(clo_leak_check_heuristics)))
-         return False;
-   }
+   else if VG_USET_CLO(arg, "--errors-for-leak-kinds",
+                       MC_(parse_leak_kinds_tokens),
+                       MC_(clo_error_for_leak_kinds)) {}
+   else if VG_USET_CLO(arg, "--show-leak-kinds",
+                       MC_(parse_leak_kinds_tokens),
+                       MC_(clo_show_leak_kinds)) {}
+   else if VG_USET_CLO(arg, "--leak-check-heuristics",
+                       MC_(parse_leak_heuristics_tokens),
+                       MC_(clo_leak_check_heuristics)) {}
    else if (VG_BOOL_CLO(arg, "--show-reachable", tmp_show)) {
       if (tmp_show) {
-         MC_(clo_show_leak_kinds) = RallS;
+         MC_(clo_show_leak_kinds) = MC_(all_Reachedness)();
       } else {
          MC_(clo_show_leak_kinds) &= ~R2S(Reachable);
       }
@@ -5335,6 +5335,9 @@ static Bool mc_process_cmd_line_options(const HChar* arg)
    else if VG_XACT_CLO(arg, "--keep-stacktraces=none",
                        MC_(clo_keep_stacktraces), KS_none) {}
 
+   else if VG_BOOL_CLO(arg, "--show-mismatched-frees",
+                       MC_(clo_show_mismatched_frees)) {}
+
    else
       return VG_(replacement_malloc_process_cmd_line_option)(arg);
 
@@ -5347,7 +5350,12 @@ static Bool mc_process_cmd_line_options(const HChar* arg)
 }
 
 static void mc_print_usage(void)
-{  
+{
+   const HChar* plo_default = "no";
+#  if defined(VGO_darwin)
+   plo_default = "yes";
+#  endif
+
    VG_(printf)(
 "    --leak-check=no|summary|full     search for memory leaks at exit?  [summary]\n"
 "    --leak-resolution=low|med|high   differentiation of leak stack traces [high]\n"
@@ -5355,10 +5363,12 @@ static void mc_print_usage(void)
 "                                            [definite,possible]\n"
 "    --errors-for-leak-kinds=kind1,kind2,..  which leak kinds are errors?\n"
 "                                            [definite,possible]\n"
-"        where kind is one of definite indirect possible reachable all none\n"
+"        where kind is one of:\n"
+"          definite indirect possible reachable all none\n"
 "    --leak-check-heuristics=heur1,heur2,... which heuristics to use for\n"
 "        improving leak search false positive [none]\n"
-"        where heur is one of stdstring newarray multipleinheritance all none\n"
+"        where heur is one of:\n"
+"          stdstring length64 newarray multipleinheritance all none\n"
 "    --show-reachable=yes             same as --show-leak-kinds=all\n"
 "    --show-reachable=no --show-possibly-lost=yes\n"
 "                                     same as --show-leak-kinds=definite,possible\n"
@@ -5366,7 +5376,7 @@ static void mc_print_usage(void)
 "                                     same as --show-leak-kinds=definite\n"
 "    --undef-value-errors=no|yes      check for undefined value errors [yes]\n"
 "    --track-origins=no|yes           show origins of undefined values? [no]\n"
-"    --partial-loads-ok=no|yes        too hard to explain here; see manual [no]\n"
+"    --partial-loads-ok=no|yes        too hard to explain here; see manual [%s]\n"
 "    --freelist-vol=<number>          volume of freed blocks queue     [20000000]\n"
 "    --freelist-big-blocks=<number>   releases first blocks with size>= [1000000]\n"
 "    --workaround-gcc296-bugs=no|yes  self explanatory [no]\n"
@@ -5375,6 +5385,8 @@ static void mc_print_usage(void)
 "    --free-fill=<hexnumber>          fill free'd areas with given value\n"
 "    --keep-stacktraces=alloc|free|alloc-and-free|alloc-then-free|none\n"
 "        stack trace(s) to keep for malloc'd/free'd areas       [alloc-then-free]\n"
+"    --show-mismatched-frees=no|yes   show frees that don't match the allocator? [yes]\n"
+, plo_default
    );
 }
 
@@ -5494,12 +5506,14 @@ static void print_monitor_help ( void )
 "                [increased*|changed|any]\n"
 "                [unlimited*|limited <max_loss_records_output>]\n"
 "            * = defaults\n"
-"       where kind is one of definite indirect possible reachable all none\n"
-"       where heur is one of stdstring newarray multipleinheritance all none*\n"
-"        Examples: leak_check\n"
-"                  leak_check summary any\n"
-"                  leak_check full kinds indirect,possible\n"
-"                  leak_check full reachable any limited 100\n"
+"       where kind is one of:\n"
+"         definite indirect possible reachable all none\n"
+"       where heur is one of:\n"
+"         stdstring length64 newarray multipleinheritance all none*\n"
+"       Examples: leak_check\n"
+"                 leak_check summary any\n"
+"                 leak_check full kinds indirect,possible\n"
+"                 leak_check full reachable any limited 100\n"
 "  block_list <loss_record_nr>\n"
 "        after a leak search, shows the list of blocks of <loss_record_nr>\n"
 "  who_points_at <addr> [<len>]\n"
@@ -5599,15 +5613,18 @@ static Bool handle_gdb_monitor_command (ThreadId tid, HChar *req)
             lcp.mode = LC_Summary; break;
          case  2: { /* kinds */
             wcmd = VG_(strtok_r) (NULL, " ", &ssaveptr);
-            if (wcmd == NULL || !MC_(parse_leak_kinds)(wcmd,
-                                                       &lcp.show_leak_kinds)) {
+            if (wcmd == NULL 
+                || !VG_(parse_enum_set)(MC_(parse_leak_kinds_tokens),
+                                        True/*allow_all*/,
+                                        wcmd,
+                                        &lcp.show_leak_kinds)) {
                VG_(gdb_printf) ("missing or malformed leak kinds set\n");
                err++;
             }
             break;
          }
          case  3: /* reachable */
-            lcp.show_leak_kinds = RallS;
+            lcp.show_leak_kinds = MC_(all_Reachedness)();
             break;
          case  4: /* possibleleak */
             lcp.show_leak_kinds 
@@ -5618,8 +5635,11 @@ static Bool handle_gdb_monitor_command (ThreadId tid, HChar *req)
             break;
          case  6: { /* heuristics */
             wcmd = VG_(strtok_r) (NULL, " ", &ssaveptr);
-            if (wcmd == NULL || !MC_(parse_leak_heuristics)(wcmd,
-                                                            &lcp.heuristics)) {
+            if (wcmd == NULL 
+                || !VG_(parse_enum_set)(MC_(parse_leak_heuristics_tokens),
+                                        True,/*allow_all*/
+                                        wcmd,
+                                        &lcp.heuristics)) {
                VG_(gdb_printf) ("missing or malformed heuristics set\n");
                err++;
             }

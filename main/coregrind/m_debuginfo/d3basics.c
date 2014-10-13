@@ -324,6 +324,8 @@ const HChar* ML_(pp_DW_AT) ( DW_AT attr )
       case DW_AT_body_begin: return "DW_AT_body_begin";
       case DW_AT_body_end: return "DW_AT_body_end";
       case DW_AT_GNU_vector: return "DW_AT_GNU_vector";
+      case DW_AT_GNU_all_tail_call_sites: return "DW_AT_GNU_all_tail_call_sites";
+      case DW_AT_GNU_all_call_sites: return "DW_AT_GNU_all_call_sites";
       /* VMS extensions.  */
       case DW_AT_VMS_rtnbeg_pd_address: return "DW_AT_VMS_rtnbeg_pd_address";
       /* UPC extension.  */
@@ -406,7 +408,7 @@ static Bool get_Dwarf_Reg( /*OUT*/Addr* a, Word regno, RegSummary* regs )
    if (regno == 7/*RSP*/) { *a = regs->sp; return True; }
 #  elif defined(VGP_ppc32_linux)
    if (regno == 1/*SP*/) { *a = regs->sp; return True; }
-#  elif defined(VGP_ppc64_linux)
+#  elif defined(VGP_ppc64be_linux) || defined(VGP_ppc64le_linux)
    if (regno == 1/*SP*/) { *a = regs->sp; return True; }
 #  elif defined(VGP_arm_linux)
    if (regno == 13) { *a = regs->sp; return True; }
@@ -421,7 +423,7 @@ static Bool get_Dwarf_Reg( /*OUT*/Addr* a, Word regno, RegSummary* regs )
    if (regno == 29) { *a = regs->sp; return True; }
    if (regno == 30) { *a = regs->fp; return True; }
 #  elif defined(VGP_arm64_linux)
-   I_die_here;
+   if (regno == 31) { *a = regs->sp; return True; }
 #  else
 #    error "Unknown platform"
 #  endif
@@ -863,7 +865,8 @@ GXResult ML_(evaluate_Dwarf3_Expr) ( UChar* expr, UWord exprszB,
             if (!regs)
                FAIL("evaluate_Dwarf3_Expr: "
                     "DW_OP_call_frame_cfa but no reg info");
-#if defined(VGP_ppc32_linux) || defined(VGP_ppc64_linux)
+#if defined(VGP_ppc32_linux) || defined(VGP_ppc64be_linux) \
+    || defined(VGP_ppc64le_linux)
             /* Valgrind on ppc32/ppc64 currently doesn't use unwind info. */
             uw1 = ML_(read_Addr)((UChar*)regs->sp);
 #else
@@ -1110,7 +1113,7 @@ GXResult ML_(evaluate_trivial_GX)( GExpr* gx, const DebugInfo* di )
          VG_(printf)(" ML_(evaluate_trivial_GX): unhandled:\n   ");
          ML_(pp_GX)( gx );
          VG_(printf)("\n");
-         tl_assert(0);
+         vg_assert(0);
       }
       else
          if (!badness)
@@ -1123,10 +1126,10 @@ GXResult ML_(evaluate_trivial_GX)( GExpr* gx, const DebugInfo* di )
 
    res.kind = GXR_Failure;
 
-   tl_assert(nGuards == VG_(sizeXA)( results ));
-   tl_assert(nGuards >= 0);
+   vg_assert(nGuards == VG_(sizeXA)( results ));
+   vg_assert(nGuards >= 0);
    if (nGuards == 0) {
-      tl_assert(!badness);
+      vg_assert(!badness);
       res.word = (UWord)"trivial GExpr has no guards (!)";
       VG_(deleteXA)( results );
       return res;
@@ -1150,11 +1153,11 @@ GXResult ML_(evaluate_trivial_GX)( GExpr* gx, const DebugInfo* di )
    /* All the subexpressions produced a constant, but did they all produce
       the same one? */
    mul = VG_(indexXA)( results, 0 );
-   tl_assert(mul->b == True); /* we just established that all exprs are ok */
+   vg_assert(mul->b == True); /* we just established that all exprs are ok */
 
    for (i = 1; i < nGuards; i++) {
       mul2 = VG_(indexXA)( results, i );
-      tl_assert(mul2->b == True);
+      vg_assert(mul2->b == True);
       if (mul2->ul != mul->ul) {
          res.word = (UWord)"trivial GExpr: subexpressions disagree";
          VG_(deleteXA)( results );

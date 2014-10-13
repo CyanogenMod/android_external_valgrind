@@ -87,6 +87,7 @@ DECL_TEMPLATE(linux, sys_syslog);
 DECL_TEMPLATE(linux, sys_vhangup);
 DECL_TEMPLATE(linux, sys_sysinfo);
 DECL_TEMPLATE(linux, sys_personality);
+DECL_TEMPLATE(linux, sys_pivot_root);
 DECL_TEMPLATE(linux, sys_sysctl);
 DECL_TEMPLATE(linux, sys_prctl);
 DECL_TEMPLATE(linux, sys_sendfile);
@@ -232,6 +233,8 @@ DECL_TEMPLATE(linux, sys_sched_rr_get_interval);
 DECL_TEMPLATE(linux, sys_sched_setaffinity);
 DECL_TEMPLATE(linux, sys_sched_getaffinity);
 
+DECL_TEMPLATE(linux, sys_unshare);
+
 // These ones have different parameters and/or return values on Darwin.
 // Also, some archs on Linux do not match the generic wrapper for sys_pipe.
 DECL_TEMPLATE(linux, sys_munlockall);
@@ -352,7 +355,7 @@ DECL_TEMPLATE(linux, sys_listen);
 DECL_TEMPLATE(linux, sys_getsockname);
 DECL_TEMPLATE(linux, sys_getpeername);
 DECL_TEMPLATE(linux, sys_socketpair);
-
+DECL_TEMPLATE(linux, sys_kcmp);
 
 #endif   // __PRIV_SYSWRAP_LINUX_H
 

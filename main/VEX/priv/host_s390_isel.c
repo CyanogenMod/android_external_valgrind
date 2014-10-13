@@ -4078,8 +4078,8 @@ iselNext(ISelEnv *env, IRExpr *next, IRJumpKind jk, Int offsIP)
    Do not assign it to a global variable! */
 
 HInstrArray *
-iselSB_S390(IRSB *bb, VexArch arch_host, VexArchInfo *archinfo_host,
-            VexAbiInfo *vbi, Int offset_host_evcheck_counter,
+iselSB_S390(IRSB *bb, VexArch arch_host, const VexArchInfo *archinfo_host,
+            const VexAbiInfo *vbi, Int offset_host_evcheck_counter,
             Int offset_host_evcheck_fail_addr, Bool chaining_allowed,
             Bool add_profinc, Addr64 max_ga)
 {
@@ -4093,6 +4093,9 @@ iselSB_S390(IRSB *bb, VexArch arch_host, VexArchInfo *archinfo_host,
 
    /* Do some sanity checks */
    vassert((VEX_HWCAPS_S390X(hwcaps_host) & ~(VEX_HWCAPS_S390X_ALL)) == 0);
+
+   /* Check that the host's endianness is as expected. */
+   vassert(archinfo_host->endness == VexEndnessBE);
 
    /* Make up an initial environment to use. */
    env = LibVEX_Alloc(sizeof(ISelEnv));

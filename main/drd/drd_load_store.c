@@ -43,7 +43,7 @@
 #define STACK_POINTER_OFFSET OFFSET_amd64_RSP
 #elif defined(VGA_ppc32)
 #define STACK_POINTER_OFFSET OFFSET_ppc32_GPR1
-#elif defined(VGA_ppc64)
+#elif defined(VGA_ppc64be) || defined(VGA_ppc64le)
 #define STACK_POINTER_OFFSET OFFSET_ppc64_GPR1
 #elif defined(VGA_arm)
 #define STACK_POINTER_OFFSET OFFSET_arm_R13
@@ -590,9 +590,9 @@ static void instrument_store(IRSB* const bb, IRExpr* addr_expr,
 
 IRSB* DRD_(instrument)(VgCallbackClosure* const closure,
                        IRSB* const bb_in,
-                       VexGuestLayout* const layout,
-                       VexGuestExtents* const vge,
-                       VexArchInfo* archinfo_host,
+                       const VexGuestLayout* const layout,
+                       const VexGuestExtents* const vge,
+                       const VexArchInfo* archinfo_host,
                        IRType const gWordTy,
                        IRType const hWordTy)
 {
@@ -633,7 +633,9 @@ IRSB* DRD_(instrument)(VgCallbackClosure* const closure,
          switch (st->Ist.MBE.event)
          {
          case Imbe_Fence:
-            break; /* not interesting */
+            break; /* not interesting to DRD */
+         case Imbe_CancelReservation:
+            break; /* not interesting to DRD */
          default:
             tl_assert(0);
          }

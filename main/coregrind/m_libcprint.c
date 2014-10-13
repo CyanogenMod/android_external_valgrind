@@ -108,7 +108,7 @@ static void add_to__printf_buf ( HChar c, void *p )
    }
    b->buf[b->buf_used++] = c;
    b->buf[b->buf_used]   = 0;
-   tl_assert(b->buf_used < sizeof(b->buf));
+   vg_assert(b->buf_used < sizeof(b->buf));
 }
 
 static UInt vprintf_to_buf ( printf_buf_t* b,
@@ -227,6 +227,17 @@ UInt VG_(sprintf) ( HChar* buf, const HChar *format, ... )
 
 /* --------- snprintf --------- */
 
+/* The return value of VG_(snprintf) and VG_(vsnprintf) differs from
+   what is defined in C99. Let S be the size of the buffer as given in
+   the 2nd argument.
+   Return value R:
+     R < S:  The output string was successfully written to the buffer.
+             It is null-terminated and R == strlen( output string )
+     R == S: The supplied buffer was too small to hold the output string.
+             The first S-1 characters of the output string were written
+             to the buffer followed by the terminating null character.
+*/
+
 typedef 
    struct {
       HChar* buf;
@@ -315,7 +326,7 @@ void VG_(percentify)(ULong n, ULong m, UInt d, Int n_buf, HChar buf[])
       case 1: ex = 10;    break;
       case 2: ex = 100;   break;
       case 3: ex = 1000;  break;
-      default: VG_(tool_panic)("Currently can only handle 3 decimal places");
+      default: VG_(core_panic)("Currently can only handle 3 decimal places");
       }
       p2 = ((100*n*ex) / m) % ex;
       // Have to generate the format string in order to be flexible about
@@ -422,7 +433,8 @@ static void add_to__vmessage_buf ( HChar c, void *p )
       // (useful to run regression tests in an outer/inner setup
       // and avoid the diff failing due to these unexpected '>').
       depth = RUNNING_ON_VALGRIND;
-      if (depth > 0 && !VG_(strstr)(VG_(clo_sim_hints), "no-inner-prefix")) {
+      if (depth > 0 
+          && !SimHintiS(SimHint_no_inner_prefix, VG_(clo_sim_hints))) {
          if (depth > 10)
             depth = 10; // ?!?!
          for (i = 0; i < depth; i++) {

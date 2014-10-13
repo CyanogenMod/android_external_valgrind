@@ -216,7 +216,7 @@ int handle_gdb_valgrind_command (char *mon, OutputSink *sink_wanted_at_return)
          case -2: int_value = 0; break;
          case -1: int_value = 0; break;
          case  0: int_value = 1; break;
-         default: tl_assert (0);
+         default: vg_assert (0);
          }
       }
 
@@ -257,7 +257,7 @@ int handle_gdb_valgrind_command (char *mon, OutputSink *sink_wanted_at_return)
       wcmd = strtok_r (NULL, " ", &ssaveptr);
       switch (kwdid = VG_(keyword_id) 
               ("vgdb-error debuglog merge-recursive-frames"
-               " gdb_output log_output mixed_output hostvisibility ",
+               " gdb_output log_output mixed_output hostvisibility",
                wcmd, kwd_report_all)) {
       case -2:
       case -1: 
@@ -321,17 +321,27 @@ int handle_gdb_valgrind_command (char *mon, OutputSink *sink_wanted_at_return)
             case 1:
                hostvisibility = False;
                break;
-            default: tl_assert (0);
+            default: vg_assert (0);
             }
          } else {
             hostvisibility = True;
          }
-         if (hostvisibility)
+         if (hostvisibility) {
+            const DebugInfo *tooldi 
+               = VG_(find_DebugInfo) ((Addr)handle_gdb_valgrind_command);
+            const NSegment *toolseg 
+               = tooldi ?
+                 VG_(am_find_nsegment) (VG_(DebugInfo_get_text_avma) (tooldi))
+                 : NULL;
             VG_(gdb_printf) 
                ("Enabled access to Valgrind memory/status by GDB\n"
-                "If not yet done, tell GDB which valgrind file(s) to use:\n"
-                "add-symbol-file <tool or preloaded file> <loadaddr>\n");
-         else
+                "If not yet done, tell GDB which valgrind file(s) to use, "
+                "typically:\n"
+                "add-symbol-file %s %p\n", 
+                toolseg ? VG_(am_get_filename)(toolseg)
+                : "<toolfile> <address> e.g.",
+                toolseg ? (void*)toolseg->start : (void*)0x38000000);
+         } else
             VG_(gdb_printf)
                ("Disabled access to Valgrind memory/status by GDB\n");
          break;
@@ -380,7 +390,7 @@ int handle_gdb_valgrind_command (char *mon, OutputSink *sink_wanted_at_return)
             case  0: 
                VG_(am_show_nsegments) (0, "gdbserver v.info memory aspacemgr");
                break;
-            default: tl_assert (0);
+            default: vg_assert (0);
             }
          }
 
@@ -388,7 +398,7 @@ int handle_gdb_valgrind_command (char *mon, OutputSink *sink_wanted_at_return)
          break;
       case  5: /* scheduler */
          VG_(show_sched_status) (True,  // host_stacktrace
-                                 True,  // valgrind_stack_usage
+                                 True,  // stack_usage
                                  True); // exited_threads
          ret = 1;
          break;
@@ -508,7 +518,7 @@ int handle_gdb_valgrind_command (char *mon, OutputSink *sink_wanted_at_return)
             VG_(clo_sanity_level) = save_clo_sanity_level;
             break;
          }
-         default: tl_assert (0);
+         default: vg_assert (0);
       }
       break;
 
@@ -639,6 +649,45 @@ void handle_query (char *arg_own_buf, int *new_packet_len_p)
 {
    static struct inferior_list_entry *thread_ptr;
 
+   /* thread local storage query */
+   if (strncmp ("qGetTLSAddr:", arg_own_buf, 12) == 0) {
+      char *from, *to;
+      char *end = arg_own_buf + strlen(arg_own_buf);
+      unsigned long gdb_id;
+      CORE_ADDR lm;
+      CORE_ADDR offset;
+      struct thread_info *ti;
+      
+      from = arg_own_buf + 12;
+      to = strchr(from, ',');
+      *to = 0;
+      gdb_id = strtoul (from, NULL, 16);
+      from = to + 1;
+      to = strchr(from, ',');
+      decode_address (&offset, from, to - from);
+      from = to + 1;
+      to = end;
+      decode_address (&lm, from, to - from);
+      dlog(2, "qGetTLSAddr thread %lu offset %p lm %p\n", 
+           gdb_id, (void*)offset, (void*)lm);
+
+      ti = gdb_id_to_thread (gdb_id);
+      if (ti != NULL) {
+         ThreadState *tst;
+         Addr tls_addr;
+
+         tst = (ThreadState *) inferior_target_data (ti);
+         if (valgrind_get_tls_addr(tst, offset, lm, &tls_addr)) {
+            VG_(sprintf) (arg_own_buf, "%lx", tls_addr);
+            return;
+         }
+         // else we will report we do not support qGetTLSAddr
+      } else {
+         write_enn (arg_own_buf);
+         return;
+      }
+   }
+   
    /* qRcmd, monitor command handling.  */
    if (strncmp ("qRcmd,", arg_own_buf, 6) == 0) {
       char *p = arg_own_buf + 6;
@@ -696,7 +745,7 @@ void handle_query (char *arg_own_buf, int *new_packet_len_p)
          return;
       }
    }
-   
+
    if (strcmp ("qAttached", arg_own_buf) == 0) {
       /* tell gdb to always detach, never kill the process */
       arg_own_buf[0] = '1';
