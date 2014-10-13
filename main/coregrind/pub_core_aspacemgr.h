@@ -58,7 +58,7 @@
    Takes a pointer to the SP at the time V gained control.  This is
    taken to be the highest usable address (more or less).  Based on
    that (and general consultation of tea leaves, etc) return a
-   suggested end address for the client's stack. */
+   suggested end address (highest addressable byte) for the client's stack. */
 extern Addr VG_(am_startup) ( Addr sp_at_startup );
 
 
@@ -334,7 +334,8 @@ extern Bool VG_(am_relocate_nooverlap_client)( /*OUT*/Bool* need_discard,
 // stacks.  The address space manager provides and suitably
 // protects such stacks.
 
-#if defined(VGP_ppc32_linux) || defined(VGP_ppc64_linux) \
+#if defined(VGP_ppc32_linux) \
+    || defined(VGP_ppc64be_linux) || defined(VGP_ppc64le_linux)	\
     || defined(VGP_mips32_linux) || defined(VGP_mips64_linux) \
     || defined(VGP_arm64_linux)
 # define VG_STACK_GUARD_SZB  65536  // 1 or 16 pages

@@ -54,14 +54,7 @@
 __attribute__ ((noreturn))
 void ML_(am_exit)( Int status )
 {
-#  if defined(VGO_linux)
-   (void)VG_(do_syscall1)(__NR_exit_group, status);
-#  endif
-   (void)VG_(do_syscall1)(__NR_exit, status);
-   /* Why are we still alive here? */
-   /*NOTREACHED*/
-   *(volatile Int *)0 = 'x';
-   aspacem_assert(2+2 == 5);
+   VG_(exit_now) (status);
 }
 
 void ML_(am_barf) ( const HChar* what )
@@ -162,7 +155,8 @@ SysRes VG_(am_do_mmap_NO_NOTIFY)( Addr start, SizeT length, UInt prot,
    aspacem_assert((offset % 4096) == 0);
    res = VG_(do_syscall6)(__NR_mmap2, (UWord)start, length,
                           prot, flags, fd, offset / 4096);
-#  elif defined(VGP_amd64_linux) || defined(VGP_ppc64_linux) \
+#  elif defined(VGP_amd64_linux) \
+        || defined(VGP_ppc64be_linux)  || defined(VGP_ppc64le_linux) \
         || defined(VGP_s390x_linux) || defined(VGP_mips32_linux) \
         || defined(VGP_mips64_linux) || defined(VGP_arm64_linux)
    res = VG_(do_syscall6)(__NR_mmap, (UWord)start, length, 

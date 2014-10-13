@@ -244,7 +244,6 @@ static SysRes do_clone ( ThreadId ptid,
    ThreadState* ctst = VG_(get_ThreadState)(ctid);
    ULong        word64;
    UWord*       stack;
-   NSegment const* seg;
    SysRes       res;
    vki_sigset_t blockall, savedmask;
 
@@ -310,27 +309,7 @@ static SysRes do_clone ( ThreadId ptid,
       See #226116. */
    ctst->os_state.threadgroup = ptst->os_state.threadgroup;
 
-   /* We don't really know where the client stack is, because its
-      allocated by the client.  The best we can do is look at the
-      memory mappings and try to derive some useful information.  We
-      assume that esp starts near its highest possible value, and can
-      only go down to the start of the mmaped segment. */
-   seg = VG_(am_find_nsegment)(sp);
-   if (seg && seg->kind != SkResvn) {
-      ctst->client_stack_highest_word = (Addr)VG_PGROUNDUP(sp);
-      ctst->client_stack_szB = ctst->client_stack_highest_word - seg->start;
-
-      VG_(register_stack)(seg->start, ctst->client_stack_highest_word);
-
-      if (debug)
-	 VG_(printf)("\ntid %d: guessed client stack range %#lx-%#lx\n",
-		     ctid, seg->start, VG_PGROUNDUP(sp));
-   } else {
-      VG_(message)(Vg_UserMsg,
-                   "!? New thread %d starts with R1(%#lx) unmapped\n",
-		   ctid, sp);
-      ctst->client_stack_szB  = 0;
-   }
+   ML_(guess_and_register_stack) (sp, ctst);
 
    /* Assume the clone will succeed, and tell any tool that wants to
       know that this thread has come into existence.  If the clone
@@ -920,7 +899,7 @@ static SyscallTableEntry syscall_table[] = {
 //..    GENX_(__NR_nice,              sys_nice),              // 34
 //.. 
 //..    GENX_(__NR_ftime,             sys_ni_syscall),        // 35
-//..    GENX_(__NR_sync,              sys_sync),              // 36
+   GENX_(__NR_sync,              sys_sync),              // 36
    GENX_(__NR_kill,              sys_kill),              // 37
    GENX_(__NR_rename,            sys_rename),            // 38
    GENX_(__NR_mkdir,             sys_mkdir),             // 39
@@ -1124,7 +1103,7 @@ static SyscallTableEntry syscall_table[] = {
 // __NR_multiplexer                                           // 201
 
    GENXY(__NR_getdents64,        sys_getdents64),        // 202
-//..    //   (__NR_pivot_root,        sys_pivot_root),        // 203 */Linux
+   LINX_(__NR_pivot_root,        sys_pivot_root),        // 203
    LINXY(__NR_fcntl64,           sys_fcntl64),           // 204
    GENX_(__NR_madvise,           sys_madvise),           // 205
    GENXY(__NR_mincore,           sys_mincore),           // 206
@@ -1258,6 +1237,23 @@ static SyscallTableEntry syscall_table[] = {
    LINXY(__NR_rt_tgsigqueueinfo, sys_rt_tgsigqueueinfo),// 322
 
    LINX_(__NR_clock_adjtime,     sys_clock_adjtime),    // 347
+
+   LINXY(__NR_socket,            sys_socket),           // 326
+   LINX_(__NR_bind,              sys_bind),             // 327
+   LINX_(__NR_connect,           sys_connect),          // 328
+   LINX_(__NR_listen,            sys_listen),           // 329
+   LINXY(__NR_accept,            sys_accept),           // 330
+   LINXY(__NR_getsockname,       sys_getsockname),      // 331
+   LINXY(__NR_getpeername,       sys_getpeername),      // 332
+
+   LINX_(__NR_send,              sys_send),             // 334
+   LINX_(__NR_sendto,            sys_sendto),           // 335
+   LINXY(__NR_recv,              sys_recv),             // 336
+   LINXY(__NR_recvfrom,          sys_recvfrom),         // 337
+   LINX_(__NR_shutdown,          sys_shutdown),         // 338
+   LINX_(__NR_setsockopt,        sys_setsockopt),       // 339
+
+   LINXY(__NR_accept4,           sys_accept4),          // 344
 
    LINXY(__NR_process_vm_readv,  sys_process_vm_readv), // 351
    LINX_(__NR_process_vm_writev, sys_process_vm_writev) // 352

@@ -1567,7 +1567,7 @@ void* alloc_and_record_block ( ThreadId tid, SizeT req_szB, SizeT req_alignB,
       return NULL;
    }
    if (is_zeroed) VG_(memset)(p, 0, req_szB);
-   actual_szB = VG_(malloc_usable_size)(p);
+   actual_szB = VG_(cli_malloc_usable_size)(p);
    tl_assert(actual_szB >= req_szB);
    slop_szB = actual_szB - req_szB;
 
@@ -1682,7 +1682,7 @@ void* realloc_block ( ThreadId tid, void* p_old, SizeT new_req_szB )
       }
       VG_(memcpy)(p_new, p_old, old_req_szB + old_slop_szB);
       VG_(cli_free)(p_old);
-      new_actual_szB = VG_(malloc_usable_size)(p_new);
+      new_actual_szB = VG_(cli_malloc_usable_size)(p_new);
       tl_assert(new_actual_szB >= new_req_szB);
       new_slop_szB = new_actual_szB - new_req_szB;
    }
@@ -2087,9 +2087,9 @@ static IRSB* ms_instrument2( IRSB* sbIn )
 static
 IRSB* ms_instrument ( VgCallbackClosure* closure,
                       IRSB* sbIn,
-                      VexGuestLayout* layout,
-                      VexGuestExtents* vge,
-                      VexArchInfo* archinfo_host,
+                      const VexGuestLayout* layout,
+                      const VexGuestExtents* vge,
+                      const VexArchInfo* archinfo_host,
                       IRType gWordTy, IRType hWordTy )
 {
    if (! have_started_executing_code) {
@@ -2174,7 +2174,7 @@ static void pp_snapshot_SXPt(Int fd, SXPt* sxpt, Int depth, HChar* depth_str,
          }
 
          // We need the -1 to get the line number right, But I'm not sure why.
-         ip_desc = VG_(describe_IP)(sxpt->Sig.ip-1, ip_desc_array, BUF_LEN);
+         ip_desc = VG_(describe_IP)(sxpt->Sig.ip-1, ip_desc_array, BUF_LEN, NULL);
       }
       
       // Do the non-ip_desc part first...
@@ -2331,15 +2331,11 @@ static void write_snapshots_to_file(const HChar* massif_out_file,
 
    // Print "cmd:" line.
    FP("cmd: ");
-   if (VG_(args_the_exename)) {
-      FP("%s", VG_(args_the_exename));
-      for (i = 0; i < VG_(sizeXA)( VG_(args_for_client) ); i++) {
-         HChar* arg = * (HChar**) VG_(indexXA)( VG_(args_for_client), i );
-         if (arg)
-            FP(" %s", arg);
-      }
-   } else {
-      FP(" ???");
+   FP("%s", VG_(args_the_exename));
+   for (i = 0; i < VG_(sizeXA)( VG_(args_for_client) ); i++) {
+      HChar* arg = * (HChar**) VG_(indexXA)( VG_(args_for_client), i );
+      if (arg)
+         FP(" %s", arg);
    }
    FP("\n");
 

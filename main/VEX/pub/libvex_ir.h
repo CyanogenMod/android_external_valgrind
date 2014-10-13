@@ -320,13 +320,13 @@ extern IRConst* IRConst_V128 ( UShort );
 extern IRConst* IRConst_V256 ( UInt );
 
 /* Deep-copy an IRConst */
-extern IRConst* deepCopyIRConst ( IRConst* );
+extern IRConst* deepCopyIRConst ( const IRConst* );
 
 /* Pretty-print an IRConst */
-extern void ppIRConst ( IRConst* );
+extern void ppIRConst ( const IRConst* );
 
 /* Compare two IRConsts for equality */
-extern Bool eqIRConst ( IRConst*, IRConst* );
+extern Bool eqIRConst ( const IRConst*, const IRConst* );
 
 
 /* ------------------ Call targets ------------------ */
@@ -359,10 +359,10 @@ typedef
 extern IRCallee* mkIRCallee ( Int regparms, const HChar* name, void* addr );
 
 /* Deep-copy an IRCallee. */
-extern IRCallee* deepCopyIRCallee ( IRCallee* );
+extern IRCallee* deepCopyIRCallee ( const IRCallee* );
 
 /* Pretty-print an IRCallee. */
-extern void ppIRCallee ( IRCallee* );
+extern void ppIRCallee ( const IRCallee* );
 
 
 /* ------------------ Guest state arrays ------------------ */
@@ -380,10 +380,10 @@ typedef
 
 extern IRRegArray* mkIRRegArray ( Int, IRType, Int );
 
-extern IRRegArray* deepCopyIRRegArray ( IRRegArray* );
+extern IRRegArray* deepCopyIRRegArray ( const IRRegArray* );
 
-extern void ppIRRegArray ( IRRegArray* );
-extern Bool eqIRRegArray ( IRRegArray*, IRRegArray* );
+extern void ppIRRegArray ( const IRRegArray* );
+extern Bool eqIRRegArray ( const IRRegArray*, const IRRegArray* );
 
 
 /* ------------------ Temporaries ------------------ */
@@ -740,7 +740,7 @@ typedef
       Iop_MAddF64r32, Iop_MSubF64r32,
 
       /* :: F64 -> F64 */
-      Iop_Est5FRSqrt,    /* reciprocal square root estimate, 5 good bits */
+      Iop_RSqrtEst5GoodF64, /* reciprocal square root estimate, 5 good bits */
       Iop_RoundF64toF64_NEAREST, /* frin */
       Iop_RoundF64toF64_NegINF,  /* frim */ 
       Iop_RoundF64toF64_PosINF,  /* frip */
@@ -811,21 +811,21 @@ typedef
       /* Vector Reciprocal Estimate finds an approximate reciprocal of each
       element in the operand vector, and places the results in the destination
       vector.  */
-      Iop_Recip32Fx2,
+      Iop_RecipEst32Fx2,
 
       /* Vector Reciprocal Step computes (2.0 - arg1 * arg2).
          Note, that if one of the arguments is zero and another one is infinity
          of arbitrary sign the result of the operation is 2.0. */
-      Iop_Recps32Fx2,
+      Iop_RecipStep32Fx2,
 
       /* Vector Reciprocal Square Root Estimate finds an approximate reciprocal
          square root of each element in the operand vector. */
-      Iop_Rsqrte32Fx2,
+      Iop_RSqrtEst32Fx2,
 
       /* Vector Reciprocal Square Root Step computes (3.0 - arg1 * arg2) / 2.0.
          Note, that of one of the arguments is zero and another one is infiinty
          of arbitrary sign the result of the operation is 1.5. */
-      Iop_Rsqrts32Fx2,
+      Iop_RSqrtStep32Fx2,
 
       /* Unary */
       Iop_Neg32Fx2, Iop_Abs32Fx2,
@@ -900,8 +900,8 @@ typedef
       /* COUNT ones / leading zeroes / leading sign bits (not including topmost
          bit) */
       Iop_Cnt8x8,
-      Iop_Clz8Sx8, Iop_Clz16Sx4, Iop_Clz32Sx2,
-      Iop_Cls8Sx8, Iop_Cls16Sx4, Iop_Cls32Sx2,
+      Iop_Clz8x8, Iop_Clz16x4, Iop_Clz32x2,
+      Iop_Cls8x8, Iop_Cls16x4, Iop_Cls32x2,
       Iop_Clz64x2,
 
       /* VECTOR x VECTOR SHIFT / ROTATE */
@@ -919,9 +919,12 @@ typedef
       Iop_QShl8x8, Iop_QShl16x4, Iop_QShl32x2, Iop_QShl64x1,
       Iop_QSal8x8, Iop_QSal16x4, Iop_QSal32x2, Iop_QSal64x1,
       /* VECTOR x INTEGER SATURATING SHIFT */
-      Iop_QShlN8Sx8, Iop_QShlN16Sx4, Iop_QShlN32Sx2, Iop_QShlN64Sx1,
-      Iop_QShlN8x8, Iop_QShlN16x4, Iop_QShlN32x2, Iop_QShlN64x1,
-      Iop_QSalN8x8, Iop_QSalN16x4, Iop_QSalN32x2, Iop_QSalN64x1,
+      Iop_QShlNsatSU8x8,  Iop_QShlNsatSU16x4,
+      Iop_QShlNsatSU32x2, Iop_QShlNsatSU64x1,
+      Iop_QShlNsatUU8x8,  Iop_QShlNsatUU16x4,
+      Iop_QShlNsatUU32x2, Iop_QShlNsatUU64x1,
+      Iop_QShlNsatSS8x8,  Iop_QShlNsatSS16x4,
+      Iop_QShlNsatSS32x2, Iop_QShlNsatSS64x1,
 
       /* NARROWING (binary) 
          -- narrow 2xI64 into 1xI64, hi half from left arg */
@@ -977,22 +980,23 @@ typedef
       /* DUPLICATING -- copy value to all lanes */
       Iop_Dup8x8,   Iop_Dup16x4,   Iop_Dup32x2,
 
-      /* EXTRACT -- copy 8-arg3 highest bytes from arg1 to 8-arg3 lowest bytes
-         of result and arg3 lowest bytes of arg2 to arg3 highest bytes of
-         result.
-         It is a triop: (I64, I64, I8) -> I64 */
-      /* Note: the arm back-end handles only constant third argumnet. */
-      Iop_Extract64,
+      /* SLICE -- produces the lowest 64 bits of (arg1:arg2) >> (8 * arg3).
+         arg3 is a shift amount in bytes and may be between 0 and 8
+         inclusive.  When 0, the result is arg2; when 8, the result is arg1.
+         Not all back ends handle all values.  The arm32 and arm64 back
+         ends handle only immediate arg3 values. */
+      Iop_Slice64,  // (I64, I64, I8) -> I64
 
-      /* REVERSE the order of elements in each Half-words, Words,
-         Double-words */
+      /* REVERSE the order of chunks in vector lanes.  Chunks must be
+         smaller than the vector lanes (obviously) and so may be 8-,
+         16- and 32-bit in size. */
       /* Examples:
-            Reverse16_8x8([a,b,c,d,e,f,g,h]) = [b,a,d,c,f,e,h,g]
-            Reverse32_8x8([a,b,c,d,e,f,g,h]) = [d,c,b,a,h,g,f,e]
-            Reverse64_8x8([a,b,c,d,e,f,g,h]) = [h,g,f,e,d,c,b,a] */
-      Iop_Reverse16_8x8,
-      Iop_Reverse32_8x8, Iop_Reverse32_16x4,
-      Iop_Reverse64_8x8, Iop_Reverse64_16x4, Iop_Reverse64_32x2,
+            Reverse8sIn16_x4([a,b,c,d,e,f,g,h]) = [b,a,d,c,f,e,h,g]
+            Reverse8sIn32_x2([a,b,c,d,e,f,g,h]) = [d,c,b,a,h,g,f,e]
+            Reverse8sIn64_x1([a,b,c,d,e,f,g,h]) = [h,g,f,e,d,c,b,a] */
+      Iop_Reverse8sIn16_x4,
+      Iop_Reverse8sIn32_x2, Iop_Reverse16sIn32_x2,
+      Iop_Reverse8sIn64_x1, Iop_Reverse16sIn64_x1, Iop_Reverse32sIn64_x1,
 
       /* PERMUTING -- copy src bytes to dst,
          as indexed by control vector bytes:
@@ -1006,8 +1010,8 @@ typedef
       Iop_GetMSBs8x8, /* I64 -> I8 */
 
       /* Vector Reciprocal Estimate and Vector Reciprocal Square Root Estimate
-         See floating-point equiwalents for details. */
-      Iop_Recip32x2, Iop_Rsqrte32x2,
+         See floating-point equivalents for details. */
+      Iop_RecipEst32Ux2, Iop_RSqrtEst32Ux2,
 
       /* ------------------ Decimal Floating Point ------------------ */
 
@@ -1276,27 +1280,27 @@ typedef
 
       /* unary */
       Iop_Abs32Fx4,
-      Iop_Sqrt32Fx4, Iop_RSqrt32Fx4,
+      Iop_Sqrt32Fx4,
       Iop_Neg32Fx4,
 
       /* Vector Reciprocal Estimate finds an approximate reciprocal of each
       element in the operand vector, and places the results in the destination
       vector.  */
-      Iop_Recip32Fx4,
+      Iop_RecipEst32Fx4,
 
       /* Vector Reciprocal Step computes (2.0 - arg1 * arg2).
          Note, that if one of the arguments is zero and another one is infinity
          of arbitrary sign the result of the operation is 2.0. */
-      Iop_Recps32Fx4,
+      Iop_RecipStep32Fx4,
 
       /* Vector Reciprocal Square Root Estimate finds an approximate reciprocal
          square root of each element in the operand vector. */
-      Iop_Rsqrte32Fx4,
+      Iop_RSqrtEst32Fx4,
 
       /* Vector Reciprocal Square Root Step computes (3.0 - arg1 * arg2) / 2.0.
          Note, that of one of the arguments is zero and another one is infiinty
          of arbitrary sign the result of the operation is 1.5. */
-      Iop_Rsqrts32Fx4,
+      Iop_RSqrtStep32Fx4,
 
       /* --- Int to/from FP conversion --- */
       /* Unlike the standard fp conversions, these irops take no
@@ -1328,7 +1332,7 @@ typedef
       Iop_CmpEQ32F0x4, Iop_CmpLT32F0x4, Iop_CmpLE32F0x4, Iop_CmpUN32F0x4, 
 
       /* unary */
-      Iop_Recip32F0x4, Iop_Sqrt32F0x4, Iop_RSqrt32F0x4,
+      Iop_RecipEst32F0x4, Iop_Sqrt32F0x4, Iop_RSqrtEst32F0x4,
 
       /* --- 64x2 vector FP --- */
 
@@ -1341,11 +1345,8 @@ typedef
 
       /* unary */
       Iop_Abs64Fx2,
-      Iop_Sqrt64Fx2, Iop_RSqrt64Fx2,
+      Iop_Sqrt64Fx2,
       Iop_Neg64Fx2,
-
-      /* Vector Reciprocal Estimate */
-      Iop_Recip64Fx2, 
 
       /* --- 64x2 lowest-lane-only scalar FP --- */
 
@@ -1358,7 +1359,7 @@ typedef
       Iop_CmpEQ64F0x2, Iop_CmpLT64F0x2, Iop_CmpLE64F0x2, Iop_CmpUN64F0x2, 
 
       /* unary */
-      Iop_Recip64F0x2, Iop_Sqrt64F0x2, Iop_RSqrt64F0x2,
+      Iop_Sqrt64F0x2,
 
       /* --- pack / unpack --- */
 
@@ -1393,10 +1394,20 @@ typedef
       /* MISC (vector integer cmp != 0) */
       Iop_CmpNEZ8x16, Iop_CmpNEZ16x8, Iop_CmpNEZ32x4, Iop_CmpNEZ64x2,
 
-      /* ADDITION (normal / unsigned sat / signed sat) */
-      Iop_Add8x16,   Iop_Add16x8,   Iop_Add32x4,   Iop_Add64x2,
-      Iop_QAdd8Ux16, Iop_QAdd16Ux8, Iop_QAdd32Ux4, Iop_QAdd64Ux2,
-      Iop_QAdd8Sx16, Iop_QAdd16Sx8, Iop_QAdd32Sx4, Iop_QAdd64Sx2,
+      /* ADDITION (normal / U->U sat / S->S sat) */
+      Iop_Add8x16,    Iop_Add16x8,    Iop_Add32x4,    Iop_Add64x2,
+      Iop_QAdd8Ux16,  Iop_QAdd16Ux8,  Iop_QAdd32Ux4,  Iop_QAdd64Ux2,
+      Iop_QAdd8Sx16,  Iop_QAdd16Sx8,  Iop_QAdd32Sx4,  Iop_QAdd64Sx2,
+
+      /* ADDITION, ARM64 specific saturating variants. */
+      /* Unsigned widen left arg, signed widen right arg, add, saturate S->S.
+         This corresponds to SUQADD. */
+      Iop_QAddExtUSsatSS8x16, Iop_QAddExtUSsatSS16x8,
+      Iop_QAddExtUSsatSS32x4, Iop_QAddExtUSsatSS64x2,
+      /* Signed widen left arg, unsigned widen right arg, add, saturate U->U.
+         This corresponds to USQADD. */
+      Iop_QAddExtSUsatUU8x16, Iop_QAddExtSUsatUU16x8,
+      Iop_QAddExtSUsatUU32x4, Iop_QAddExtSUsatUU64x2,
 
       /* SUBTRACTION (normal / unsigned sat / signed sat) */
       Iop_Sub8x16,   Iop_Sub16x8,   Iop_Sub32x4,   Iop_Sub64x2,
@@ -1410,20 +1421,31 @@ typedef
       /* (widening signed/unsigned of even lanes, with lowest lane=zero) */
       Iop_MullEven8Ux16, Iop_MullEven16Ux8, Iop_MullEven32Ux4,
       Iop_MullEven8Sx16, Iop_MullEven16Sx8, Iop_MullEven32Sx4,
-      /* FIXME: document these */
+
+      /* Widening multiplies, all of the form (I64, I64) -> V128 */
       Iop_Mull8Ux8, Iop_Mull8Sx8,
       Iop_Mull16Ux4, Iop_Mull16Sx4,
       Iop_Mull32Ux2, Iop_Mull32Sx2,
+
+      /* Signed doubling saturating widening multiplies, (I64, I64) -> V128 */
+      Iop_QDMull16Sx4, Iop_QDMull32Sx2,
+
       /* Vector Saturating Doubling Multiply Returning High Half and
-         Vector Saturating Rounding Doubling Multiply Returning High Half */
-      /* These IROp's multiply corresponding elements in two vectors, double
+         Vector Saturating Rounding Doubling Multiply Returning High Half.
+         These IROps multiply corresponding elements in two vectors, double
          the results, and place the most significant half of the final results
-         in the destination vector. The results are truncated or rounded. If
-         any of the results overflow, they are saturated. */
-      Iop_QDMulHi16Sx8, Iop_QDMulHi32Sx4,
-      Iop_QRDMulHi16Sx8, Iop_QRDMulHi32Sx4,
-      /* Doubling saturating multiplication (long) (I64, I64) -> V128 */
-      Iop_QDMulLong16Sx4, Iop_QDMulLong32Sx2,
+         in the destination vector.  The results are truncated or rounded.  If
+         any of the results overflow, they are saturated.  To be more precise,
+         for each lane, the computed result is: 
+           QDMulHi:  
+             hi-half( sign-extend(laneL) *q sign-extend(laneR) *q 2 )
+           QRDMulHi:
+             hi-half( sign-extend(laneL) *q sign-extend(laneR) *q 2
+                      +q (1 << (lane-width-in-bits - 1)) )
+      */
+      Iop_QDMulHi16Sx8,  Iop_QDMulHi32Sx4,  /* (V128, V128) -> V128 */
+      Iop_QRDMulHi16Sx8, Iop_QRDMulHi32Sx4, /* (V128, V128) -> V128 */
+
       /* Polynomial multiplication treats its arguments as
          coefficients of polynomials over {0, 1}. */
       Iop_PolynomialMul8x16, /* (V128, V128) -> V128 */
@@ -1483,7 +1505,7 @@ typedef
       Iop_PwBitMtxXpose64x2,
 
       /* ABSOLUTE VALUE */
-      Iop_Abs8x16, Iop_Abs16x8, Iop_Abs32x4,
+      Iop_Abs8x16, Iop_Abs16x8, Iop_Abs32x4, Iop_Abs64x2,
 
       /* AVERAGING: note: (arg1 + arg2 + 1) >>u 1 */
       Iop_Avg8Ux16, Iop_Avg16Ux8, Iop_Avg32Ux4,
@@ -1503,12 +1525,8 @@ typedef
       /* COUNT ones / leading zeroes / leading sign bits (not including topmost
          bit) */
       Iop_Cnt8x16,
-      Iop_Clz8Sx16, Iop_Clz16Sx8, Iop_Clz32Sx4,
-      Iop_Cls8Sx16, Iop_Cls16Sx8, Iop_Cls32Sx4,
-
-      /* Sum vector (signed/unsigned)*/
-      Iop_AddLV8Ux16, Iop_AddLV16Ux8, Iop_AddLV32Ux4,
-      Iop_AddLV8Sx16, Iop_AddLV16Sx8, Iop_AddLV32Sx4,
+      Iop_Clz8x16, Iop_Clz16x8, Iop_Clz32x4,
+      Iop_Cls8x16, Iop_Cls16x8, Iop_Cls32x4,
 
       /* VECTOR x SCALAR SHIFT (shift amt :: Ity_I8) */
       Iop_ShlN8x16, Iop_ShlN16x8, Iop_ShlN32x4, Iop_ShlN64x2,
@@ -1516,6 +1534,13 @@ typedef
       Iop_SarN8x16, Iop_SarN16x8, Iop_SarN32x4, Iop_SarN64x2,
 
       /* VECTOR x VECTOR SHIFT / ROTATE */
+      /* FIXME: I'm pretty sure the ARM32 front/back ends interpret these
+         differently from all other targets.  The intention is that
+         the shift amount (2nd arg) is interpreted as unsigned and
+         only the lowest log2(lane-bits) bits are relevant.  But the
+         ARM32 versions treat the shift amount as an 8 bit signed
+         number.  The ARM32 uses should be replaced by the relevant
+         vector x vector bidirectional shifts instead. */
       Iop_Shl8x16, Iop_Shl16x8, Iop_Shl32x4, Iop_Shl64x2,
       Iop_Shr8x16, Iop_Shr16x8, Iop_Shr32x4, Iop_Shr64x2,
       Iop_Sar8x16, Iop_Sar16x8, Iop_Sar32x4, Iop_Sar64x2,
@@ -1526,9 +1551,106 @@ typedef
       Iop_QShl8x16, Iop_QShl16x8, Iop_QShl32x4, Iop_QShl64x2,
       Iop_QSal8x16, Iop_QSal16x8, Iop_QSal32x4, Iop_QSal64x2,
       /* VECTOR x INTEGER SATURATING SHIFT */
-      Iop_QShlN8Sx16, Iop_QShlN16Sx8, Iop_QShlN32Sx4, Iop_QShlN64Sx2,
-      Iop_QShlN8x16, Iop_QShlN16x8, Iop_QShlN32x4, Iop_QShlN64x2,
-      Iop_QSalN8x16, Iop_QSalN16x8, Iop_QSalN32x4, Iop_QSalN64x2,
+      Iop_QShlNsatSU8x16, Iop_QShlNsatSU16x8,
+      Iop_QShlNsatSU32x4, Iop_QShlNsatSU64x2,
+      Iop_QShlNsatUU8x16, Iop_QShlNsatUU16x8,
+      Iop_QShlNsatUU32x4, Iop_QShlNsatUU64x2,
+      Iop_QShlNsatSS8x16, Iop_QShlNsatSS16x8,
+      Iop_QShlNsatSS32x4, Iop_QShlNsatSS64x2,
+
+      /* VECTOR x VECTOR BIDIRECTIONAL SATURATING (& MAYBE ROUNDING) SHIFT */
+      /* All of type (V128, V128) -> V256. */
+      /* The least significant 8 bits of each lane of the second
+         operand are used as the shift amount, and interpreted signedly.
+         Positive values mean a shift left, negative a shift right.  The
+         result is signedly or unsignedly saturated.  There are also
+         rounding variants, which add 2^(shift_amount-1) to the value before
+         shifting, but only in the shift-right case.  Vacated positions
+         are filled with zeroes.  IOW, it's either SHR or SHL, but not SAR.
+
+         These operations return 129 bits: one bit ("Q") indicating whether
+         saturation occurred, and the shift result.  The result type is V256,
+         of which the lower V128 is the shift result, and Q occupies the
+         least significant bit of the upper V128.  All other bits of the
+         upper V128 are zero. */
+      // Unsigned saturation, no rounding
+      Iop_QandUQsh8x16, Iop_QandUQsh16x8,
+      Iop_QandUQsh32x4, Iop_QandUQsh64x2,
+      // Signed saturation, no rounding
+      Iop_QandSQsh8x16, Iop_QandSQsh16x8,
+      Iop_QandSQsh32x4, Iop_QandSQsh64x2,
+
+      // Unsigned saturation, rounding
+      Iop_QandUQRsh8x16, Iop_QandUQRsh16x8,
+      Iop_QandUQRsh32x4, Iop_QandUQRsh64x2,
+      // Signed saturation, rounding
+      Iop_QandSQRsh8x16, Iop_QandSQRsh16x8,
+      Iop_QandSQRsh32x4, Iop_QandSQRsh64x2,
+
+      /* VECTOR x VECTOR BIDIRECTIONAL (& MAYBE ROUNDING) SHIFT */
+      /* All of type (V128, V128) -> V128 */
+      /* The least significant 8 bits of each lane of the second
+         operand are used as the shift amount, and interpreted signedly.
+         Positive values mean a shift left, negative a shift right.
+         There are also rounding variants, which add 2^(shift_amount-1)
+         to the value before shifting, but only in the shift-right case.
+
+         For left shifts, the vacated places are filled with zeroes.
+         For right shifts, the vacated places are filled with zeroes
+         for the U variants and sign bits for the S variants. */
+      // Signed and unsigned, non-rounding
+      Iop_Sh8Sx16, Iop_Sh16Sx8, Iop_Sh32Sx4, Iop_Sh64Sx2,
+      Iop_Sh8Ux16, Iop_Sh16Ux8, Iop_Sh32Ux4, Iop_Sh64Ux2,
+
+      // Signed and unsigned, rounding
+      Iop_Rsh8Sx16, Iop_Rsh16Sx8, Iop_Rsh32Sx4, Iop_Rsh64Sx2,
+      Iop_Rsh8Ux16, Iop_Rsh16Ux8, Iop_Rsh32Ux4, Iop_Rsh64Ux2,
+
+      /* The least significant 8 bits of each lane of the second
+         operand are used as the shift amount, and interpreted signedly.
+         Positive values mean a shift left, negative a shift right.  The
+         result is signedly or unsignedly saturated.  There are also
+         rounding variants, which add 2^(shift_amount-1) to the value before
+         shifting, but only in the shift-right case.  Vacated positions
+         are filled with zeroes.  IOW, it's either SHR or SHL, but not SAR.
+      */
+
+      /* VECTOR x SCALAR SATURATING (& MAYBE ROUNDING) NARROWING SHIFT RIGHT */
+      /* All of type (V128, I8) -> V128 */
+      /* The first argument is shifted right, then narrowed to half the width
+         by saturating it.  The second argument is a scalar shift amount that
+         applies to all lanes, and must be a value in the range 1 to lane_width.
+         The shift may be done signedly (Sar variants) or unsignedly (Shr
+         variants).  The saturation is done according to the two signedness
+         indicators at the end of the name.  For example 64Sto32U means a
+         signed 64 bit value is saturated into an unsigned 32 bit value.
+         Additionally, the QRS variants do rounding, that is, they add the
+         value (1 << (shift_amount-1)) to each source lane before shifting.
+
+         These operations return 65 bits: one bit ("Q") indicating whether
+         saturation occurred, and the shift result.  The result type is V128,
+         of which the lower half is the shift result, and Q occupies the
+         least significant bit of the upper half.  All other bits of the
+         upper half are zero. */
+      // No rounding, sat U->U
+      Iop_QandQShrNnarrow16Uto8Ux8,
+      Iop_QandQShrNnarrow32Uto16Ux4, Iop_QandQShrNnarrow64Uto32Ux2,
+      // No rounding, sat S->S
+      Iop_QandQSarNnarrow16Sto8Sx8,
+      Iop_QandQSarNnarrow32Sto16Sx4, Iop_QandQSarNnarrow64Sto32Sx2,
+      // No rounding, sat S->U
+      Iop_QandQSarNnarrow16Sto8Ux8,
+      Iop_QandQSarNnarrow32Sto16Ux4, Iop_QandQSarNnarrow64Sto32Ux2,
+
+      // Rounding, sat U->U
+      Iop_QandQRShrNnarrow16Uto8Ux8,
+      Iop_QandQRShrNnarrow32Uto16Ux4, Iop_QandQRShrNnarrow64Uto32Ux2,
+      // Rounding, sat S->S
+      Iop_QandQRSarNnarrow16Sto8Sx8,
+      Iop_QandQRSarNnarrow32Sto16Sx4, Iop_QandQRSarNnarrow64Sto32Sx2,
+      // Rounding, sat S->U
+      Iop_QandQRSarNnarrow16Sto8Ux8,
+      Iop_QandQRSarNnarrow32Sto16Ux4, Iop_QandQRSarNnarrow64Sto32Ux2,
 
       /* NARROWING (binary) 
          -- narrow 2xV128 into 1xV128, hi half from left arg */
@@ -1575,7 +1697,9 @@ typedef
       Iop_InterleaveOddLanes32x4, Iop_InterleaveEvenLanes32x4,
 
       /* CONCATENATION -- build a new value by concatenating either
-         the even or odd lanes of both operands. */
+         the even or odd lanes of both operands.  Note that
+         Cat{Odd,Even}Lanes64x2 are identical to Interleave{HI,LO}64x2
+         and so are omitted. */
       Iop_CatOddLanes8x16, Iop_CatOddLanes16x8, Iop_CatOddLanes32x4,
       Iop_CatEvenLanes8x16, Iop_CatEvenLanes16x8, Iop_CatEvenLanes32x4,
 
@@ -1587,21 +1711,21 @@ typedef
       /* DUPLICATING -- copy value to all lanes */
       Iop_Dup8x16,   Iop_Dup16x8,   Iop_Dup32x4,
 
-      /* EXTRACT -- copy 16-arg3 highest bytes from arg1 to 16-arg3 lowest bytes
-         of result and arg3 lowest bytes of arg2 to arg3 highest bytes of
-         result.
-         It is a triop: (V128, V128, I8) -> V128 */
-      /* Note: the ARM back end handles only constant arg3 in this operation. */
-      Iop_ExtractV128,
+      /* SLICE -- produces the lowest 128 bits of (arg1:arg2) >> (8 * arg3).
+         arg3 is a shift amount in bytes and may be between 0 and 16
+         inclusive.  When 0, the result is arg2; when 16, the result is arg1.
+         Not all back ends handle all values.  The arm64 back
+         end handles only immediate arg3 values. */
+      Iop_SliceV128,  // (V128, V128, I8) -> V128
 
-      /* REVERSE the order of elements in each Half-words, Words,
-         Double-words */
-      /* Examples:
-            Reverse32_16x8([a,b,c,d,e,f,g,h]) = [b,a,d,c,f,e,h,g]
-            Reverse64_16x8([a,b,c,d,e,f,g,h]) = [d,c,b,a,h,g,f,e] */
-      Iop_Reverse16_8x16,
-      Iop_Reverse32_8x16, Iop_Reverse32_16x8,
-      Iop_Reverse64_8x16, Iop_Reverse64_16x8, Iop_Reverse64_32x4,
+      /* REVERSE the order of chunks in vector lanes.  Chunks must be
+         smaller than the vector lanes (obviously) and so may be 8-,
+         16- and 32-bit in size.  See definitions of 64-bit SIMD
+         versions above for examples. */
+      Iop_Reverse8sIn16_x8,
+      Iop_Reverse8sIn32_x4, Iop_Reverse16sIn32_x4,
+      Iop_Reverse8sIn64_x2, Iop_Reverse16sIn64_x2, Iop_Reverse32sIn64_x2,
+      Iop_Reverse1sIn8_x16, /* Reverse bits in each byte lane. */
 
       /* PERMUTING -- copy src bytes to dst,
          as indexed by control vector bytes:
@@ -1616,8 +1740,8 @@ typedef
       Iop_GetMSBs8x16, /* V128 -> I16 */
 
       /* Vector Reciprocal Estimate and Vector Reciprocal Square Root Estimate
-         See floating-point equiwalents for details. */
-      Iop_Recip32x4, Iop_Rsqrte32x4,
+         See floating-point equivalents for details. */
+      Iop_RecipEst32Ux4, Iop_RSqrtEst32Ux4,
 
       /* ------------------ 256-bit SIMD Integer. ------------------ */
 
@@ -1688,8 +1812,8 @@ typedef
 
       Iop_Sqrt32Fx8,
       Iop_Sqrt64Fx4,
-      Iop_RSqrt32Fx8,
-      Iop_Recip32Fx8,
+      Iop_RSqrtEst32Fx8,
+      Iop_RecipEst32Fx8,
 
       Iop_Max32Fx8, Iop_Min32Fx8,
       Iop_Max64Fx4, Iop_Min64Fx4,
@@ -2000,7 +2124,7 @@ struct _IRQop {
    only appear at most once in an argument list, and it may not appear
    at all in argument lists for clean helper calls. */
 
-static inline Bool is_IRExpr_VECRET_or_BBPTR ( IRExpr* e ) {
+static inline Bool is_IRExpr_VECRET_or_BBPTR ( const IRExpr* e ) {
    return e->tag == Iex_VECRET || e->tag == Iex_BBPTR;
 }
 
@@ -2024,10 +2148,10 @@ extern IRExpr* IRExpr_VECRET ( void );
 extern IRExpr* IRExpr_BBPTR  ( void );
 
 /* Deep-copy an IRExpr. */
-extern IRExpr* deepCopyIRExpr ( IRExpr* );
+extern IRExpr* deepCopyIRExpr ( const IRExpr* );
 
 /* Pretty-print an IRExpr. */
-extern void ppIRExpr ( IRExpr* );
+extern void ppIRExpr ( const IRExpr* );
 
 /* NULL-terminated IRExpr vector constructors, suitable for
    use as arg lists in clean/dirty helper calls. */
@@ -2050,7 +2174,7 @@ extern IRExpr** mkIRExprVec_8 ( IRExpr*, IRExpr*, IRExpr*, IRExpr*,
      elements with the original).
    - deepCopy: deep-copy (ie. create a completely new vector). */
 extern IRExpr** shallowCopyIRExprVec ( IRExpr** );
-extern IRExpr** deepCopyIRExprVec ( IRExpr** );
+extern IRExpr** deepCopyIRExprVec ( IRExpr *const * );
 
 /* Make a constant expression from the given host word taking into
    account (of course) the host word size. */
@@ -2065,13 +2189,13 @@ IRExpr* mkIRExprCCall ( IRType retty,
 
 /* Convenience functions for atoms (IRExprs which are either Iex_Tmp or
  * Iex_Const). */
-static inline Bool isIRAtom ( IRExpr* e ) {
+static inline Bool isIRAtom ( const IRExpr* e ) {
    return toBool(e->tag == Iex_RdTmp || e->tag == Iex_Const);
 }
 
 /* Are these two IR atoms identical?  Causes an assertion
    failure if they are passed non-atoms. */
-extern Bool eqIRAtom ( IRExpr*, IRExpr* );
+extern Bool eqIRAtom ( const IRExpr*, const IRExpr* );
 
 
 /* ------------------ Jump kinds ------------------ */
@@ -2250,13 +2374,13 @@ typedef
    IRDirty;
 
 /* Pretty-print a dirty call */
-extern void     ppIRDirty ( IRDirty* );
+extern void     ppIRDirty ( const IRDirty* );
 
 /* Allocate an uninitialised dirty call */
 extern IRDirty* emptyIRDirty ( void );
 
 /* Deep-copy a dirty call */
-extern IRDirty* deepCopyIRDirty ( IRDirty* );
+extern IRDirty* deepCopyIRDirty ( const IRDirty* );
 
 /* A handy function which takes some of the tedium out of constructing
    dirty helper calls.  The called function impliedly does not return
@@ -2369,14 +2493,14 @@ typedef
    }
    IRCAS;
 
-extern void ppIRCAS ( IRCAS* cas );
+extern void ppIRCAS ( const IRCAS* cas );
 
 extern IRCAS* mkIRCAS ( IRTemp oldHi, IRTemp oldLo,
                         IREndness end, IRExpr* addr, 
                         IRExpr* expdHi, IRExpr* expdLo,
                         IRExpr* dataHi, IRExpr* dataLo );
 
-extern IRCAS* deepCopyIRCAS ( IRCAS* );
+extern IRCAS* deepCopyIRCAS ( const IRCAS* );
 
 
 /* ------------------ Circular Array Put ------------------ */
@@ -2389,12 +2513,12 @@ typedef
       IRExpr*     data;  /* The value to write */
    } IRPutI;
 
-extern void ppIRPutI ( IRPutI* puti );
+extern void ppIRPutI ( const IRPutI* puti );
 
 extern IRPutI* mkIRPutI ( IRRegArray* descr, IRExpr* ix,
                           Int bias, IRExpr* data );
 
-extern IRPutI* deepCopyIRPutI ( IRPutI* );
+extern IRPutI* deepCopyIRPutI ( const IRPutI* );
 
 
 /* --------------- Guarded loads and stores --------------- */
@@ -2461,11 +2585,11 @@ typedef
    }
    IRLoadG;
 
-extern void ppIRStoreG ( IRStoreG* sg );
+extern void ppIRStoreG ( const IRStoreG* sg );
 
 extern void ppIRLoadGOp ( IRLoadGOp cvt );
 
-extern void ppIRLoadG ( IRLoadG* lg );
+extern void ppIRLoadG ( const IRLoadG* lg );
 
 extern IRStoreG* mkIRStoreG ( IREndness end,
                               IRExpr* addr, IRExpr* data,
@@ -2769,10 +2893,10 @@ extern IRStmt* IRStmt_Exit    ( IRExpr* guard, IRJumpKind jk, IRConst* dst,
                                 Int offsIP );
 
 /* Deep-copy an IRStmt. */
-extern IRStmt* deepCopyIRStmt ( IRStmt* );
+extern IRStmt* deepCopyIRStmt ( const IRStmt* );
 
 /* Pretty-print an IRStmt. */
-extern void ppIRStmt ( IRStmt* );
+extern void ppIRStmt ( const IRStmt* );
 
 
 /* ------------------ Basic Blocks ------------------ */
@@ -2795,10 +2919,10 @@ typedef
 extern IRTemp newIRTemp ( IRTypeEnv*, IRType );
 
 /* Deep-copy a type environment */
-extern IRTypeEnv* deepCopyIRTypeEnv ( IRTypeEnv* );
+extern IRTypeEnv* deepCopyIRTypeEnv ( const IRTypeEnv* );
 
 /* Pretty-print a type environment */
-extern void ppIRTypeEnv ( IRTypeEnv* );
+extern void ppIRTypeEnv ( const IRTypeEnv* );
 
 
 /* Code blocks, which in proper compiler terminology are superblocks
@@ -2832,14 +2956,14 @@ typedef
 extern IRSB* emptyIRSB ( void );
 
 /* Deep-copy an IRSB */
-extern IRSB* deepCopyIRSB ( IRSB* );
+extern IRSB* deepCopyIRSB ( const IRSB* );
 
 /* Deep-copy an IRSB, except for the statements list, which set to be
    a new, empty, list of statements. */
-extern IRSB* deepCopyIRSBExceptStmts ( IRSB* );
+extern IRSB* deepCopyIRSBExceptStmts ( const IRSB* );
 
 /* Pretty-print an IRSB */
-extern void ppIRSB ( IRSB* );
+extern void ppIRSB ( const IRSB* );
 
 /* Append an IRStmt to an IRSB */
 extern void addStmtToIRSB ( IRSB*, IRStmt* );
@@ -2853,9 +2977,9 @@ extern void addStmtToIRSB ( IRSB*, IRStmt* );
 extern IRTypeEnv* emptyIRTypeEnv  ( void );
 
 /* What is the type of this expression? */
-extern IRType typeOfIRConst ( IRConst* );
-extern IRType typeOfIRTemp  ( IRTypeEnv*, IRTemp );
-extern IRType typeOfIRExpr  ( IRTypeEnv*, IRExpr* );
+extern IRType typeOfIRConst ( const IRConst* );
+extern IRType typeOfIRTemp  ( const IRTypeEnv*, IRTemp );
+extern IRType typeOfIRExpr  ( const IRTypeEnv*, const IRExpr* );
 
 /* What are the arg and result type for this IRLoadGOp? */
 extern void typeOfIRLoadGOp ( IRLoadGOp cvt,
@@ -2863,11 +2987,11 @@ extern void typeOfIRLoadGOp ( IRLoadGOp cvt,
                               /*OUT*/IRType* t_arg );
 
 /* Sanity check a BB of IR */
-extern void sanityCheckIRSB ( IRSB*  bb, 
+extern void sanityCheckIRSB ( const  IRSB*  bb, 
                               const  HChar* caller,
                               Bool   require_flatness, 
                               IRType guest_word_size );
-extern Bool isFlatIRStmt ( IRStmt* );
+extern Bool isFlatIRStmt ( const IRStmt* );
 
 /* Is this any value actually in the enumeration 'IRType' ? */
 extern Bool isPlausibleIRType ( IRType ty );

@@ -69,6 +69,10 @@ extern void  VG_(core_panic_at)   ( const HChar* str, UnwindStartRegs* );
 /* Exits with status as client exit code. */
 extern void VG_(client_exit)( Int status );
 
+/* Lightweight exit without any dependencies. */
+__attribute__ ((__noreturn__))
+extern void VG_(exit_now)( Int status );
+
 /* Called when some unhandleable client behaviour is detected.
    Prints a msg and aborts. */
 extern void VG_(unimplemented) ( const HChar* msg )
@@ -79,11 +83,13 @@ extern void VG_(unimplemented) ( const HChar* msg )
    Mostly for debugging V.
    The following activates optional output:
      host_stacktrace : shows the host stacktrace.
-     valgrind_stack_usage : shows how much of the valgrind stack was used.
+     stack_usage True means:
+                   shows how much of the valgrind stack was used.
+                   shows the client stack range
      exited_thread_slots : show information for thread slots that were used
         but the thread has now exited. */
 extern void VG_(show_sched_status) ( Bool host_stacktrace,
-                                     Bool valgrind_stack_usage,
+                                     Bool stack_usage,
                                      Bool exited_threads);
 
 #endif   // __PUB_CORE_LIBCASSERT_H

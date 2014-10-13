@@ -48,7 +48,7 @@
 /*------------------------------------------------------------*/
 /*--- Forward declarations                                 ---*/
 /*------------------------------------------------------------*/
-static UInt s390_decode_and_irgen(UChar *, UInt, DisResult *);
+static UInt s390_decode_and_irgen(const UChar *, UInt, DisResult *);
 static void s390_irgen_xonc(IROp, IRTemp, IRTemp, IRTemp);
 static void s390_irgen_CLC_EX(IRTemp, IRTemp, IRTemp);
 
@@ -482,20 +482,36 @@ put_dpr_pair(UInt archreg, IRExpr *expr)
 
 /* Terminate the current IRSB with an emulation failure. */
 static void
-emulation_failure(VexEmNote fail_kind)
+emulation_failure_with_expr(IRExpr *emfailure)
 {
-   stmt(IRStmt_Put(S390X_GUEST_OFFSET(guest_EMNOTE), mkU32(fail_kind)));
+   vassert(typeOfIRExpr(irsb->tyenv, emfailure) == Ity_I32);
+
+   stmt(IRStmt_Put(S390X_GUEST_OFFSET(guest_EMNOTE), emfailure));
    dis_res->whatNext = Dis_StopHere;
    dis_res->jk_StopHere = Ijk_EmFail;
 }
 
+static void
+emulation_failure(VexEmNote fail_kind)
+{
+   emulation_failure_with_expr(mkU32(fail_kind));
+}
+
 /* Terminate the current IRSB with an emulation warning. */
+static void
+emulation_warning_with_expr(IRExpr *emwarning)
+{
+   vassert(typeOfIRExpr(irsb->tyenv, emwarning) == Ity_I32);
+
+   stmt(IRStmt_Put(S390X_GUEST_OFFSET(guest_EMNOTE), emwarning));
+   dis_res->whatNext = Dis_StopHere;
+   dis_res->jk_StopHere = Ijk_EmWarn;
+}
+
 static void
 emulation_warning(VexEmNote warn_kind)
 {
-   stmt(IRStmt_Put(S390X_GUEST_OFFSET(guest_EMNOTE), mkU32(warn_kind)));
-   dis_res->whatNext = Dis_StopHere;
-   dis_res->jk_StopHere = Ijk_EmWarn;
+   emulation_warning_with_expr(mkU32(warn_kind));
 }
 
 /*------------------------------------------------------------*/
@@ -7262,12 +7278,7 @@ s390_irgen_PFPO(void)
 
    /* Check validity of function code in GR 0 */
    assign(ef, s390_call_pfpo_helper(unop(Iop_32Uto64, mkexpr(gr0))));
-
-   /* fixs390: Function emulation_failure can be used if it takes argument as
-      IRExpr * instead of VexEmNote. */
-   stmt(IRStmt_Put(S390X_GUEST_OFFSET(guest_EMNOTE), mkexpr(ef)));
-   dis_res->whatNext = Dis_StopHere;
-   dis_res->jk_StopHere = Ijk_EmFail;
+   emulation_failure_with_expr(mkexpr(ef));
 
    stmt(
         IRStmt_Exit(
@@ -13893,7 +13904,7 @@ s390_irgen_call_noredir(void)
 
 
 static s390_decode_t
-s390_decode_2byte_and_irgen(UChar *bytes)
+s390_decode_2byte_and_irgen(const UChar *bytes)
 {
    typedef union {
       struct {
@@ -14026,7 +14037,7 @@ unimplemented:
 }
 
 static s390_decode_t
-s390_decode_4byte_and_irgen(UChar *bytes)
+s390_decode_4byte_and_irgen(const UChar *bytes)
 {
    typedef union {
       struct {
@@ -15080,7 +15091,7 @@ unimplemented:
 }
 
 static s390_decode_t
-s390_decode_6byte_and_irgen(UChar *bytes)
+s390_decode_6byte_and_irgen(const UChar *bytes)
 {
    typedef union {
       struct {
@@ -16345,7 +16356,7 @@ unimplemented:
 
 /* Handle "special" instructions. */
 static s390_decode_t
-s390_decode_special_and_irgen(UChar *bytes)
+s390_decode_special_and_irgen(const UChar *bytes)
 {
    s390_decode_t status = S390_DECODE_OK;
 
@@ -16386,7 +16397,7 @@ s390_decode_special_and_irgen(UChar *bytes)
 
 /* Function returns # bytes that were decoded or 0 in case of failure */
 static UInt
-s390_decode_and_irgen(UChar *bytes, UInt insn_length, DisResult *dres)
+s390_decode_and_irgen(const UChar *bytes, UInt insn_length, DisResult *dres)
 {
    s390_decode_t status;
 
@@ -16453,10 +16464,12 @@ s390_decode_and_irgen(UChar *bytes, UInt insn_length, DisResult *dres)
          vex_printf("unimplemented special insn: ");
          break;
 
-      default:
       case S390_DECODE_ERROR:
          vex_printf("decoding error: ");
          break;
+
+      default:
+         vpanic("s390_decode_and_irgen");
       }
 
       vex_printf("%02x%02x", bytes[0], bytes[1]);
@@ -16475,7 +16488,7 @@ s390_decode_and_irgen(UChar *bytes, UInt insn_length, DisResult *dres)
 
 /* Disassemble a single instruction INSN into IR. */
 static DisResult
-disInstr_S390_WRK(UChar *insn)
+disInstr_S390_WRK(const UChar *insn)
 {
    UChar byte;
    UInt  insn_length;
@@ -16515,10 +16528,10 @@ disInstr_S390_WRK(UChar *insn)
          incorrect address. */
       put_IA(mkaddr_expr(guest_IA_curr_instr));
 
+      dres.len         = 0;
       dres.whatNext    = Dis_StopHere;
       dres.jk_StopHere = Ijk_NoDecode;
       dres.continueAt  = 0;
-      dres.len         = 0;
    } else {
       /* Decode success */
       switch (dres.whatNext) {
@@ -16539,7 +16552,7 @@ disInstr_S390_WRK(UChar *insn)
          }
          break;
       default:
-         vassert(0);
+         vpanic("disInstr_S390_WRK");
       }
    }
 
@@ -16559,19 +16572,19 @@ disInstr_S390(IRSB        *irsb_IN,
               Bool       (*resteerOkFn)(void *, Addr64),
               Bool         resteerCisOk,
               void        *callback_opaque,
-              UChar       *guest_code,
+              const UChar *guest_code,
               Long         delta,
               Addr64       guest_IP,
               VexArch      guest_arch,
               VexArchInfo *archinfo,
               VexAbiInfo  *abiinfo,
-              Bool         host_bigendian,
+              VexEndness   host_endness,
               Bool         sigill_diag_IN)
 {
    vassert(guest_arch == VexArchS390X);
 
    /* The instruction decoder requires a big-endian machine. */
-   vassert(host_bigendian == True);
+   vassert(host_endness == VexEndnessBE);
 
    /* Set globals (see top of this file) */
    guest_IA_curr_instr = guest_IP;

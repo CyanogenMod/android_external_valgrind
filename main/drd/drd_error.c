@@ -171,8 +171,6 @@ void drd_report_data_race(Error* const err, const DataRaceErrInfo* const dri)
    tl_assert(dri);
    tl_assert(dri->addr);
    tl_assert(dri->size > 0);
-   tl_assert(descr1);
-   tl_assert(descr2);
 
    (void) VG_(get_data_description)(descr1, descr2, dri->addr);
    /* If there's nothing in descr1/2, free them.  Why is it safe to to
@@ -602,17 +600,21 @@ static const HChar* drd_get_error_name(Error* e)
  * define any 'extra' suppression information.
  */
 static
-Bool drd_get_extra_suppression_info(Error* e,
-                                    /*OUT*/HChar* buf, Int nBuf)
+SizeT drd_get_extra_suppression_info(Error* e,
+                                     /*OUT*/HChar* buf, Int nBuf)
 {
-   return False;
+   tl_assert(nBuf >= 1);
+   buf[0] = '\0';
+   return 0;
 }
 
 static
-Bool drd_print_extra_suppression_use(Supp* su,
-                                     /*OUT*/HChar* buf, Int nBuf)
+SizeT drd_print_extra_suppression_use(Supp* su,
+                                      /*OUT*/HChar* buf, Int nBuf)
 {
-   return False;
+   tl_assert(nBuf >= 1);
+   buf[0] = '\0';
+   return 0;
 }
 
 static

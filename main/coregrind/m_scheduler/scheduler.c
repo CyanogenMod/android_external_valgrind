@@ -61,14 +61,15 @@
 #include "pub_core_basics.h"
 #include "pub_core_debuglog.h"
 #include "pub_core_vki.h"
-#include "pub_core_vkiscnums.h"    // __NR_sched_yield
-#include "pub_core_libcsetjmp.h"   // to keep _threadstate.h happy
+#include "pub_core_vkiscnums.h"  // __NR_sched_yield
+#include "pub_core_libcsetjmp.h" // to keep _threadstate.h happy
 #include "pub_core_threadstate.h"
+#include "pub_core_clientstate.h"
 #include "pub_core_aspacemgr.h"
-#include "pub_core_clreq.h"         // for VG_USERREQ__*
+#include "pub_core_clreq.h"      // for VG_USERREQ__*
 #include "pub_core_dispatch.h"
-#include "pub_core_errormgr.h"      // For VG_(get_n_errs_found)()
-#include "pub_core_gdbserver.h"     // for VG_(gdbserver) and VG_(gdbserver_activity)
+#include "pub_core_errormgr.h"   // For VG_(get_n_errs_found)()
+#include "pub_core_gdbserver.h"  // for VG_(gdbserver)/VG_(gdbserver_activity)
 #include "pub_core_libcbase.h"
 #include "pub_core_libcassert.h"
 #include "pub_core_libcprint.h"
@@ -241,7 +242,7 @@ ThreadId VG_(alloc_ThreadState) ( void )
 	 VG_(threads)[i].status = VgTs_Init;
 	 VG_(threads)[i].exitreason = VgSrc_None;
          if (VG_(threads)[i].thread_name)
-            VG_(arena_free)(VG_AR_CORE, VG_(threads)[i].thread_name);
+            VG_(free)(VG_(threads)[i].thread_name);
          VG_(threads)[i].thread_name = NULL;
          return i;
       }
@@ -619,7 +620,7 @@ ThreadId VG_(scheduler_init_phase1) ( void )
 
       VG_(threads)[i].status                    = VgTs_Empty;
       VG_(threads)[i].client_stack_szB          = 0;
-      VG_(threads)[i].client_stack_highest_word = (Addr)NULL;
+      VG_(threads)[i].client_stack_highest_byte = (Addr)NULL;
       VG_(threads)[i].err_disablement_level     = 0;
       VG_(threads)[i].thread_name               = NULL;
    }
@@ -655,8 +656,8 @@ void VG_(scheduler_init_phase2) ( ThreadId tid_main,
    vg_assert(VG_IS_PAGE_ALIGNED(clstack_end+1));
    vg_assert(VG_IS_PAGE_ALIGNED(clstack_size));
 
-   VG_(threads)[tid_main].client_stack_highest_word 
-      = clstack_end + 1 - sizeof(UWord);
+   VG_(threads)[tid_main].client_stack_highest_byte 
+      = clstack_end;
    VG_(threads)[tid_main].client_stack_szB 
       = clstack_size;
 
@@ -695,7 +696,7 @@ void VG_(scheduler_init_phase2) ( ThreadId tid_main,
    guest state, its two copies, and the spill area.  In short, all 4
    areas must have a 16-aligned size and be 16-aligned, and placed
    back-to-back. */
-static void do_pre_run_checks ( ThreadState* tst )
+static void do_pre_run_checks ( volatile ThreadState* tst )
 {
    Addr a_vex     = (Addr) & tst->arch.vex;
    Addr a_vexsh1  = (Addr) & tst->arch.vex_shadow1;
@@ -768,7 +769,7 @@ static void do_pre_run_checks ( ThreadState* tst )
    vg_assert(VG_IS_8_ALIGNED(offsetof(VexGuestAMD64State,guest_RIP)));
 #  endif
 
-#  if defined(VGA_ppc32) || defined(VGA_ppc64)
+#  if defined(VGA_ppc32) || defined(VGA_ppc64be) || defined(VGA_ppc64le)
    /* ppc guest_state vector regs must be 16 byte aligned for
       loads/stores.  This is important! */
    vg_assert(VG_IS_16_ALIGNED(& tst->arch.vex.guest_VSR0));
@@ -858,7 +859,7 @@ void run_thread_for_a_while ( /*OUT*/HWord* two_words,
    vg_assert(*dispatchCtrP > 0);
 
    tst = VG_(get_ThreadState)(tid);
-   do_pre_run_checks( (ThreadState*)tst );
+   do_pre_run_checks( tst );
    /* end Paranoia */
 
    /* Futz with the XIndir stats counters. */
@@ -933,7 +934,7 @@ void run_thread_for_a_while ( /*OUT*/HWord* two_words,
       jumped, 
       VG_(disp_run_translations)( 
          two_words,
-         (void*)&tst->arch.vex,
+         (volatile void*)&tst->arch.vex,
          host_code_addr
       )
    );
@@ -963,7 +964,24 @@ void run_thread_for_a_while ( /*OUT*/HWord* two_words,
    vg_assert(tst->arch.vex.host_EvC_FAILADDR
              == (HWord)VG_(fnptr_to_fnentry)( &VG_(disp_cp_evcheck_fail)) );
 
-   done_this_time = *dispatchCtrP - ((Int)tst->arch.vex.host_EvC_COUNTER + 1);
+   /* The number of events done this time is the difference between
+      the event counter originally and what it is now.  Except -- if
+      it has gone negative (to -1) then the transition 0 to -1 doesn't
+      correspond to a real executed block, so back it out.  It's like
+      this because the event checks decrement the counter first and
+      check it for negativeness second, hence the 0 to -1 transition
+      causes a bailout and the block it happens in isn't executed. */
+   {
+     Int dispatchCtrAfterwards = (Int)tst->arch.vex.host_EvC_COUNTER;
+     done_this_time = *dispatchCtrP - dispatchCtrAfterwards;
+     if (dispatchCtrAfterwards == -1) {
+        done_this_time--;
+     } else {
+        /* If the generated code drives the counter below -1, something
+           is seriously wrong. */
+        vg_assert(dispatchCtrAfterwards >= 0);
+     }
+   }
 
    vg_assert(done_this_time >= 0);
    bbs_done += (ULong)done_this_time;
@@ -1075,13 +1093,21 @@ static void handle_syscall(ThreadId tid, UInt trc)
       runnable again.  We could take a signal while the
       syscall runs. */
 
-   if (VG_(clo_sanity_level >= 3))
-      VG_(am_do_sync_check)("(BEFORE SYSCALL)",__FILE__,__LINE__);
+   if (VG_(clo_sanity_level) >= 3) {
+      HChar buf[50];
+      VG_(sprintf)(buf, "(BEFORE SYSCALL, tid %d)", tid);
+      Bool ok = VG_(am_do_sync_check)(buf, __FILE__, __LINE__);
+      vg_assert(ok);
+   }
 
    SCHEDSETJMP(tid, jumped, VG_(client_syscall)(tid, trc));
 
-   if (VG_(clo_sanity_level >= 3))
-      VG_(am_do_sync_check)("(AFTER SYSCALL)",__FILE__,__LINE__);
+   if (VG_(clo_sanity_level) >= 3) {
+      HChar buf[50];
+      VG_(sprintf)(buf, "(AFTER SYSCALL, tid %d)", tid);
+      Bool ok = VG_(am_do_sync_check)(buf, __FILE__, __LINE__);
+      vg_assert(ok);
+   }
 
    if (!VG_(is_running_thread)(tid))
       VG_(printf)("tid %d not running; VG_(running_tid)=%d, tid %d status %d\n",
@@ -1202,6 +1228,30 @@ VgSchedReturnCode VG_(scheduler) ( ThreadId tid )
       }
    }
 
+   if (SimHintiS(SimHint_no_nptl_pthread_stackcache, VG_(clo_sim_hints))
+       && tid != 1) {
+      /* We disable the stack cache the first time we see a thread other
+         than the main thread appearing. At this moment, we are sure the pthread
+         lib loading is done/variable was initialised by pthread lib/... */
+      if (VG_(client__stack_cache_actsize__addr)) {
+         if (*VG_(client__stack_cache_actsize__addr) == 0) {
+            VG_(debugLog)(1,"sched",
+                          "pthread stack cache size disable done"
+                          " via kludge\n");
+            *VG_(client__stack_cache_actsize__addr) = 1000 * 1000 * 1000;
+            /* Set a value big enough to be above the hardcoded maximum stack
+               cache size in glibc, small enough to allow a pthread stack size
+               to be added without risk of overflow. */
+         }
+      } else {
+          VG_(debugLog)(0,"sched",
+                        "WARNING: pthread stack cache cannot be disabled!\n");
+          VG_(clo_sim_hints) &= ~SimHint2S(SimHint_no_nptl_pthread_stackcache);
+          /* Remove SimHint_no_nptl_pthread_stackcache from VG_(clo_sim_hints)
+             to avoid having a msg for all following threads. */
+      }
+   }
+
    /* set the proper running signal mask */
    block_signals();
    
@@ -1252,14 +1302,7 @@ VgSchedReturnCode VG_(scheduler) ( ThreadId tid )
 	 /* For stats purposes only. */
 	 n_scheduling_events_MAJOR++;
 
-	 /* Figure out how many bbs to ask vg_run_innerloop to do.  Note
-	    that it decrements the counter before testing it for zero, so
-	    that if tst->dispatch_ctr is set to N you get at most N-1
-	    iterations.  Also this means that tst->dispatch_ctr must
-	    exceed zero before entering the innerloop.  Also also, the
-	    decrement is done before the bb is actually run, so you
-	    always get at least one decrement even if nothing happens. */
-         // FIXME is this right?
+	 /* Figure out how many bbs to ask vg_run_innerloop to do. */
          dispatch_ctr = SCHEDULING_QUANTUM;
 
 	 /* paranoia ... */
@@ -1304,6 +1347,18 @@ VgSchedReturnCode VG_(scheduler) ( ThreadId tid )
             next block to be executed should be no-redir.  Then we can
             suspend and resume at any point, which isn't the case at
             the moment. */
+         /* We can't enter a no-redir translation with the dispatch
+            ctr set to zero, for the reasons commented just above --
+            we need to force it to execute right now.  So, if the
+            dispatch ctr is zero, set it to one.  Note that this would
+            have the bad side effect of holding the Big Lock arbitrary
+            long should there be an arbitrarily long sequence of
+            back-to-back no-redir translations to run.  But we assert
+            just below that this translation cannot request another
+            no-redir jump, so we should be safe against that. */
+         if (dispatch_ctr == 0) {
+            dispatch_ctr = 1;
+         }
          handle_noredir_jump( &trc[0], 
                               &dispatch_ctr,
                               tid );
@@ -1315,6 +1370,8 @@ VgSchedReturnCode VG_(scheduler) ( ThreadId tid )
             can, since handle_noredir_jump will assert if the counter
             is zero on entry. */
          vg_assert(trc[0] != VG_TRC_INNER_COUNTERZERO);
+         /* This asserts the same thing. */
+         vg_assert(dispatch_ctr >= 0);
 
          /* A no-redir translation can't return with a chain-me
             request, since chaining in the no-redir cache is too
@@ -1332,7 +1389,7 @@ VgSchedReturnCode VG_(scheduler) ( ThreadId tid )
          break;
 
       case VG_TRC_INNER_FASTMISS:
-	 vg_assert(dispatch_ctr > 0);
+	 vg_assert(dispatch_ctr >= 0);
 	 handle_tt_miss(tid);
 	 break;
 
@@ -1369,7 +1426,7 @@ VgSchedReturnCode VG_(scheduler) ( ThreadId tid )
             before swapping to another.  That means that short term
             spins waiting for hardware to poke memory won't cause a
             thread swap. */
-	 if (dispatch_ctr > 1000) 
+         if (dispatch_ctr > 1000)
             dispatch_ctr = 1000;
 	 break;
 
@@ -1614,7 +1671,7 @@ void VG_(nuke_all_threads_except) ( ThreadId me, VgSchedReturnCode src )
 #elif defined(VGA_amd64)
 #  define VG_CLREQ_ARGS       guest_RAX
 #  define VG_CLREQ_RET        guest_RDX
-#elif defined(VGA_ppc32) || defined(VGA_ppc64)
+#elif defined(VGA_ppc32) || defined(VGA_ppc64be) || defined(VGA_ppc64le)
 #  define VG_CLREQ_ARGS       guest_GPR4
 #  define VG_CLREQ_RET        guest_GPR3
 #elif defined(VGA_arm)
@@ -2110,7 +2167,7 @@ void scheduler_sanity ( ThreadId tid )
          VG_(printf)("\n------------ Sched State at %d ms ------------\n",
                      (Int)now);
          VG_(show_sched_status)(True,  // host_stacktrace
-                                True,  // valgrind_stack_usage
+                                True,  // stack_usage
                                 True); // exited_threads);
       }
    }

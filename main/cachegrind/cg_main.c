@@ -57,7 +57,6 @@
 /* Set to 1 for very verbose debugging */
 #define DEBUG_CG 0
 
-#define MIN_LINE_SIZE         16
 #define FILE_LEN              VKI_PATH_MAX
 #define FN_LEN                256
 
@@ -1048,9 +1047,9 @@ void addEvent_Bi ( CgState* cgs, InstrInfo* inode, IRAtom* whereTo )
 static
 IRSB* cg_instrument ( VgCallbackClosure* closure,
                       IRSB* sbIn, 
-                      VexGuestLayout* layout, 
-                      VexGuestExtents* vge,
-                      VexArchInfo* archinfo_host,
+                      const VexGuestLayout* layout, 
+                      const VexGuestExtents* vge,
+                      const VexArchInfo* archinfo_host,
                       IRType gWordTy, IRType hWordTy )
 {
    Int        i, isize;
@@ -1363,8 +1362,6 @@ IRSB* cg_instrument ( VgCallbackClosure* closure,
 /*--- Cache configuration                                  ---*/
 /*------------------------------------------------------------*/
 
-#define UNDEFINED_CACHE     { -1, -1, -1 }
-
 static cache_t clo_I1_cache = UNDEFINED_CACHE;
 static cache_t clo_D1_cache = UNDEFINED_CACHE;
 static cache_t clo_LL_cache = UNDEFINED_CACHE;
@@ -1423,11 +1420,9 @@ static void fprint_CC_table_and_calc_totals(void)
    // "cmd:" line
    VG_(strcpy)(buf, "cmd:");
    VG_(write)(fd, (void*)buf, VG_(strlen)(buf));
-   if (VG_(args_the_exename)) {
-      VG_(write)(fd, " ", 1);
-      VG_(write)(fd, VG_(args_the_exename), 
-                     VG_(strlen)( VG_(args_the_exename) ));
-   }
+   VG_(write)(fd, " ", 1);
+   VG_(write)(fd, VG_(args_the_exename), 
+              VG_(strlen)( VG_(args_the_exename) ));
    for (i = 0; i < VG_(sizeXA)( VG_(args_for_client) ); i++) {
       HChar* arg = * (HChar**) VG_(indexXA)( VG_(args_for_client), i );
       if (arg) {

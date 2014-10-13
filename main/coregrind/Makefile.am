@@ -22,7 +22,6 @@ endif
 
 
 EXTRA_DIST = \
-	m_debuginfo/UNUSED_STABS.txt \
 	m_debuginfo/README.txt \
 	m_gdbserver/README_DEVELOPERS \
 	docs/vgdb-manpage.xml
@@ -161,6 +160,7 @@ noinst_HEADERS = \
 	pub_core_commandline.h	\
 	pub_core_coredump.h	\
 	pub_core_cpuid.h	\
+	pub_core_deduppoolalloc.h \
 	pub_core_debuginfo.h	\
 	pub_core_debugger.h	\
 	pub_core_debuglog.h	\
@@ -170,6 +170,7 @@ noinst_HEADERS = \
 	pub_core_errormgr.h	\
 	pub_core_execontext.h	\
 	pub_core_gdbserver.h	\
+	pub_core_guest.h	\
 	pub_core_hashtable.h	\
 	pub_core_initimg.h	\
 	pub_core_inner.h	\
@@ -215,12 +216,12 @@ noinst_HEADERS = \
 	m_debuginfo/priv_misc.h	\
 	m_debuginfo/priv_storage.h	\
 	m_debuginfo/priv_tytypes.h      \
-	m_debuginfo/priv_readstabs.h	\
 	m_debuginfo/priv_readpdb.h	\
 	m_debuginfo/priv_d3basics.h	\
 	m_debuginfo/priv_readdwarf.h	\
 	m_debuginfo/priv_readdwarf3.h	\
 	m_debuginfo/priv_readelf.h	\
+	m_debuginfo/priv_readexidx.h	\
 	m_debuginfo/priv_readmacho.h	\
 	m_debuginfo/priv_image.h	\
 	m_debuginfo/lzoconf.h		\
@@ -270,6 +271,7 @@ COREGRIND_SOURCES_COMMON = \
 	m_commandline.c \
 	m_clientstate.c \
 	m_cpuid.S \
+	m_deduppoolalloc.c \
 	m_debugger.c \
 	m_debuglog.c \
 	m_errormgr.c \
@@ -317,9 +319,9 @@ COREGRIND_SOURCES_COMMON = \
 	m_debuginfo/readdwarf.c \
 	m_debuginfo/readdwarf3.c \
 	m_debuginfo/readelf.c \
+	m_debuginfo/readexidx.c \
 	m_debuginfo/readmacho.c \
 	m_debuginfo/readpdb.c \
-	m_debuginfo/readstabs.c \
 	m_debuginfo/storage.c \
 	m_debuginfo/tytypes.c \
 	m_debuginfo/image.c \
@@ -332,7 +334,8 @@ COREGRIND_SOURCES_COMMON = \
 	m_dispatch/dispatch-x86-linux.S \
 	m_dispatch/dispatch-amd64-linux.S \
 	m_dispatch/dispatch-ppc32-linux.S \
-	m_dispatch/dispatch-ppc64-linux.S \
+	m_dispatch/dispatch-ppc64be-linux.S \
+	m_dispatch/dispatch-ppc64le-linux.S \
 	m_dispatch/dispatch-arm-linux.S \
 	m_dispatch/dispatch-arm64-linux.S \
 	m_dispatch/dispatch-s390x-linux.S \
@@ -384,7 +387,8 @@ COREGRIND_SOURCES_COMMON = \
 	m_syswrap/syscall-x86-linux.S \
 	m_syswrap/syscall-amd64-linux.S \
 	m_syswrap/syscall-ppc32-linux.S \
-	m_syswrap/syscall-ppc64-linux.S \
+	m_syswrap/syscall-ppc64be-linux.S \
+	m_syswrap/syscall-ppc64le-linux.S \
 	m_syswrap/syscall-arm-linux.S \
 	m_syswrap/syscall-arm64-linux.S \
 	m_syswrap/syscall-s390x-linux.S \
@@ -464,14 +468,14 @@ libreplacemalloc_toolpreload_@VGCONF_ARCH_PRI@_@VGCONF_OS@_a_SOURCES = \
 libreplacemalloc_toolpreload_@VGCONF_ARCH_PRI@_@VGCONF_OS@_a_CPPFLAGS = \
 	$(AM_CPPFLAGS_@VGCONF_PLATFORM_PRI_CAPS@)
 libreplacemalloc_toolpreload_@VGCONF_ARCH_PRI@_@VGCONF_OS@_a_CFLAGS = \
-	$(AM_CFLAGS_@VGCONF_PLATFORM_PRI_CAPS@) $(AM_CFLAGS_PIC)
+	$(AM_CFLAGS_PSO_@VGCONF_PLATFORM_PRI_CAPS@)
 if VGCONF_HAVE_PLATFORM_SEC
 libreplacemalloc_toolpreload_@VGCONF_ARCH_SEC@_@VGCONF_OS@_a_SOURCES = \
 	m_replacemalloc/vg_replace_malloc.c
 libreplacemalloc_toolpreload_@VGCONF_ARCH_SEC@_@VGCONF_OS@_a_CPPFLAGS = \
 	$(AM_CPPFLAGS_@VGCONF_PLATFORM_SEC_CAPS@)
 libreplacemalloc_toolpreload_@VGCONF_ARCH_SEC@_@VGCONF_OS@_a_CFLAGS = \
-	$(AM_CFLAGS_@VGCONF_PLATFORM_SEC_CAPS@) $(AM_CFLAGS_PIC)
+	$(AM_CFLAGS_PSO_@VGCONF_PLATFORM_SEC_CAPS@)
 endif
 
 #----------------------------------------------------------------------------
@@ -491,7 +495,7 @@ vgpreload_core_@VGCONF_ARCH_PRI@_@VGCONF_OS@_so_SOURCES = vg_preloaded.c
 vgpreload_core_@VGCONF_ARCH_PRI@_@VGCONF_OS@_so_CPPFLAGS = \
 	$(AM_CPPFLAGS_@VGCONF_PLATFORM_PRI_CAPS@)
 vgpreload_core_@VGCONF_ARCH_PRI@_@VGCONF_OS@_so_CFLAGS = \
-	$(AM_CFLAGS_@VGCONF_PLATFORM_PRI_CAPS@) $(AM_CFLAGS_PIC)
+	$(AM_CFLAGS_PSO_@VGCONF_PLATFORM_PRI_CAPS@)
 vgpreload_core_@VGCONF_ARCH_PRI@_@VGCONF_OS@_so_LDFLAGS = \
 	$(PRELOAD_LDFLAGS_@VGCONF_PLATFORM_PRI_CAPS@)
 if VGCONF_HAVE_PLATFORM_SEC
@@ -499,7 +503,7 @@ vgpreload_core_@VGCONF_ARCH_SEC@_@VGCONF_OS@_so_SOURCES = vg_preloaded.c
 vgpreload_core_@VGCONF_ARCH_SEC@_@VGCONF_OS@_so_CPPFLAGS = \
 	$(AM_CPPFLAGS_@VGCONF_PLATFORM_SEC_CAPS@)
 vgpreload_core_@VGCONF_ARCH_SEC@_@VGCONF_OS@_so_CFLAGS = \
-	$(AM_CFLAGS_@VGCONF_PLATFORM_SEC_CAPS@) $(AM_CFLAGS_PIC)
+	$(AM_CFLAGS_PSO_@VGCONF_PLATFORM_SEC_CAPS@)
 vgpreload_core_@VGCONF_ARCH_SEC@_@VGCONF_OS@_so_LDFLAGS = \
 	$(PRELOAD_LDFLAGS_@VGCONF_PLATFORM_SEC_CAPS@)
 endif

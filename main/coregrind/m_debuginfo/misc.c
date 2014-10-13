@@ -46,9 +46,12 @@ void* ML_(dinfo_zalloc) ( const HChar* cc, SizeT szB ) {
    void* v;
    vg_assert(szB > 0);
    v = VG_(arena_malloc)( VG_AR_DINFO, cc, szB );
-   vg_assert(v);
    VG_(memset)(v, 0, szB);
    return v;
+}
+
+void  ML_(dinfo_shrink_block)( void* ptr, SizeT szB ) {
+   VG_(arena_realloc_shrink)( VG_AR_DINFO, ptr, szB );
 }
 
 void ML_(dinfo_free) ( void* v ) {
@@ -61,7 +64,6 @@ HChar* ML_(dinfo_strdup) ( const HChar* cc, const HChar* str ) {
 
 void* ML_(dinfo_memdup) ( const HChar* cc, void* str, SizeT nStr ) {
    void* dst = VG_(arena_malloc)( VG_AR_DINFO, cc, nStr );
-   tl_assert(dst);
    VG_(memcpy)(dst, str, nStr);
    return dst;
 }

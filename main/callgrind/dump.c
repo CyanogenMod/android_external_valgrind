@@ -37,11 +37,10 @@
 static Int out_counter = 0;
 
 static HChar* out_file = 0;
-static HChar* out_directory = 0;
 static Bool dumps_initialized = False;
 
 /* Command */
-static HChar cmdbuf[BUF_LEN];
+static HChar *cmdbuf;
 
 /* Total reads/writes/misses sum over all dumps and threads.
  * Updated during CC traversal at dump time.
@@ -60,18 +59,6 @@ static HChar outbuf[FILENAME_LEN + FN_NAME_LEN + OBJ_NAME_LEN + COSTS_LEN];
 Int CLG_(get_dump_counter)(void)
 {
   return out_counter;
-}
-
-HChar* CLG_(get_out_file)()
-{
-    CLG_(init_dumps)();
-    return out_file;
-}
-
-HChar* CLG_(get_out_directory)()
-{
-    CLG_(init_dumps)();
-    return out_directory;
 }
 
 /*------------------------------------------------------------*/
@@ -990,16 +977,6 @@ static int my_cmp(BBCC** pbbcc1, BBCC** pbbcc2)
 */
 
 static __inline__
-void swapfunc(BBCC** a, BBCC** b, int n)
-{
-    while(n>0) {
-	BBCC* t = *a; *a = *b; *b = t;
-	a++, b++;
-	n--;
-    }
-}
-
-static __inline__
 void swap(BBCC** a, BBCC** b)
 {
     BBCC* t;
@@ -1502,7 +1479,6 @@ static void close_dumpfile(int fd)
 
 /* Helper for print_bbccs */
 
-static Int   print_fd;
 static const HChar* print_trigger;
 static HChar print_buf[BUF_LEN];
 
@@ -1514,7 +1490,7 @@ static void print_bbccs_of_thread(thread_info* ti)
 
   CLG_DEBUG(1, "+ print_bbccs(tid %d)\n", CLG_(current_tid));
 
-  print_fd = new_dumpfile(print_buf, CLG_(current_tid), print_trigger);
+  Int print_fd = new_dumpfile(print_buf, CLG_(current_tid), print_trigger);
   if (print_fd <0) {
     CLG_DEBUG(1, "- print_bbccs(tid %d): No output...\n", CLG_(current_tid));
     return;
@@ -1524,7 +1500,7 @@ static void print_bbccs_of_thread(thread_info* ti)
   init_fpos(&lastFnPos);
   init_apos(&lastAPos, 0, 0, 0);
 
-  if (p) while(1) {
+  while(1) {
 
     /* on context/function change, print old cost buffer before */
     if (lastFnPos.cxt && ((*p==0) ||				 
@@ -1580,7 +1556,7 @@ static void print_bbccs_of_thread(thread_info* ti)
   }
 
   close_dumpfile(print_fd);
-  if (array) VG_(free)(array);
+  VG_(free)(array);
   
   /* set counters of last dump */
   CLG_(copy_cost)( CLG_(sets).full, ti->lastdump_cost,
@@ -1595,7 +1571,6 @@ static void print_bbccs(const HChar* trigger, Bool only_current_thread)
   init_dump_array();
   init_debug_cache();
 
-  print_fd = -1;
   print_trigger = trigger;
 
   if (!CLG_(clo).separate_threads) {
@@ -1643,28 +1618,34 @@ void CLG_(dump_profile)(const HChar* trigger, Bool only_current_thread)
 static
 void init_cmdbuf(void)
 {
-  Int i,j,size = 0;
-  HChar* argv;
+  SizeT size;
+  Int i,j;
 
-  if (VG_(args_the_exename)) {
-      CLG_ASSERT( VG_(strlen)( VG_(args_the_exename) ) < BUF_LEN-1);
-      size = VG_(sprintf)(cmdbuf, " %s", VG_(args_the_exename));
+  /* Pass #1: How many bytes do we need? */
+  size  = 1;  // leading ' '
+  size += VG_(strlen)( VG_(args_the_exename) );
+  for (i = 0; i < VG_(sizeXA)( VG_(args_for_client) ); i++) {
+     const HChar *arg = *(HChar**)VG_(indexXA)( VG_(args_for_client), i );
+     size += 1;   // separator ' '
+     size += VG_(strlen)(arg);
   }
+
+  cmdbuf = CLG_MALLOC("cl.dump.ic.1", size + 1);  // +1 for '\0'
+
+  /* Pass #2: Build up the string */
+  size = VG_(sprintf)(cmdbuf, " %s", VG_(args_the_exename));
 
   for(i = 0; i < VG_(sizeXA)( VG_(args_for_client) ); i++) {
-      argv = * (HChar**) VG_(indexXA)( VG_(args_for_client), i );
-      if (!argv) continue;
-      if ((size>0) && (size < BUF_LEN)) cmdbuf[size++] = ' ';
-      for(j=0;argv[j]!=0;j++)
-	  if (size < BUF_LEN) cmdbuf[size++] = argv[j];
+     const HChar *arg = * (HChar**) VG_(indexXA)( VG_(args_for_client), i );
+     cmdbuf[size++] = ' ';
+     for(j=0; arg[j]; j++)
+        cmdbuf[size++] = arg[j];
   }
-
-  if (size >= BUF_LEN) size = BUF_LEN-1;
-  cmdbuf[size] = 0;
+  cmdbuf[size] = '\0';
 }
 
 /*
- * Set up file names for dump output: <out_directory>, <out_file>.
+ * Set up file names for dump output: <out_file>.
  * <out_file> is derived from the output format string, which defaults
  * to "callgrind.out.%p", where %p is replaced with the PID.
  * For the final file name, on intermediate dumps a counter is appended,
@@ -1679,7 +1660,6 @@ void init_cmdbuf(void)
  */
 void CLG_(init_dumps)()
 {
-   Int lastSlash, i;
    SysRes res;
 
    static int thisPID = 0;
@@ -1697,7 +1677,6 @@ void CLG_(init_dumps)()
    /* If a file name was already set, clean up before */
    if (out_file) {
        VG_(free)(out_file);
-       VG_(free)(out_directory);
        VG_(free)(filename);
        out_counter = 0;
    }
@@ -1706,23 +1685,9 @@ void CLG_(init_dumps)()
    out_file =
        VG_(expand_file_name)("--callgrind-out-file", CLG_(clo).out_format);
 
-   /* get base directory for dump/command/result files */
-   CLG_ASSERT(out_file[0] == '/');
-   lastSlash = 0;
-   i = 1;
-   while(out_file[i]) {
-       if (out_file[i] == '/') lastSlash = i;
-       i++;
-   }
-   i = lastSlash;
-   out_directory = (HChar*) CLG_MALLOC("cl.dump.init_dumps.1", i+1);
-   VG_(strncpy)(out_directory, out_file, i);
-   out_directory[i] = 0;
-
    /* allocate space big enough for final filenames */
    filename = (HChar*) CLG_MALLOC("cl.dump.init_dumps.2",
                                  VG_(strlen)(out_file)+32);
-   CLG_ASSERT(filename != 0);
        
    /* Make sure the output base file can be written.
     * This is used for the dump at program termination.

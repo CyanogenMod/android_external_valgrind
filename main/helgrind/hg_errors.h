@@ -44,9 +44,9 @@ Bool  HG_(read_extra_suppression_info) ( Int fd, HChar** bufpp, SizeT* nBufp,
                                          Int* lineno, Supp* su );
 Bool  HG_(error_matches_suppression) ( Error* err, Supp* su );
 const HChar* HG_(get_error_name) ( Error* err );
-Bool  HG_(get_extra_suppression_info) ( Error* err,
+SizeT HG_(get_extra_suppression_info) ( Error* err,
                                         /*OUT*/HChar* buf, Int nBuf );
-Bool  HG_(print_extra_suppression_use) ( Supp* su,
+SizeT HG_(print_extra_suppression_use) ( Supp* su,
                                          /*OUT*/HChar* buf, Int nBuf );
 void  HG_(update_extra_suppression_use) ( Error* err, Supp* su );
 
@@ -63,7 +63,7 @@ void HG_(record_error_PthAPIerror)    ( Thread*, const HChar*, Word,
                                         const HChar* );
 
 /* see the implementation for meaning of these params */
-void HG_(record_error_LockOrder)      ( Thread*, Addr, Addr,
+void HG_(record_error_LockOrder)      ( Thread*, Lock*, Lock*,
                                         ExeContext*, ExeContext*,
                                         ExeContext* );
 
