@@ -360,8 +360,7 @@ void test_ldr_pc(void) {
             ".syntax unified                  ;\n"
             "msr  cpsr_f, %3                  ;\n"
             "mov  r9, %2                      ;\n"
-            "movw r2, #:lower16:.ldrwpclabel1 ;\n"
-            "movt r2, #:upper16:.ldrwpclabel1 ;\n"
+            "ldr r2, =.ldrwpclabel1           ;\n"
             "mov  r0, #1                      ;\n"
             "orr  r2, r0                      ;\n" // set thumb bit to 1
             "str  r2, [r9, +#432]             ;\n"
