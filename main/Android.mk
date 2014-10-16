@@ -592,6 +592,8 @@ test := integer
 include $(LOCAL_PATH)/Android.test.mk
 test := fp_and_simd
 include $(LOCAL_PATH)/Android.test.mk
+test := memory
+include $(LOCAL_PATH)/Android.test.mk
 endif
 
 # Copy prebuilt suppressions
