@@ -4644,6 +4644,70 @@ Bool dis_ARM64_load_store(/*MB_OUT*/DisResult* dres, UInt insn)
    }
 
    /* ---------- LD1/ST1 (single structure, no offset) ---------- */
+   /* 31        23        15
+      0Q00 1101 0L00 0000 xx0S sz N T
+                          ----
+                          opcode
+      1011 1111 1011 1111 0010 00 0 0 <- mask
+      0000 1101 0000 0000 0000 00 0 0 <- result
+
+      FIXME does this assume that the host is little endian?
+   */
+
+   if ((insn & 0xBFBF2000) == 0x0D000000) {
+      Bool   isLD = INSN(22,22) == 1;
+      UInt   rN   = INSN(9,5);
+      UInt   vT   = INSN(4,0);
+      UInt   q    = INSN(30, 30);
+      UInt   xx   = INSN(15, 14);
+      UInt   opcode = INSN(15, 13);
+      UInt   s    = INSN(12, 12);
+      UInt   sz   = INSN(11, 10);
+
+      UInt   index = (q << 3) | (s << 2) | sz;
+      const HChar* name = "";
+      Bool   valid = False;
+      IRType laneTy = Ity_I8;
+
+      if (opcode == 0x0) { // 8 bit variant
+         name = "b";
+         valid = True;
+      } else if (opcode == 0x2 && (sz & 1) == 0) { // 16 bit variant
+         name = "h";
+         laneTy = Ity_I16;
+         index >>= 1;
+         valid = True;
+      } else if (opcode == 0x4 && sz == 0x0) { // 32 bit variant
+         name = "s";
+         laneTy = Ity_I32;
+         index >>= 2;
+         valid = True;
+      } else if (opcode == 0x4 && sz == 0x1 && s == 0) { // 64 bit variant
+         name = "d";
+         laneTy = Ity_I64;
+         index >>= 3;
+         valid = True;
+      }
+
+      if (valid) {
+         IRTemp tEA  = newTemp(Ity_I64);
+         assign(tEA, getIReg64orSP(rN));
+         if (rN == 31) { /* FIXME generate stack alignment check */ }
+         if (isLD) {
+            putQRegLane(vT, index, loadLE(laneTy, mkexpr(tEA)));
+         } else {
+            storeLE(mkexpr(tEA), getQRegLane(vT, index, laneTy));
+         }
+
+         DIP("%s {v%u.%s}[%d], [%s]\n", isLD ? "ld1" : "st1",
+             vT, name, index, nameIReg64orSP(rN));
+         return True;
+      }
+
+   }
+
+
+   /* ---------- LD1/ST1 (multiple structure, no offset, one register variant) ---------- */
    /* 31        23
       0100 1100 0100 0000 0111 11 N T   LD1 {vT.2d},  [Xn|SP]
       0100 1100 0000 0000 0111 11 N T   ST1 {vT.2d},  [Xn|SP]
@@ -5532,24 +5596,54 @@ Bool dis_ARM64_branch_etc(/*MB_OUT*/DisResult* dres, UInt insn,
    }
 
    /* ------------------ ISB, DMB, DSB ------------------ */
-   if (INSN(31,0) == 0xD5033FDF) {
+   if ((INSN(31,0) & 0xFFFFF09F) == 0xD503309F
+        && INSN(6,5) != 3) {
+      UInt op  = INSN(6,5);
+      UInt crm = INSN(11,8);
+      const HChar* nm = "??b";
       stmt(IRStmt_MBE(Imbe_Fence));
-      DIP("isb\n");
-      return True;
-   }
-   if (INSN(31,0) == 0xD5033BBF) {
-      stmt(IRStmt_MBE(Imbe_Fence));
-      DIP("dmb ish\n");
-      return True;
-   }
-   if (INSN(31,0) == 0xD5033ABF) {
-      stmt(IRStmt_MBE(Imbe_Fence));
-      DIP("dmb ishst\n");
-      return True;
-   }
-   if (INSN(31,0) == 0xD5033B9F) {
-      stmt(IRStmt_MBE(Imbe_Fence));
-      DIP("dsb ish\n");
+
+      if (op == BITS2(0,0)) {
+         nm = "dsb";
+      } else if (op == BITS2(0,1)) {
+         nm = "dmb";
+      } else if (op == BITS2(1,0)) {
+         nm = "isb";
+      }
+
+      if ((crm & 3) == 0) { // #uimm4 variant
+         DIP("%s #%d\n", crm);
+      } else {
+         const HChar* options = "??";
+         if (crm == BITS4(0,0,0,1)) {
+            options = "oshld";
+         } else if (crm == BITS4(0,0,1,0)) {
+            options = "oshst";
+         } else if (crm == BITS4(0,0,1,1)) {
+            options = "osh";
+         } else if (crm == BITS4(0,1,0,1)) {
+            options = "nshld";
+         } else if (crm == BITS4(0,1,1,0)) {
+            options = "nshst";
+         } else if (crm == BITS4(0,1,1,1)) {
+            options = "nsh";
+         } else if (crm == BITS4(1,0,0,1)) {
+            options = "ishld";
+         } else if (crm == BITS4(1,0,1,0)) {
+            options = "ishst";
+         } else if (crm == BITS4(1,0,1,1)) {
+            options = "ish";
+         } else if (crm == BITS4(1,1,0,1)) {
+            options = "ld";
+         } else if (crm == BITS4(1,1,1,0)) {
+            options = "st";
+         } else if (crm == BITS4(1,1,1,1)) {
+            options = "sy";
+         }
+
+         DIP("%s %s\n", nm, options);
+      }
+
       return True;
    }
 

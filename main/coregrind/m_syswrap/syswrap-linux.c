@@ -6812,8 +6812,7 @@ PRE(sys_ioctl)
       /* These just take an int by value */
       break;
 
-#  if defined(VGPV_arm_linux_android) || defined(VGPV_x86_linux_android) \
-      || defined(VGPV_mips32_linux_android)
+#  if defined(__ANDROID__)
    /* ashmem */
    case VKI_ASHMEM_GET_SIZE:
    case VKI_ASHMEM_SET_SIZE:
@@ -6879,7 +6878,7 @@ PRE(sys_ioctl)
            PRE_FIELD_WRITE("ioctl(BINDER_VERSION)", bv->protocol_version);
        }
        break;
-#  endif /* defined(VGPV_*_linux_android) */
+#  endif /* defined(__ANDROID__) */
 
    case VKI_HCIGETDEVLIST:
       if (ARG3) {
@@ -9211,8 +9210,7 @@ POST(sys_ioctl)
       }
       break;
 
-#  if defined(VGPV_arm_linux_android) || defined(VGPV_x86_linux_android) \
-      || defined(VGPV_mips32_linux_android)
+#  if defined(__ANDROID__)
    /* ashmem */
    case VKI_ASHMEM_GET_SIZE:
    case VKI_ASHMEM_SET_SIZE:
@@ -9253,7 +9251,7 @@ POST(sys_ioctl)
            POST_FIELD_WRITE(bv->protocol_version);
        }
        break;
-#  endif /* defined(VGPV_*_linux_android) */
+#  endif /* defined(__ANDROID__) */
 
    case VKI_HCIGETDEVLIST:
       if (ARG3) {
