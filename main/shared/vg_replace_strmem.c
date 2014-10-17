@@ -36,6 +36,8 @@
 #include "pub_tool_tooliface.h"
 #include "pub_tool_clreq.h"
 
+extern __attribute__ ((__noreturn__)) void _exit(int status);
+
 /* ---------------------------------------------------------------------
    We have our own versions of these functions for two reasons:
    (a) it allows us to do overlap checking
@@ -138,26 +140,6 @@ Bool is_overlap ( void* dst, const void* src, SizeT dstlen, SizeT srclen )
    }
 }
 
-
-/* Call here to exit if we can't continue.  On Android we can't call
-   _exit for some reason, so we have to blunt-instrument it. */
-__attribute__ ((__noreturn__))
-static inline void my_exit ( int x )
-{
-#  if defined(VGPV_arm_linux_android) || defined(VGPV_mips32_linux_android) \
-      || defined(VGPV_mips32_linux_android)
-   __asm__ __volatile__(".word 0xFFFFFFFF");
-   while (1) {}
-#  elif defined(VGPV_x86_linux_android)
-   __asm__ __volatile__("ud2");
-   while (1) {}
-#  else
-   extern __attribute__ ((__noreturn__)) void _exit(int status);
-   _exit(x);
-#  endif
-}
-
-
 // This is a macro rather than a function because we don't want to have an
 // extra function in the stack trace.
 #ifndef RECORD_OVERLAP_ERROR
@@ -193,8 +175,7 @@ static inline void my_exit ( int x )
  STRRCHR(VG_Z_LIBC_SONAME,   __strrchr_sse2_no_bsf)
  STRRCHR(VG_Z_LIBC_SONAME,   __strrchr_sse42)
  STRRCHR(VG_Z_LD_LINUX_SO_2, rindex)
-#if defined(VGPV_arm_linux_android) || defined(VGPV_x86_linux_android) \
-    || defined(VGPV_mips32_linux_android)
+#if defined(__ANDROID__)
   STRRCHR(NONE, __dl_strrchr); /* in /system/bin/linker */
 #endif
 
@@ -416,8 +397,7 @@ static inline void my_exit ( int x )
  STRLEN(VG_Z_LIBC_SONAME,          __strlen_sse42)
  STRLEN(VG_Z_LD_LINUX_SO_2,        strlen)
  STRLEN(VG_Z_LD_LINUX_X86_64_SO_2, strlen)
-# if defined(VGPV_arm_linux_android) || defined(VGPV_x86_linux_android) \
-     || defined(VGPV_mips32_linux_android)
+# if defined(__ANDROID__)
   STRLEN(NONE, __dl_strlen); /* in /system/bin/linker */
 # endif
 
@@ -533,8 +513,7 @@ static inline void my_exit ( int x )
 
 #if defined(VGO_linux)
 
-#if defined(VGPV_arm_linux_android) || defined(VGPV_x86_linux_android) \
-    || defined(VGPV_mips32_linux_android)
+#if defined(__ANDROID__)
  STRLCPY(VG_Z_LIBC_SONAME, strlcpy);
 #endif
 
@@ -607,11 +586,8 @@ static inline void my_exit ( int x )
    }
 
 #if defined(VGO_linux)
-# if !defined(VGPV_arm_linux_android) && !defined(VGPV_x86_linux_android) \
-     && !defined(VGPV_mips32_linux_android)
   STRCASECMP(VG_Z_LIBC_SONAME, strcasecmp)
   STRCASECMP(VG_Z_LIBC_SONAME, __GI_strcasecmp)
-# endif
 
 #elif defined(VGO_darwin)
  //STRCASECMP(VG_Z_LIBC_SONAME, strcasecmp)
@@ -645,11 +621,8 @@ static inline void my_exit ( int x )
    }
 
 #if defined(VGO_linux)
-# if !defined(VGPV_arm_linux_android) && !defined(VGPV_x86_linux_android) \
-     && !defined(VGPV_mips32_linux_android)
   STRNCASECMP(VG_Z_LIBC_SONAME, strncasecmp)
   STRNCASECMP(VG_Z_LIBC_SONAME, __GI_strncasecmp)
-# endif
 
 #elif defined(VGO_darwin)
  //STRNCASECMP(VG_Z_LIBC_SONAME, strncasecmp)
@@ -758,10 +731,9 @@ static inline void my_exit ( int x )
  STRCMP(VG_Z_LIBC_SONAME,          __strcmp_sse42)
  STRCMP(VG_Z_LD_LINUX_X86_64_SO_2, strcmp)
  STRCMP(VG_Z_LD64_SO_1,            strcmp)
-# if defined(VGPV_arm_linux_android) || defined(VGPV_x86_linux_android) \
-     || defined(VGPV_mips32_linux_android)
+#if defined(__ANDROID__)
   STRCMP(NONE, __dl_strcmp); /* in /system/bin/linker */
-# endif
+#endif
 
 #elif defined(VGO_darwin)
  STRCMP(VG_Z_LIBC_SONAME, strcmp)
@@ -1180,7 +1152,7 @@ static inline void my_exit ( int x )
       VALGRIND_PRINTF_BACKTRACE( \
          "*** memmove_chk: buffer overflow detected ***: " \
          "program terminated\n"); \
-     my_exit(127); \
+     _exit(127); \
      /*NOTREACHED*/ \
      return NULL; \
    }
@@ -1266,7 +1238,7 @@ static inline void my_exit ( int x )
       VALGRIND_PRINTF_BACKTRACE( \
          "*** strcpy_chk: buffer overflow detected ***: " \
          "program terminated\n"); \
-     my_exit(127); \
+     _exit(127); \
      /*NOTREACHED*/ \
      return NULL; \
    }
@@ -1299,7 +1271,7 @@ static inline void my_exit ( int x )
       VALGRIND_PRINTF_BACKTRACE( \
          "*** stpcpy_chk: buffer overflow detected ***: " \
          "program terminated\n"); \
-     my_exit(127); \
+     _exit(127); \
      /*NOTREACHED*/ \
      return NULL; \
    }
@@ -1396,7 +1368,7 @@ static inline void my_exit ( int x )
       VALGRIND_PRINTF_BACKTRACE( \
          "*** memcpy_chk: buffer overflow detected ***: " \
          "program terminated\n"); \
-     my_exit(127); \
+     _exit(127); \
      /*NOTREACHED*/ \
      return NULL; \
    }
@@ -1628,10 +1600,7 @@ static inline void my_exit ( int x )
    }
 
 #if defined(VGO_linux)
-# if !defined(VGPV_arm_linux_android) && !defined(VGPV_x86_linux_android) \
-     && !defined(VGPV_mips32_linux_android)
   STRCASESTR(VG_Z_LIBC_SONAME,      strcasestr)
-# endif
 
 #elif defined(VGO_darwin)
 
