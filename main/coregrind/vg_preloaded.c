@@ -57,8 +57,7 @@ void VG_NOTIFY_ON_LOAD(freeres)( void );
 void VG_NOTIFY_ON_LOAD(freeres)( void )
 {
 #  if !defined(__UCLIBC__) \
-   && !defined(VGPV_arm_linux_android) && !defined(VGPV_x86_linux_android) \
-   && !defined(VGPV_mips32_linux_android)
+   && !defined(__ANDROID__)
    extern void __libc_freeres(void);
    __libc_freeres();
 #  endif

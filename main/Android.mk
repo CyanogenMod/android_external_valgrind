@@ -16,7 +16,7 @@ LOCAL_PATH:= $(call my-dir)
 
 ANDROID_HARDWARE := ANDROID_HARDWARE_generic
 
-ifneq ($(filter arm x86,$(TARGET_ARCH)),)
+ifneq ($(filter arm arm64 x86,$(TARGET_ARCH)),)
 
 common_cflags := \
 	-Wall -Wmissing-prototypes -Wshadow -Wpointer-arith -Wmissing-declarations \
@@ -591,6 +591,8 @@ ifeq ($(TARGET_ARCH),arm64)
 test := integer
 include $(LOCAL_PATH)/Android.test.mk
 test := fp_and_simd
+include $(LOCAL_PATH)/Android.test.mk
+test := memory
 include $(LOCAL_PATH)/Android.test.mk
 endif
 
