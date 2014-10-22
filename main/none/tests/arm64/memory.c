@@ -710,18 +710,6 @@ printf("LDR (literal, SIMD&FP) (entirely MISSING)\n");
 
 ////////////////////////////////////////////////////////////////
 printf("LD1/ST1 (single structure, no offset)\n");
-MEM_TEST("st1 {v17.b}[0], [x5]", 0, 0)
-MEM_TEST("st1 {v17.h}[0], [x5]", 0, 0)
-MEM_TEST("st1 {v17.s}[0], [x5]", 0, 0)
-MEM_TEST("st1 {v17.d}[0], [x5]", 0, 0)
-
-MEM_TEST("ld1 {v17.b}[0], [x5]", 0, 0)
-MEM_TEST("ld1 {v17.h}[0], [x5]", 0, 0)
-MEM_TEST("ld1 {v17.s}[0], [x5]", 0, 0)
-MEM_TEST("ld1 {v17.d}[0], [x5]", 0, 0)
-
-////////////////////////////////////////////////////////////////
-printf("LD1/ST1 (multiple structure, one register variant, no offset)\n");
 MEM_TEST("st1 {v17.2d},  [x5]", 3, 0)
 MEM_TEST("st1 {v17.4s},  [x5]", 5, 0)
 MEM_TEST("st1 {v17.8h},  [x5]", 7, 0)
