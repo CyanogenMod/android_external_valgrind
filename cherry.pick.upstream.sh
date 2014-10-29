@@ -53,6 +53,6 @@ commit_message=$(get_commit_message $repo_url $revision)
 
 echo "Cherry-picking from $repo_url r$revision ... (in $working_dir)" | tee $current_dir/cherry-pick-$revision.log
 cd $working_dir
-svn diff -r$revision_minus_one:$revision $repo_url | tee $current_dir/cherry-pick-patch-$revision.txt | patch -Ep0 | tee -a $current_dir/herry-pick-$revision.log
+svn diff -r$revision_minus_one:$revision $repo_url | tee $current_dir/cherry-pick-patch-$revision.txt | patch -Ep0 | tee -a $current_dir/cherry-pick-$revision.log
 
 git commit -a -m "$commit_message"
