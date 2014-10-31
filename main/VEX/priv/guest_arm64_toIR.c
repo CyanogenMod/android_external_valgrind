@@ -6763,54 +6763,25 @@ Bool dis_ARM64_branch_etc(/*MB_OUT*/DisResult* dres, UInt insn,
    }
 
    /* ------------------ ISB, DMB, DSB ------------------ */
-   if ((INSN(31,0) & 0xFFFFF09F) == 0xD503309F
-        && INSN(6,5) != 3) {
-      UInt op  = INSN(6,5);
-      UInt crm = INSN(11,8);
-      const HChar* nm = "??b";
+   /* 31          21            11  7 6  4
+      11010 10100 0 00 011 0011 CRm 1 01 11111  DMB opt
+      11010 10100 0 00 011 0011 CRm 1 00 11111  DSB opt
+      11010 10100 0 00 011 0011 CRm 1 10 11111  ISB opt
+   */
+   if (INSN(31,22) == BITS10(1,1,0,1,0,1,0,1,0,0)
+       && INSN(21,12) == BITS10(0,0,0,0,1,1,0,0,1,1)
+       && INSN(7,7) == 1
+       && INSN(6,5) <= BITS2(1,0) && INSN(4,0) == BITS5(1,1,1,1,1)) {
+      UInt opc = INSN(6,5);
+      UInt CRm = INSN(11,8);
+      vassert(opc <= 2 && CRm <= 15);
       stmt(IRStmt_MBE(Imbe_Fence));
-
-      if (op == BITS2(0,0)) {
-         nm = "dsb";
-      } else if (op == BITS2(0,1)) {
-         nm = "dmb";
-      } else if (op == BITS2(1,0)) {
-         nm = "isb";
-      }
-
-      if ((crm & 3) == 0) { // #uimm4 variant
-         DIP("%s #%d\n", crm);
-      } else {
-         const HChar* options = "??";
-         if (crm == BITS4(0,0,0,1)) {
-            options = "oshld";
-         } else if (crm == BITS4(0,0,1,0)) {
-            options = "oshst";
-         } else if (crm == BITS4(0,0,1,1)) {
-            options = "osh";
-         } else if (crm == BITS4(0,1,0,1)) {
-            options = "nshld";
-         } else if (crm == BITS4(0,1,1,0)) {
-            options = "nshst";
-         } else if (crm == BITS4(0,1,1,1)) {
-            options = "nsh";
-         } else if (crm == BITS4(1,0,0,1)) {
-            options = "ishld";
-         } else if (crm == BITS4(1,0,1,0)) {
-            options = "ishst";
-         } else if (crm == BITS4(1,0,1,1)) {
-            options = "ish";
-         } else if (crm == BITS4(1,1,0,1)) {
-            options = "ld";
-         } else if (crm == BITS4(1,1,1,0)) {
-            options = "st";
-         } else if (crm == BITS4(1,1,1,1)) {
-            options = "sy";
-         }
-
-         DIP("%s %s\n", nm, options);
-      }
-
+      const HChar* opNames[3] 
+         = { "dsb", "dmb", "isb" };
+      const HChar* howNames[16]
+         = { "#0", "oshld", "oshst", "osh", "#4", "nshld", "nshst", "nsh",
+             "#8", "ishld", "ishst", "ish", "#12", "ld", "st", "sy" };
+      DIP("%s %s\n", opNames[opc], howNames[CRm]);
       return True;
    }
 
