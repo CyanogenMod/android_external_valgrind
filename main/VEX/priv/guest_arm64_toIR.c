@@ -6763,54 +6763,24 @@ Bool dis_ARM64_branch_etc(/*MB_OUT*/DisResult* dres, UInt insn,
    }
 
    /* ------------------ ISB, DMB, DSB ------------------ */
-   if ((INSN(31,0) & 0xFFFFF09F) == 0xD503309F
-        && INSN(6,5) != 3) {
-      UInt op  = INSN(6,5);
-      UInt crm = INSN(11,8);
-      const HChar* nm = "??b";
+   if (INSN(31,0) == 0xD5033FDF) {
       stmt(IRStmt_MBE(Imbe_Fence));
-
-      if (op == BITS2(0,0)) {
-         nm = "dsb";
-      } else if (op == BITS2(0,1)) {
-         nm = "dmb";
-      } else if (op == BITS2(1,0)) {
-         nm = "isb";
-      }
-
-      if ((crm & 3) == 0) { // #uimm4 variant
-         DIP("%s #%d\n", crm);
-      } else {
-         const HChar* options = "??";
-         if (crm == BITS4(0,0,0,1)) {
-            options = "oshld";
-         } else if (crm == BITS4(0,0,1,0)) {
-            options = "oshst";
-         } else if (crm == BITS4(0,0,1,1)) {
-            options = "osh";
-         } else if (crm == BITS4(0,1,0,1)) {
-            options = "nshld";
-         } else if (crm == BITS4(0,1,1,0)) {
-            options = "nshst";
-         } else if (crm == BITS4(0,1,1,1)) {
-            options = "nsh";
-         } else if (crm == BITS4(1,0,0,1)) {
-            options = "ishld";
-         } else if (crm == BITS4(1,0,1,0)) {
-            options = "ishst";
-         } else if (crm == BITS4(1,0,1,1)) {
-            options = "ish";
-         } else if (crm == BITS4(1,1,0,1)) {
-            options = "ld";
-         } else if (crm == BITS4(1,1,1,0)) {
-            options = "st";
-         } else if (crm == BITS4(1,1,1,1)) {
-            options = "sy";
-         }
-
-         DIP("%s %s\n", nm, options);
-      }
-
+      DIP("isb\n");
+      return True;
+   }
+   if (INSN(31,0) == 0xD5033BBF) {
+      stmt(IRStmt_MBE(Imbe_Fence));
+      DIP("dmb ish\n");
+      return True;
+   }
+   if (INSN(31,0) == 0xD5033ABF) {
+      stmt(IRStmt_MBE(Imbe_Fence));
+      DIP("dmb ishst\n");
+      return True;
+   }
+   if (INSN(31,0) == 0xD5033B9F) {
+      stmt(IRStmt_MBE(Imbe_Fence));
+      DIP("dsb ish\n");
       return True;
    }
 
