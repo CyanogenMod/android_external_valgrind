@@ -1290,6 +1290,12 @@ DiImage* find_debug_file( struct _DebugInfo* di,
          if (dimg) goto dimg_ok;
       }
 
+#if defined(__ANDROID__)
+      VG_(sprintf)(debugpath, "/data/local/symbols%s/%s", objdir, debugname);
+      dimg = open_debug_file(debugpath, NULL, crc, rel_ok, NULL);
+      if (dimg != NULL) goto dimg_ok;
+#endif
+
       dimg_ok:
 
       ML_(dinfo_free)(objdir);
