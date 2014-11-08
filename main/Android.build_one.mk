@@ -21,7 +21,7 @@ vg_local_arch := $(TARGET_2ND_ARCH)
 else
 LOCAL_MULTILIB := first
 LOCAL_ARM_MODE := arm64
-vg_local_arch  := $(TARGET_ARCH)
+vg_local_arch  := $(vg_arch)
 endif
 
 LOCAL_MODULE := $(vg_local_module)-$(vg_local_arch)-linux
