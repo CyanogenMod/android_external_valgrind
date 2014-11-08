@@ -16,7 +16,13 @@ LOCAL_PATH:= $(call my-dir)
 
 ANDROID_HARDWARE := ANDROID_HARDWARE_generic
 
-ifneq ($(filter arm arm64 x86,$(TARGET_ARCH)),)
+ifneq ($(filter arm arm64 x86 x86_64,$(TARGET_ARCH)),)
+
+vg_arch:=$(TARGET_ARCH)
+
+ifneq ($(filter x86_64, $(TARGET_ARCH)),)
+  vg_arch:=amd64
+endif
 
 common_cflags := \
 	-Wall -Wmissing-prototypes -Wshadow -Wpointer-arith -Wmissing-declarations \
@@ -26,10 +32,10 @@ common_cflags := \
 	-DANDROID_SYMBOLS_DIR=\"/data/local/symbols\"
 
 target_arch_cflags := \
-	-DVGA_$(TARGET_ARCH)=1 \
-	-DVGP_$(TARGET_ARCH)_linux=1 \
-	-DVGPV_$(TARGET_ARCH)_linux_android=1 \
-	-DVG_PLATFORM=\"$(TARGET_ARCH)-linux\"
+	-DVGA_$(vg_arch)=1 \
+	-DVGP_$(vg_arch)_linux=1 \
+	-DVGPV_$(vg_arch)_linux_android=1 \
+	-DVG_PLATFORM=\"$(vg_arch)-linux\"
 
 ifeq ($(TARGET_IS_64_BIT),true)
   vg_module_path := /system/lib64/valgrind
