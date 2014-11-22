@@ -586,8 +586,10 @@ LOCAL_CFLAGS_$(TARGET_ARCH) = $(target_arch_cflags)
 
 include $(BUILD_EXECUTABLE)
 
+#vg_build_tests := true
 # Build tests (one of them)...
 # TODO: tests need separate build framework it terms of 2ND_ARCH
+ifeq ($(vg_build_tests),true)
 ifeq ($(TARGET_ARCH),arm)
 test := v6intThumb
 include $(LOCAL_PATH)/Android.test.mk
@@ -600,6 +602,7 @@ test := fp_and_simd
 include $(LOCAL_PATH)/Android.test.mk
 test := memory
 include $(LOCAL_PATH)/Android.test.mk
+endif
 endif
 
 # Copy prebuilt suppressions
