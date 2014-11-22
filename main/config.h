@@ -2,7 +2,7 @@
 /* config.h.in.  Generated from configure.in by autoheader.  */
 
 /* Define to 1 if you're using Bionic */
-/* #undef BIONIC_LIBC */
+#define BIONIC_LIBC 1
 
 /* DARWIN_VERS value for Mac OS X 10.5 */
 /* #undef DARWIN_10_5 */
@@ -112,7 +112,7 @@
 #define HAVE_CLOCK_MONOTONIC 1
 
 /* Define to 1 if you have the <endian.h> header file. */
-/* #undef HAVE_ENDIAN_H */
+#define HAVE_ENDIAN_H 1
 
 /* Define to 1 if you have the `epoll_create' function. */
 #define HAVE_EPOLL_CREATE 1
@@ -272,7 +272,7 @@
 #define HAVE_SYSCALL 1
 
 /* Define to 1 if you have the <sys/endian.h> header file. */
-/* #undef HAVE_SYS_ENDIAN_H */
+#define HAVE_SYS_ENDIAN_H 1
 
 /* Define to 1 if you have the <sys/epoll.h> header file. */
 #define HAVE_SYS_EPOLL_H 1
