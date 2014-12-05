@@ -1,8 +1,11 @@
 /* config.h.  Generated from config.h.in by configure.  */
-/* config.h.in.  Generated from configure.in by autoheader.  */
+/* config.h.in.  Generated from configure.ac by autoheader.  */
 
 /* Define to 1 if you're using Bionic */
-#define BIONIC_LIBC 1
+/* #undef BIONIC_LIBC */
+
+/* DARWIN_VERS value for Mac OS X 10.10 */
+/* #undef DARWIN_10_10 */
 
 /* DARWIN_VERS value for Mac OS X 10.5 */
 /* #undef DARWIN_10_5 */
@@ -15,6 +18,9 @@
 
 /* DARWIN_VERS value for Mac OS X 10.8 */
 /* #undef DARWIN_10_8 */
+
+/* DARWIN_VERS value for Mac OS X 10.9 */
+/* #undef DARWIN_10_9 */
 
 /* Define to 1 if you're using Darwin */
 /* #undef DARWIN_LIBC */
@@ -31,59 +37,16 @@
 /* path to GDB */
 #define GDB_PATH "/usr/bin/gdb"
 
-/* Define to 1 if you're using glibc 2.10.x */
-/* #undef GLIBC_2_10 */
+/* Define to 1 if index() and strlen() have been optimized heavily (x86 glibc
+   >= 2.12) */
+#ifndef __ANDROID__
+#define GLIBC_MANDATORY_INDEX_AND_STRLEN_REDIRECT 1
+#endif
 
-/* Define to 1 if you're using glibc 2.11.x */
-/* #dundef GLIBC_2_11 1 */
-
-/* Define to 1 if you're using glibc 2.12.x */
-/* #undef GLIBC_2_12 */
-
-/* Define to 1 if you're using glibc 2.13.x */
-/* #undef GLIBC_2_13 */
-
-/* Define to 1 if you're using glibc 2.14.x */
-/* #undef GLIBC_2_14 */
-
-/* Define to 1 if you're using glibc 2.15.x */
-/* #undef GLIBC_2_15 */
-
-/* Define to 1 if you're using glibc 2.16.x */
-/* #undef GLIBC_2_16 */
-
-/* Define to 1 if you're using glibc 2.17.x */
-/* #undef GLIBC_2_17 */
-
-/* Define to 1 if you're using glibc 2.18.x */
-/* #undef GLIBC_2_18 */
-
-/* Define to 1 if you're using glibc 2.19.x */
-/* #undef GLIBC_2_19 */
-
-/* Define to 1 if you're using glibc 2.2.x */
-/* #undef GLIBC_2_2 */
-
-/* Define to 1 if you're using glibc 2.3.x */
-/* #undef GLIBC_2_3 */
-
-/* Define to 1 if you're using glibc 2.4.x */
-/* #undef GLIBC_2_4 */
-
-/* Define to 1 if you're using glibc 2.5.x */
-/* #undef GLIBC_2_5 */
-
-/* Define to 1 if you're using glibc 2.6.x */
-/* #undef GLIBC_2_6 */
-
-/* Define to 1 if you're using glibc 2.7.x */
-/* #undef GLIBC_2_7 */
-
-/* Define to 1 if you're using glibc 2.8.x */
-/* #undef GLIBC_2_8 */
-
-/* Define to 1 if you're using glibc 2.9.x */
-/* #undef GLIBC_2_9 */
+/* Define to 1 if strlen() has been optimized heavily (amd64 glibc >= 2.10) */
+#ifndef __ANDROID__
+#define GLIBC_MANDATORY_STRLEN_REDIRECT 1
+#endif
 
 /* Define to 1 if gcc/as can do Altivec. */
 /* #undef HAS_ALTIVEC */
@@ -99,17 +62,31 @@
 
 /* Define to 1 if gcc supports __sync_bool_compare_and_swap() and
    __sync_add_and_fetch() for the primary target */
-/* #undef HAVE_BUILTIN_ATOMIC */
+#define HAVE_BUILTIN_ATOMIC 1
 
 /* Define to 1 if g++ supports __sync_bool_compare_and_swap() and
    __sync_add_and_fetch() */
-/* #undef HAVE_BUILTIN_ATOMIC_CXX */
+#define HAVE_BUILTIN_ATOMIC_CXX 1
+
+/* Define to 1 if compiler provides __builtin_clz(). */
+#define HAVE_BUILTIN_CLZ 1
+
+/* Define to 1 if compiler provides __builtin_ctz(). */
+#define HAVE_BUILTIN_CTZ 1
+
+/* Define to 1 if compiler provides __builtin_popcount(). */
+#define HAVE_BUILTIN_POPCOUT 1
 
 /* Define to 1 if you have the `clock_gettime' function. */
 #define HAVE_CLOCK_GETTIME 1
 
 /* Define to 1 if you have the `CLOCK_MONOTONIC' constant. */
 #define HAVE_CLOCK_MONOTONIC 1
+
+/* Define to 1 if you have a dlinfo that can do RTLD_DI_TLS_MODID. */
+#ifndef __ANDROID__
+#define HAVE_DLINFO_RTLD_DI_TLS_MODID 1
+#endif
 
 /* Define to 1 if you have the <endian.h> header file. */
 #define HAVE_ENDIAN_H 1
@@ -169,13 +146,19 @@
 #define HAVE_PPOLL 1
 
 /* Define to 1 if you have the `process_vm_readv' function. */
-/* #undef HAVE_PROCESS_VM_READV */
+#ifndef __ANDROID__
+#define HAVE_PROCESS_VM_READV 1
+#endif
 
 /* Define to 1 if you have the `process_vm_writev' function. */
-/* #undef HAVE_PROCESS_VM_WRITEV */
+#ifndef __ANDROID__
+#define HAVE_PROCESS_VM_WRITEV 1
+#endif
 
 /* Define to 1 if you have the `pthread_barrier_init' function. */
-/* #undef HAVE_PTHREAD_BARRIER_INIT */
+#ifndef __ANDROID__
+#define HAVE_PTHREAD_BARRIER_INIT 1
+#endif
 
 /* Define to 1 if you have the `pthread_condattr_setclock' function. */
 #define HAVE_PTHREAD_CONDATTR_SETCLOCK 1
@@ -184,7 +167,9 @@
 /* #undef HAVE_PTHREAD_CREATE_GLIBC_2_0 */
 
 /* Define to 1 if you have the `PTHREAD_MUTEX_ADAPTIVE_NP' constant. */
-/* #undef HAVE_PTHREAD_MUTEX_ADAPTIVE_NP */
+#ifndef __ANDROID__
+#define HAVE_PTHREAD_MUTEX_ADAPTIVE_NP 1
+#endif
 
 /* Define to 1 if you have the `PTHREAD_MUTEX_ERRORCHECK_NP' constant. */
 #define HAVE_PTHREAD_MUTEX_ERRORCHECK_NP 1
@@ -196,7 +181,9 @@
 #define HAVE_PTHREAD_MUTEX_TIMEDLOCK 1
 
 /* Define to 1 if pthread_mutex_t has a member __data.__kind. */
-/* #undef HAVE_PTHREAD_MUTEX_T__DATA__KIND */
+#ifndef __ANDROID__
+#define HAVE_PTHREAD_MUTEX_T__DATA__KIND 1
+#endif
 
 /* Define to 1 if pthread_mutex_t has a member called __m_kind. */
 /* #undef HAVE_PTHREAD_MUTEX_T__M_KIND */
@@ -218,7 +205,9 @@
 #define HAVE_PTHREAD_SETNAME_NP 1
 
 /* Define to 1 if you have the `pthread_spin_lock' function. */
-/* #undef HAVE_PTHREAD_SPIN_LOCK */
+#ifndef __ANDROID__
+#define HAVE_PTHREAD_SPIN_LOCK 1
+#endif
 
 /* Define to 1 if you have the `pthread_yield' function. */
 #define HAVE_PTHREAD_YIELD 1
@@ -233,7 +222,9 @@
 #define HAVE_SEMTIMEDOP 1
 
 /* Define to 1 if libstd++ supports annotating shared pointers */
-/* #undef HAVE_SHARED_POINTER_ANNOTATION */
+#ifndef __ANDROID__
+#define HAVE_SHARED_POINTER_ANNOTATION 1
+#endif
 
 /* Define to 1 if you have the `signalfd' function. */
 #define HAVE_SIGNALFD 1
@@ -272,7 +263,7 @@
 #define HAVE_SYSCALL 1
 
 /* Define to 1 if you have the <sys/endian.h> header file. */
-#define HAVE_SYS_ENDIAN_H 1
+/* #undef HAVE_SYS_ENDIAN_H 1 */
 
 /* Define to 1 if you have the <sys/epoll.h> header file. */
 #define HAVE_SYS_EPOLL_H 1
@@ -307,6 +298,9 @@
 /* Define to 1 if you have the <sys/types.h> header file. */
 #define HAVE_SYS_TYPES_H 1
 
+/* Define to 1 if <sys/user.h> defines struct user_regs_struct */
+#define HAVE_SYS_USER_REGS 1
+
 /* can use __thread to define thread-local variables */
 #define HAVE_TLS 1
 
@@ -328,9 +322,6 @@
 /* configured default page size 4k */
 #define MIPS_PAGE_SHIFT 12
 
-/* Define to 1 if your C compiler doesn't accept -c and -o together. */
-/* #undef NO_MINUS_C_MINUS_O */
-
 /* Name of package */
 #define PACKAGE "valgrind"
 
@@ -341,7 +332,7 @@
 #define PACKAGE_NAME "Valgrind"
 
 /* Define to the full name and version of this package. */
-#define PACKAGE_STRING "Valgrind 3.10.0.SVN"
+#define PACKAGE_STRING "Valgrind 3.11.0.SVN.aosp"
 
 /* Define to the one symbol short name of this package. */
 #define PACKAGE_TARNAME "valgrind"
@@ -350,10 +341,7 @@
 #define PACKAGE_URL ""
 
 /* Define to the version of this package. */
-#define PACKAGE_VERSION "3.10.0.SVN"
-
-/* configured memory alignment 2*PAGE_SIZE */
-#define SHM_ALIGNMENT 2*(1UL << MIPS_PAGE_SHIFT)
+#define PACKAGE_VERSION "3.11.0.SVN.aosp"
 
 /* Define to 1 if you have the ANSI C header files. */
 #define STDC_HEADERS 1
@@ -362,10 +350,14 @@
 #define TIME_WITH_SYS_TIME 1
 
 /* Version number of package */
-#define VERSION "3.10.0.SVN"
+#define VERSION "3.11.0.SVN.aosp"
 
 /* Temporary files directory */
+#ifdef __ANDROID__
 #define VG_TMPDIR "/data/local/tmp"
+#else
+#define VG_TMPDIR "/tmp"
+#endif
 
 /* Define to `int' if <sys/types.h> doesn't define. */
 /* #undef gid_t */

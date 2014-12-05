@@ -31,32 +31,42 @@ common_cflags := \
 	-DVGO_linux=1 \
 	-DANDROID_SYMBOLS_DIR=\"/data/local/symbols\"
 
+ifeq ($(TARGET_IS_64_BIT),true)
+  vg_target_module_path := /system/lib64/valgrind
+else
+  vg_target_module_path := /system/lib/valgrind
+endif
+
 target_arch_cflags := \
 	-DVGA_$(vg_arch)=1 \
 	-DVGP_$(vg_arch)_linux=1 \
 	-DVGPV_$(vg_arch)_linux_android=1 \
+	-DVG_LIBDIR=\"$(vg_target_module_path)\" \
 	-DVG_PLATFORM=\"$(vg_arch)-linux\"
-
-ifeq ($(TARGET_IS_64_BIT),true)
-  vg_module_path := /system/lib64/valgrind
-else
-  vg_module_path := /system/lib/valgrind
-endif
-
-vg_libdir := \"$(vg_module_path)\"
-
-target_arch_cflags+=-DVG_LIBDIR=$(vg_libdir)
 
 ifdef TARGET_2ND_ARCH
 target_2nd_arch_cflags := \
 	-DVGA_$(TARGET_2ND_ARCH)=1 \
 	-DVGP_$(TARGET_2ND_ARCH)_linux=1 \
 	-DVGPV_$(TARGET_2ND_ARCH)_linux_android=1 \
-    -DVG_LIBDIR=$(vg_libdir) \
+	-DVG_LIBDIR=\"$(vg_target_module_path)\" \
 	-DVG_PLATFORM=\"$(TARGET_2ND_ARCH)-linux\"
 vg_second_arch := $(TARGET_2ND_ARCH)
 
 endif
+
+# The supported host platform are linux amd64 and linux x86
+host_arch_cflags := \
+  -DVGA_amd64=1 \
+  -DVGP_amd64_linux=1 \
+  -DVG_PLATFORM=\"amd64-linux\" \
+  -DVG_LIBDIR=\"$(realpath $(HOST_OUT_SHARED_LIBRARIES))/valgrind\"
+
+host_2nd_arch_cflags := \
+  -DVGA_x86=1 \
+  -DVGP_x86_linux=1 \
+  -DVG_PLATFORM=\"x86-linux\" \
+  -DVG_LIBDIR=\"$(realpath $(HOST_OUT_SHARED_LIBRARIES))/valgrind\"
 
 common_includes := \
 	external/valgrind/main \
@@ -67,8 +77,7 @@ common_includes := \
 vex_ldflags := -nodefaultlibs
 
 ifeq (,$(filter $(TARGET_ARCH),arm arm64))
-tool_ldflags := -static -Wl,--build-id=none,-Ttext=0x38000000 -nodefaultlibs -nostartfiles -u _start -e_start
-
+tool_ldflags := -static -Wl,--build-id=none,-Ttext=0x38000000 -nodefaultlibs -nostartfiles -Wl,-e,_start
 # ioctl/syscall wrappers are device dependent
 ifeq ($(TARGET_BOOTLOADER_BOARD_NAME),manta)
 ANDROID_HARDWARE := ANDROID_HARDWARE_nexus_10
@@ -79,7 +88,7 @@ ANDROID_HARDWARE := ANDROID_HARDWARE_nexus_4
 endif
 
 else
-tool_ldflags := -static -Wl,-Ttext=0x38000000 -nodefaultlibs -nostartfiles -u _start -e_start
+tool_ldflags := -static -Wl,-Ttext=0x38000000 -nodefaultlibs -nostartfiles -Wl,-e,_start
 endif
 
 common_cflags += -D$(ANDROID_HARDWARE)
@@ -368,11 +377,6 @@ vg_local_whole_static_libraries := libreplacemalloc_toolpreload
 
 include $(LOCAL_PATH)/Android.build_all.mk
 
-#LOCAL_STRIP_MODULE := false
-#vg_local_no_crt := true
-#LOCAL_PRELINK_MODULE := false
-
-
 # Build cachegrind-$(TARGET_ARCH)-linux
 vg_local_module := cachegrind
 vg_local_module_class := SHARED_LIBRARIES
@@ -502,9 +506,7 @@ include $(LOCAL_PATH)/Android.build_all.mk
 vg_local_module := vgpreload_drd
 vg_local_module_class := SHARED_LIBRARIES
 vg_local_target := SHARED_LIBRARY
-#LOCAL_STRIP_MODULE := false
 vg_local_no_crt := true
-#LOCAL_PRELINK_MODULE := false
 
 vg_local_src_files := \
 	drd/drd_pthread_intercepts.c \
@@ -522,7 +524,6 @@ include $(LOCAL_PATH)/Android.build_all.mk
 vg_local_module := massif
 vg_local_module_class := SHARED_LIBRARIES
 vg_local_target := EXECUTABLE
-#LOCAL_FORCE_STATIC_EXECUTABLE := true
 vg_local_no_crt := true
 vg_local_without_system_shared_libraries := true
 
@@ -540,10 +541,7 @@ include $(LOCAL_PATH)/Android.build_all.mk
 vg_local_module := vgpreload_massif
 vg_local_module_class := SHARED_LIBRARIES
 vg_local_target := SHARED_LIBRARY
-#LOCAL_STRIP_MODULE := false
 vg_local_no_crt := true
-
-#LOCAL_PRELINK_MODULE := false
 
 vg_local_src_files :=
 
@@ -558,7 +556,6 @@ vg_local_module := none
 vg_local_module_class := SHARED_LIBRARIES
 vg_local_target := EXECUTABLE
 
-#LOCAL_FORCE_STATIC_EXECUTABLE := true
 vg_local_no_crt := true
 vg_local_without_system_shared_libraries := true
 
@@ -586,8 +583,20 @@ LOCAL_CFLAGS_$(TARGET_ARCH) = $(target_arch_cflags)
 
 include $(BUILD_EXECUTABLE)
 
+# Build valgrind for host
+include $(CLEAR_VARS)
+LOCAL_MODULE := valgrind
+LOCAL_SRC_FILES := \
+	coregrind/launcher-linux.c \
+	coregrind/m_debuglog.c
+
+LOCAL_C_INCLUDES := $(common_includes)
+LOCAL_CFLAGS := $(common_cflags) $(host_arch_cflags)
+
+include $(BUILD_HOST_EXECUTABLE)
+
 #vg_build_tests := true
-# Build tests (one of them)...
+# Build tests (some of them)...
 # TODO: tests need separate build framework it terms of 2ND_ARCH
 ifeq ($(vg_build_tests),true)
 ifeq ($(TARGET_ARCH),arm)
@@ -609,12 +618,20 @@ endif
 include $(CLEAR_VARS)
 LOCAL_MODULE := default.supp
 LOCAL_MODULE_CLASS := SHARED_LIBRARIES
-LOCAL_MODULE_PATH := $(PRODUCT_OUT)$(vg_module_path)
+LOCAL_MODULE_PATH := $(PRODUCT_OUT)$(vg_target_module_path)
 LOCAL_STRIP_MODULE := false
 LOCAL_SRC_FILES := bionic.supp
 
 include $(BUILD_PREBUILT)
 
-#include bionic/libc/Android.mk
+include $(CLEAR_VARS)
+LOCAL_IS_HOST_MODULE := true
+LOCAL_MODULE := default.supp
+LOCAL_MODULE_CLASS := SHARED_LIBRARIES
+LOCAL_MODULE_PATH := $(HOST_OUT_SHARED_LIBRARIES)/valgrind
+LOCAL_STRIP_MODULE := false
+LOCAL_SRC_FILES := bionic.supp
+
+include $(BUILD_PREBUILT)
 
 endif

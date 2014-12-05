@@ -12,8 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-vg_local_arch_cflags := $(target_arch_cflags)
-vg_local_2nd_arch_cflags := $(target_2nd_arch_cflags)
+vg_local_target_arch_cflags := $(target_arch_cflags)
+vg_local_target_2nd_arch_cflags := $(target_2nd_arch_cflags)
 vg_build_second_arch := false
 include $(LOCAL_PATH)/Android.build_one.mk
 
@@ -22,6 +22,14 @@ ifneq ($(TARGET_2ND_ARCH),)
   vg_build_second_arch := true
   include $(LOCAL_PATH)/Android.build_one.mk
 endif
+
+vg_build_second_arch := false
+vg_local_host_arch_cflags := $(host_arch_cflags)
+include $(LOCAL_PATH)/Android.build_host.mk
+
+vg_build_second_arch := true
+vg_local_host_arch_cflags := $(host_2nd_arch_cflags)
+include $(LOCAL_PATH)/Android.build_host.mk
 
 # clean vg_locals
 include $(LOCAL_PATH)/Android.clean.mk
