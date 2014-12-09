@@ -369,6 +369,8 @@ VexTranslateResult LibVEX_Translate ( VexTranslateArgs* vta )
 
       case VexArchS390X:
          mode64      = True;
+         /* KLUDGE: export hwcaps. */
+         s390_host_hwcaps = vta->archinfo_host.hwcaps;
          getAllocableRegs_S390 ( &n_available_real_regs,
                                  &available_real_regs, mode64 );
          isMove       = (__typeof__(isMove)) isMove_S390Instr;
@@ -1184,7 +1186,7 @@ const HChar* LibVEX_EmNote_string ( VexEmNote ew )
         return "PPC64 function redirection stack underflow";
      case EmWarn_S390X_fpext_rounding:
         return "The specified rounding mode cannot be supported. That\n"
-               "  feature requires the floating point extension facility.\n"
+               "  feature requires the floating point extension facility\n"
                "  which is not available on this host. Continuing using\n"
                "  the rounding mode from FPC. Results may differ!";
      case EmWarn_S390X_invalid_rounding:
@@ -1196,15 +1198,19 @@ const HChar* LibVEX_EmNote_string ( VexEmNote ew )
         return "Instruction stckf is not supported on this host";
      case EmFail_S390X_ecag:
         return "Instruction ecag is not supported on this host";
+     case EmFail_S390X_pfpo:
+        return "Instruction pfpo is not supported on this host";
+     case EmFail_S390X_DFP_insn:
+        return "DFP instructions are not supported on this host";
      case EmFail_S390X_fpext:
         return "Encountered an instruction that requires the floating "
                "point extension facility.\n"
                "  That facility is not available on this host";
      case EmFail_S390X_invalid_PFPO_rounding_mode:
-        return "The rounding mode specified in GPR 0 for PFPO instruction"
+        return "The rounding mode in GPR 0 for the PFPO instruction"
                " is invalid";
      case EmFail_S390X_invalid_PFPO_function:
-        return "The function code specified in GPR 0 for PFPO instruction"
+        return "The function code in GPR 0 for the PFPO instruction"
                " is invalid";
      default: 
         vpanic("LibVEX_EmNote_string: unknown warning");
@@ -1572,6 +1578,13 @@ static const HChar* show_hwcaps ( VexArch arch, UInt hwcaps )
 
 static Bool are_valid_hwcaps ( VexArch arch, UInt hwcaps )
 {
+   if (arch == VexArchS390X) {
+     if (! s390_host_has_ldisp) {
+        vpanic("Host does not have long displacement facility.\n"
+               "   Cannot continue. Good-bye.\n");
+     }
+     return True;
+   }
    return show_hwcaps(arch,hwcaps) != NULL;
 }
 

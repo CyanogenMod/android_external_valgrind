@@ -36,6 +36,7 @@
 #include "pub_core_xarray.h"
 #include "pub_core_debuginfo.h"
 #include "pub_core_execontext.h"
+#include "pub_core_aspacemgr.h"
 #include "pub_core_addrinfo.h"
 #include "pub_core_mallocfree.h"
 #include "pub_core_machine.h"
@@ -124,15 +125,12 @@ void VG_(describe_addr) ( Addr a, /*OUT*/AddrInfo* ai )
    }
    /* -- Have a look at the low level data symbols - perhaps it's in
       there. -- */
-   VG_(memset)( &ai->Addr.DataSym.name,
-                0, sizeof(ai->Addr.DataSym.name));
+   const HChar *name;
    if (VG_(get_datasym_and_offset)(
-             a, &ai->Addr.DataSym.name[0],
-             sizeof(ai->Addr.DataSym.name)-1,
+             a, &name,
              &ai->Addr.DataSym.offset )) {
+      ai->Addr.DataSym.name = VG_(strdup)("mc.da.dsname", name);
       ai->tag = Addr_DataSym;
-      vg_assert( ai->Addr.DataSym.name
-                    [ sizeof(ai->Addr.DataSym.name)-1 ] == 0);
       return;
    }
    /* -- Perhaps it's on a thread's stack? -- */
@@ -206,17 +204,12 @@ void VG_(describe_addr) ( Addr a, /*OUT*/AddrInfo* ai )
    }
 
    /* -- last ditch attempt at classification -- */
-   vg_assert( sizeof(ai->Addr.SectKind.objname) > 4 );
-   VG_(memset)( &ai->Addr.SectKind.objname, 
-                0, sizeof(ai->Addr.SectKind.objname));
-   VG_(strcpy)( ai->Addr.SectKind.objname, "???" );
-   sect = VG_(DebugInfo_sect_kind)( &ai->Addr.SectKind.objname[0],
-                                    sizeof(ai->Addr.SectKind.objname)-1, a);
+   sect = VG_(DebugInfo_sect_kind)( &name, a);
+   ai->Addr.SectKind.objname = VG_(strdup)("mc.da.dsname", name);
+
    if (sect != Vg_SectUnknown) {
       ai->tag = Addr_SectKind;
       ai->Addr.SectKind.kind = sect;
-      vg_assert( ai->Addr.SectKind.objname
-                    [ sizeof(ai->Addr.SectKind.objname)-1 ] == 0);
       return;
    }
 
@@ -266,6 +259,30 @@ void VG_(describe_addr) ( Addr a, /*OUT*/AddrInfo* ai )
       }
    }
 
+   /* -- and yet another last ditch attempt at classification -- */
+   /* Try to find a segment belonging to the client. */
+   {
+      const NSegment *seg = VG_(am_find_nsegment) (a);
+      if (seg != NULL 
+          && (seg->kind == SkAnonC 
+              || seg->kind == SkFileC
+              || seg->kind == SkShmC)) {
+         ai->tag = Addr_SegmentKind;
+         ai->Addr.SegmentKind.segkind = seg->kind;
+         ai->Addr.SegmentKind.filename = NULL;
+         if (seg->kind == SkFileC)
+            ai->Addr.SegmentKind.filename = VG_(am_get_filename) (seg);
+         if (ai->Addr.SegmentKind.filename != NULL)
+            ai->Addr.SegmentKind.filename 
+               = VG_(strdup)("mc.da.skfname",
+                             ai->Addr.SegmentKind.filename);
+         ai->Addr.SegmentKind.hasR = seg->hasR;
+         ai->Addr.SegmentKind.hasW = seg->hasW;
+         ai->Addr.SegmentKind.hasX = seg->hasX;
+         return;
+      }
+   }
+
    /* -- Clueless ... -- */
    ai->tag = Addr_Unknown;
    return;
@@ -293,6 +310,7 @@ void VG_(clear_addrinfo) ( AddrInfo* ai)
          break;
 
       case Addr_DataSym:
+         VG_(free)(ai->Addr.DataSym.name);
          break;
 
       case Addr_Variable:
@@ -307,6 +325,11 @@ void VG_(clear_addrinfo) ( AddrInfo* ai)
          break;
 
       case Addr_SectKind:
+         VG_(free)(ai->Addr.SectKind.objname);
+         break;
+
+      case Addr_SegmentKind:
+         VG_(free)(ai->Addr.SegmentKind.filename);
          break;
 
       default:
@@ -349,7 +372,18 @@ static UInt tnr_else_tid (ThreadInfo tinfo)
       return tinfo.tid;
 }
 
-static void pp_addrinfo_WRK ( Addr a, AddrInfo* ai, Bool mc, Bool maybe_gcc )
+static const HChar* pp_SegKind ( SegKind sk )
+{
+   switch (sk) {
+      case SkAnonC: return "anonymous";
+      case SkFileC: return "mapped file";
+      case SkShmC:  return "shared memory";
+      default:      vg_assert(0);
+   }
+}
+
+static void pp_addrinfo_WRK ( Addr a, const AddrInfo* ai, Bool mc,
+                              Bool maybe_gcc )
 {
    const HChar* xpre  = VG_(clo_xml) ? "  <auxwhat>" : " ";
    const HChar* xpost = VG_(clo_xml) ? "</auxwhat>"  : "";
@@ -382,16 +416,14 @@ static void pp_addrinfo_WRK ( Addr a, AddrInfo* ai, Bool mc, Bool maybe_gcc )
                     tnr_else_tid (ai->Addr.Stack.tinfo), 
                     xpost );
          if (ai->Addr.Stack.frameNo != -1 && ai->Addr.Stack.IP != 0) {
-#define     FLEN                256
-            HChar fn[FLEN];
+            const HChar *fn;
             Bool  hasfn;
-            HChar file[FLEN];
+            const HChar *file;
             Bool  hasfile;
             UInt linenum;
             Bool haslinenum;
             PtrdiffT offset;
 
-            hasfn = VG_(get_fnname)(ai->Addr.Stack.IP, fn, FLEN);
             if (VG_(get_inst_offset_in_function)( ai->Addr.Stack.IP,
                                                   &offset))
                haslinenum = VG_(get_linenum) (ai->Addr.Stack.IP - offset,
@@ -399,22 +431,21 @@ static void pp_addrinfo_WRK ( Addr a, AddrInfo* ai, Bool mc, Bool maybe_gcc )
             else
                haslinenum = False;
 
-            hasfile = VG_(get_filename)(ai->Addr.Stack.IP, file, FLEN);
-            if (hasfile && haslinenum) {
-               HChar strlinenum[10];
-               VG_(snprintf) (strlinenum, 10, ":%d", linenum);
-               VG_(strncat) (file, strlinenum, 
-                             FLEN - VG_(strlen)(file) - 1);
-            }
+            hasfile = VG_(get_filename)(ai->Addr.Stack.IP, &file);
+
+            HChar strlinenum[16] = "";   // large enough
+            if (hasfile && haslinenum)
+               VG_(sprintf)(strlinenum, "%d", linenum);
+
+            hasfn = VG_(get_fnname)(ai->Addr.Stack.IP, &fn);
 
             if (hasfn || hasfile)
-               VG_(emit)( "%sin frame #%d, created by %s (%s)%s\n",
+               VG_(emit)( "%sin frame #%d, created by %s (%s:%s)%s\n",
                           xpre,
                           ai->Addr.Stack.frameNo, 
                           hasfn ? fn : "???", 
-                          hasfile ? file : "???", 
+                          hasfile ? file : "???", strlinenum,
                           xpost );
-#undef      FLEN
          }
          switch (ai->Addr.Stack.stackPos) {
             case StackPos_stacked: break; // nothing more to say
@@ -555,17 +586,33 @@ static void pp_addrinfo_WRK ( Addr a, AddrInfo* ai, Bool mc, Bool maybe_gcc )
          }
          break;
 
+      case Addr_SegmentKind:
+         VG_(emit)( "%sAddress 0x%llx is in "
+                    "a %s%s%s %s%s%pS segment%s\n",
+                    xpre,
+                    (ULong)a,
+                    ai->Addr.SegmentKind.hasR ? "r" : "-",
+                    ai->Addr.SegmentKind.hasW ? "w" : "-",
+                    ai->Addr.SegmentKind.hasX ? "x" : "-",
+                    pp_SegKind(ai->Addr.SegmentKind.segkind),
+                    ai->Addr.SegmentKind.filename ? 
+                    " " : "",
+                    ai->Addr.SegmentKind.filename ? 
+                    ai->Addr.SegmentKind.filename : "",
+                    xpost );
+         break;
+
       default:
          VG_(core_panic)("mc_pp_AddrInfo");
    }
 }
 
-void VG_(pp_addrinfo) ( Addr a, AddrInfo* ai )
+void VG_(pp_addrinfo) ( Addr a, const AddrInfo* ai )
 {
    pp_addrinfo_WRK (a, ai, False /*mc*/, False /*maybe_gcc*/);
 }
 
-void VG_(pp_addrinfo_mc) ( Addr a, AddrInfo* ai, Bool maybe_gcc )
+void VG_(pp_addrinfo_mc) ( Addr a, const AddrInfo* ai, Bool maybe_gcc )
 {
    pp_addrinfo_WRK (a, ai, True /*mc*/, maybe_gcc);
 }

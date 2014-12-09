@@ -427,10 +427,8 @@ SysRes do_mremap( Addr old_addr, SizeT old_len,
    SSizeT needL = new_len - old_len;
 
    vg_assert(needL > 0);
-   if (needA == 0)
-      goto eINVAL; 
-      /* VG_(am_get_advisory_client_simple) interprets zero to mean
-         non-fixed, which is not what we want */
+   vg_assert(needA > 0);
+
    advised = VG_(am_get_advisory_client_simple)( needA, needL, &ok );
    if (ok) {
       /* Fixes bug #129866. */
@@ -482,10 +480,9 @@ SysRes do_mremap( Addr old_addr, SizeT old_len,
    {
    Addr  needA = old_addr + old_len;
    SizeT needL = new_len - old_len;
-   if (needA == 0) 
-      goto eINVAL;
-      /* VG_(am_get_advisory_client_simple) interprets zero to mean
-         non-fixed, which is not what we want */
+
+   vg_assert(needA > 0);
+
    advised = VG_(am_get_advisory_client_simple)( needA, needL, &ok );
    if (ok) {
       /* Fixes bug #129866. */
@@ -585,7 +582,8 @@ void record_fd_close(Int fd)
    some such thing) or that we don't know the filename.  If the fd is
    already open, then we're probably doing a dup2() to an existing fd,
    so just overwrite the existing one. */
-void ML_(record_fd_open_with_given_name)(ThreadId tid, Int fd, char *pathname)
+void ML_(record_fd_open_with_given_name)(ThreadId tid, Int fd,
+                                         const HChar *pathname)
 {
    OpenFd *i;
 
@@ -621,9 +619,9 @@ void ML_(record_fd_open_with_given_name)(ThreadId tid, Int fd, char *pathname)
 // Record opening of an fd, and find its name.
 void ML_(record_fd_open_named)(ThreadId tid, Int fd)
 {
-   static HChar buf[VKI_PATH_MAX];
-   HChar* name;
-   if (VG_(resolve_filename)(fd, buf, VKI_PATH_MAX))
+   const HChar* buf;
+   const HChar* name;
+   if (VG_(resolve_filename)(fd, &buf))
       name = buf;
    else
       name = NULL;
@@ -2214,6 +2212,33 @@ ML_(generic_PRE_sys_mmap) ( ThreadId tid,
                                        arg5, arg6);
    }
 
+   /* Yet another refinement : sometimes valgrind chooses an address
+      which is not acceptable by the kernel. This at least happens
+      when mmap-ing huge pages, using the flag MAP_HUGETLB.
+      valgrind aspacem does not know about huge pages, and modifying
+      it to handle huge pages is not straightforward (e.g. need
+      to understand special file system mount options).
+      So, let's just redo an mmap, without giving any constraint to
+      the kernel. If that succeeds, check with aspacem that the returned
+      address is acceptable (i.e. is free).
+      This will give a similar effect as if the user would have
+      specified a MAP_FIXED at that address.
+      The aspacem state will be correctly updated afterwards.
+      We however cannot do this last refinement when the user asked
+      for a fixed mapping, as the user asked a specific address. */
+   if (sr_isError(sres) && !(arg4 & VKI_MAP_FIXED)) {
+      advised = 0; 
+      /* try mmap with NULL address and without VKI_MAP_FIXED
+         to let the kernel decide. */
+      sres = VG_(am_do_mmap_NO_NOTIFY)(advised, arg2, arg3,
+                                       arg4,
+                                       arg5, arg6);
+      if (!sr_isError(sres)) {
+         vg_assert(VG_(am_covered_by_single_free_segment)((Addr)sr_Res(sres),
+                                                           arg2));
+      }
+   }
+
    if (!sr_isError(sres)) {
       ULong di_handle;
       /* Notify aspacem. */
@@ -2735,7 +2760,7 @@ PRE(sys_execve)
    // Decide whether or not we want to follow along
    { // Make 'child_argv' be a pointer to the child's arg vector
      // (skipping the exe name)
-     HChar** child_argv = (HChar**)ARG2;
+     const HChar** child_argv = (const HChar**)ARG2;
      if (child_argv && child_argv[0] == NULL)
         child_argv = NULL;
      trace_this_child = VG_(should_we_trace_this_child)( (HChar*)ARG1, child_argv );

@@ -2405,6 +2405,8 @@ static HReg iselV128Expr_wrk ( ISelEnv* env, IRExpr* e )
          case Iop_Rsh32Sx4: case Iop_Rsh64Sx2:
          case Iop_Rsh8Ux16: case Iop_Rsh16Ux8:
          case Iop_Rsh32Ux4: case Iop_Rsh64Ux2:
+         case Iop_Max64Fx2: case Iop_Max32Fx4:
+         case Iop_Min64Fx2: case Iop_Min32Fx4:
          {
             HReg res  = newVRegV(env);
             HReg argL = iselV128Expr(env, e->Iex.Binop.arg1);
@@ -2522,6 +2524,10 @@ static HReg iselV128Expr_wrk ( ISelEnv* env, IRExpr* e )
                case Iop_Rsh16Ux8:       op = ARM64vecb_URSHL16x8; break;
                case Iop_Rsh32Ux4:       op = ARM64vecb_URSHL32x4; break;
                case Iop_Rsh64Ux2:       op = ARM64vecb_URSHL64x2; break;
+               case Iop_Max64Fx2:       op = ARM64vecb_FMAX64x2; break;
+               case Iop_Max32Fx4:       op = ARM64vecb_FMAX32x4; break;
+               case Iop_Min64Fx2:       op = ARM64vecb_FMIN64x2; break;
+               case Iop_Min32Fx4:       op = ARM64vecb_FMIN32x4; break;
                default: vassert(0);
             }
             if (sw) {
@@ -2959,6 +2965,16 @@ static HReg iselDblExpr_wrk ( ISelEnv* env, IRExpr* e )
          addInstr(env, ARM64Instr_VDfromX(dst, src));
          return dst;
       }
+      if (con->tag == Ico_F64) {
+         HReg src = newVRegI(env);
+         HReg dst = newVRegD(env);
+         union { Double d64; ULong u64; } u;
+         vassert(sizeof(u) == 8);
+         u.d64 = con->Ico.F64;
+         addInstr(env, ARM64Instr_Imm64(src, u.u64));
+         addInstr(env, ARM64Instr_VDfromX(dst, src));
+         return dst;
+      }
    }
 
    if (e->tag == Iex_Load && e->Iex.Load.end == Iend_LE) {
@@ -3067,6 +3083,17 @@ static HReg iselDblExpr_wrk ( ISelEnv* env, IRExpr* e )
       }
    }
 
+   if (e->tag == Iex_ITE) {
+      /* ITE(ccexpr, iftrue, iffalse) */
+      ARM64CondCode cc;
+      HReg r1  = iselDblExpr(env, e->Iex.ITE.iftrue);
+      HReg r0  = iselDblExpr(env, e->Iex.ITE.iffalse);
+      HReg dst = newVRegD(env);
+      cc = iselCondCode(env, e->Iex.ITE.cond);
+      addInstr(env, ARM64Instr_VFCSel(dst, r1, r0, cc, True/*64-bit*/));
+      return dst;
+   }
+
    ppIRExpr(e);
    vpanic("iselDblExpr_wrk");
 }
@@ -3114,6 +3141,16 @@ static HReg iselFltExpr_wrk ( ISelEnv* env, IRExpr* e )
          HReg src = newVRegI(env);
          HReg dst = newVRegD(env);
          addInstr(env, ARM64Instr_Imm64(src, 0));
+         addInstr(env, ARM64Instr_VDfromX(dst, src));
+         return dst;
+      }
+      if (con->tag == Ico_F32) {
+         HReg src = newVRegI(env);
+         HReg dst = newVRegD(env);
+         union { Float f32; UInt u32; } u;
+         vassert(sizeof(u) == 4);
+         u.f32 = con->Ico.F32;
+         addInstr(env, ARM64Instr_Imm64(src, (ULong)u.u32));
          addInstr(env, ARM64Instr_VDfromX(dst, src));
          return dst;
       }
@@ -3220,6 +3257,17 @@ static HReg iselFltExpr_wrk ( ISelEnv* env, IRExpr* e )
          addInstr(env, ARM64Instr_VBinS(sglop, dst, argL, argR));
          return dst;
       }
+   }
+
+   if (e->tag == Iex_ITE) {
+      /* ITE(ccexpr, iftrue, iffalse) */
+      ARM64CondCode cc;
+      HReg r1  = iselFltExpr(env, e->Iex.ITE.iftrue);
+      HReg r0  = iselFltExpr(env, e->Iex.ITE.iffalse);
+      HReg dst = newVRegD(env);
+      cc = iselCondCode(env, e->Iex.ITE.cond);
+      addInstr(env, ARM64Instr_VFCSel(dst, r1, r0, cc, False/*!64-bit*/));
+      return dst;
    }
 
    ppIRExpr(e);
@@ -3790,6 +3838,7 @@ static void iselNext ( ISelEnv* env,
       case Ijk_Sys_syscall:
       case Ijk_InvalICache:
       case Ijk_FlushDCache:
+      case Ijk_SigTRAP:
       {
          HReg        r    = iselIntExpr_R(env, next);
          ARM64AMode* amPC = mk_baseblock_64bit_access_amode(offsIP);

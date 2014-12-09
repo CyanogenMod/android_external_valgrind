@@ -687,7 +687,10 @@ void received_signal (int signum)
       sigpipe++;
    } else if (signum == SIGALRM) {
       sigalrm++;
-#if defined(__ANDROID__)
+#if defined(VGPV_arm_linux_android) \
+    || defined(VGPV_x86_linux_android) \
+    || defined(VGPV_mips32_linux_android) \
+    || defined(VGPV_arm64_linux_android)
       /* Android has no pthread_cancel. As it also does not have
          an invoker implementation, there is no need for cleanup action.
          So, we just do nothing. */
@@ -748,6 +751,11 @@ void install_handlers(void)
       to cleanup.  */
    if (sigaction (SIGALRM, &action, &oldaction) != 0)
       XERROR (errno, "vgdb error sigaction SIGALRM\n");
+
+   /* unmask all signals, in case the process that launched vgdb
+      masked some. */
+   if (sigprocmask (SIG_SETMASK, &action.sa_mask, NULL) != 0)
+      XERROR (errno, "vgdb error sigprocmask");
 }
 
 /* close the FIFOs provided connections, terminate the invoker thread.  */

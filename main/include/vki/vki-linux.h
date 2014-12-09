@@ -1160,6 +1160,9 @@ struct vki_ipc_perm
 
 #define VKI_IPC_64  0x0100  /* New version (support 32-bit UIDs, bigger
 			       message sizes, etc. */
+// From /usr/include/bits/shm.h
+# define VKI_SHM_HUGETLB   04000
+
 
 //----------------------------------------------------------------------
 // From linux-2.6.8.1/include/linux/sem.h
@@ -2955,11 +2958,16 @@ struct vki_getcpu_cache {
 #define VKI_FIOQSIZE 0x5460     /* Value differs on some platforms */
 #endif
 
+#ifndef VKI_TIOCSIG
+#define VKI_TIOCSIG _VKI_IOW('T', 0x36, int) /* Value differs on some platforms */
+#endif
+
 //----------------------------------------------------------------------
 // From kernel/common/include/linux/ashmem.h
 //----------------------------------------------------------------------
 
-#if defined(__ANDROID__)
+#if defined(VGPV_arm_linux_android) || defined(VGPV_x86_linux_android) \
+    || defined(VGPV_mips32_linux_android)
 
 #define VKI_ASHMEM_NAME_LEN 256
 
@@ -3014,7 +3022,7 @@ struct vki_binder_version {
 #define VKI_BINDER_THREAD_EXIT _VKI_IOW('b', 8, int)
 #define VKI_BINDER_VERSION _VKI_IOWR('b', 9, struct vki_binder_version)
 
-#endif /* defined(__ANDROID__) */
+#endif /* defined(VGPV_*_linux_android) */
 
 //----------------------------------------------------------------------
 // From linux-3.0.4/include/net/bluetooth/bluetooth.h

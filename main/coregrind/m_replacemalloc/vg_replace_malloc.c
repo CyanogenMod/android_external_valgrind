@@ -117,8 +117,38 @@
 
 
 
-extern __attribute__ ((__noreturn__)) void _exit(int status);
-extern int getpagesize (void);
+/* Call here to exit if we can't continue.  On Android we can't call
+   _exit for some reason, so we have to blunt-instrument it. */
+__attribute__ ((__noreturn__))
+static inline void my_exit ( int x )
+{
+#  if defined(VGPV_arm_linux_android) || defined(VGPV_mips32_linux_android) \
+      || defined(VGPV_arm64_linux_android)
+   __asm__ __volatile__(".word 0xFFFFFFFF");
+   while (1) {}
+#  elif defined(VGPV_x86_linux_android)
+   __asm__ __volatile__("ud2");
+   while (1) {}
+#  else
+   extern __attribute__ ((__noreturn__)) void _exit(int status);
+   _exit(x);
+#  endif
+}
+
+/* Same problem with getpagesize. */
+static inline int my_getpagesize ( void )
+{
+#  if defined(VGPV_arm_linux_android) \
+      || defined(VGPV_x86_linux_android) \
+      || defined(VGPV_mips32_linux_android) \
+      || defined(VGPV_arm64_linux_android)
+   return 4096; /* kludge - link failure on Android, for some reason */
+#  else
+   extern int getpagesize (void);
+   return getpagesize();
+#  endif
+}
+
 
 /* Compute the high word of the double-length unsigned product of U
    and V.  This is for calloc argument overflow checking; see comments
@@ -251,7 +281,7 @@ static void init(void);
             "new/new[] failed and should throw an exception, but Valgrind\n"); \
          VALGRIND_PRINTF_BACKTRACE( \
             "   cannot throw exceptions and so is aborting instead.  Sorry.\n"); \
-            _exit(1); \
+            my_exit(1); \
       } \
       return v; \
    }
@@ -751,7 +781,7 @@ static void init(void);
    { \
       static int pszB = 0; \
       if (pszB == 0) \
-         pszB = getpagesize(); \
+         pszB = my_getpagesize(); \
       return VG_REPLACE_FUNCTION_EZU(10110,VG_Z_LIBC_SONAME,memalign) \
                 ((SizeT)pszB, size); \
    }
@@ -765,7 +795,7 @@ static void init(void);
    { \
       static int pszB = 0; \
       if (pszB == 0) \
-         pszB = getpagesize(); \
+         pszB = my_getpagesize(); \
       TRIGGER_MEMCHECK_ERROR_IF_UNDEFINED((UWord) zone);	      \
       return VG_REPLACE_FUNCTION_EZU(10110,VG_Z_LIBC_SONAME,memalign) \
                 ((SizeT)pszB, size); \
@@ -938,7 +968,7 @@ static void init(void);
 static void panic(const char *str)
 {
    VALGRIND_PRINTF_BACKTRACE("Program aborting because of call to %s\n", str);
-   _exit(99);
+   my_exit(99);
    *(volatile int *)0 = 'x';
 }
 

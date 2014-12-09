@@ -21434,13 +21434,33 @@ Long dis_ESC_0F (
             void amd64g_dirtyhelper_CPUID ( VexGuestAMD64State* )
          declared to mod rax, wr rbx, rcx, rdx
       */
-      IRDirty* d     = NULL;
-      const HChar*   fName = NULL;
-      void*    fAddr = NULL;
+      IRDirty*     d     = NULL;
+      const HChar* fName = NULL;
+      void*        fAddr = NULL;
+
+      /* JRS 2014-11-11: this a really horrible temp kludge to work
+         around the fact that the Yosemite (OSX 10.10)
+         /usr/lib/system/libdyld.dylib expects XSAVE/XRSTOR to be
+         implemented, because amd64g_dirtyhelper_CPUID_avx_and_cx16
+         claims they are supported, but so far they aren't.  So cause
+         it to fall back to a simpler CPU.  The cleaner approach of
+         setting CPUID(eax=1).OSXSAVE=0 and .XSAVE=0 isn't desirable
+         since it will (per the official Intel guidelines) lead to
+         software concluding that AVX isn't supported.
+
+         This is also a kludge in that putting these ifdefs here checks
+         the build (host) architecture, when really we're checking the
+         guest architecture. */
+      Bool this_is_yosemite = False;
+#     if defined(VGP_amd64_darwin) && DARWIN_VERS == DARWIN_10_10
+      this_is_yosemite = True;
+#     endif
+
       if (haveF2orF3(pfx)) goto decode_failure;
       /* This isn't entirely correct, CPUID should depend on the VEX
          capabilities, not on the underlying CPU. See bug #324882. */
-      if ((archinfo->hwcaps & VEX_HWCAPS_AMD64_SSE3) &&
+      if (!this_is_yosemite &&
+          (archinfo->hwcaps & VEX_HWCAPS_AMD64_SSE3) &&
           (archinfo->hwcaps & VEX_HWCAPS_AMD64_CX16) &&
           (archinfo->hwcaps & VEX_HWCAPS_AMD64_AVX)) {
          fName = "amd64g_dirtyhelper_CPUID_avx_and_cx16";
@@ -28661,6 +28681,7 @@ Long dis_ESC_0F38__VEX (
          IRTemp t8   = newTemp(Ity_I8);
          if (epartIsReg(modrm)) {
             UInt rE = eregOfRexRM(pfx, modrm);
+            delta++;
             DIP("vpbroadcastb %s,%s\n", nameXMMReg(rE), nameXMMReg(rG));
             assign(t8, unop(Iop_32to8, getXMMRegLane32(rE, 0)));
          } else {
@@ -28687,6 +28708,7 @@ Long dis_ESC_0F38__VEX (
          IRTemp t8   = newTemp(Ity_I8);
          if (epartIsReg(modrm)) {
             UInt rE = eregOfRexRM(pfx, modrm);
+            delta++;
             DIP("vpbroadcastb %s,%s\n", nameXMMReg(rE), nameYMMReg(rG));
             assign(t8, unop(Iop_32to8, getXMMRegLane32(rE, 0)));
          } else {
@@ -28717,6 +28739,7 @@ Long dis_ESC_0F38__VEX (
          IRTemp t16  = newTemp(Ity_I16);
          if (epartIsReg(modrm)) {
             UInt rE = eregOfRexRM(pfx, modrm);
+            delta++;
             DIP("vpbroadcastw %s,%s\n", nameXMMReg(rE), nameXMMReg(rG));
             assign(t16, unop(Iop_32to16, getXMMRegLane32(rE, 0)));
          } else {
@@ -28741,6 +28764,7 @@ Long dis_ESC_0F38__VEX (
          IRTemp t16  = newTemp(Ity_I16);
          if (epartIsReg(modrm)) {
             UInt rE = eregOfRexRM(pfx, modrm);
+            delta++;
             DIP("vpbroadcastw %s,%s\n", nameXMMReg(rE), nameYMMReg(rG));
             assign(t16, unop(Iop_32to16, getXMMRegLane32(rE, 0)));
          } else {

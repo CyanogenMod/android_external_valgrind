@@ -71,14 +71,17 @@ extern void VG_(init_tt_tc)       ( void );
    On other platforms we can go to town.  16 sectors gives theoretical
    capacity of about 440MB of JITted code in 1.05 million translations
    (realistically, about 2/3 of that) for Memcheck. */
-#if defined(__ANDROID__)
+#if defined(VGPV_arm_linux_android) \
+    || defined(VGPV_x86_linux_android) \
+    || defined(VGPV_mips32_linux_android) \
+    || defined(VGPV_arm64_linux_android)
 # define N_SECTORS_DEFAULT 6
 #else
 # define N_SECTORS_DEFAULT 16
 #endif
 
 extern
-void VG_(add_to_transtab)( VexGuestExtents* vge,
+void VG_(add_to_transtab)( const VexGuestExtents* vge,
                            Addr64           entry,
                            AddrH            code,
                            UInt             code_len,
@@ -109,7 +112,7 @@ extern UInt VG_(get_bbs_translated) ( void );
    table. */
 
 extern
-void VG_(add_to_unredir_transtab)( VexGuestExtents* vge,
+void VG_(add_to_unredir_transtab)( const VexGuestExtents* vge,
                                    Addr64           entry,
                                    AddrH            code,
                                    UInt             code_len );
