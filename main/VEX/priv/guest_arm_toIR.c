@@ -13529,6 +13529,28 @@ static Bool decode_CP10_CP11_instruction (
                         condT);
             DIP("fdivd%s d%u, d%u, d%u\n", nCC(conq), dD, dN, dM);
             goto decode_success_vfp;
+         case BITS4(1,0,1,0): /* VNFMS: -(d - n * m) (fused) */
+            /* XXXROUNDINGFIXME look up ARM reference for fused
+               multiply-add rounding */
+            putDReg(dD, triop(Iop_AddF64, rm,
+                              unop(Iop_NegF64, getDReg(dD)),
+                              triop(Iop_MulF64, rm,
+                                                getDReg(dN),
+                                                getDReg(dM))),
+                        condT);
+            DIP("vfnmsd%s d%u, d%u, d%u\n", nCC(conq), dD, dN, dM);
+            goto decode_success_vfp;
+         case BITS4(1,0,1,1): /* VNFMA: -(d + n * m) (fused) */
+            /* XXXROUNDINGFIXME look up ARM reference for fused
+               multiply-add rounding */
+            putDReg(dD, triop(Iop_AddF64, rm,
+                              unop(Iop_NegF64, getDReg(dD)),
+                              triop(Iop_MulF64, rm,
+                                                unop(Iop_NegF64, getDReg(dN)),
+                                                getDReg(dM))),
+                        condT);
+            DIP("vfnmad%s d%u, d%u, d%u\n", nCC(conq), dD, dN, dM);
+            goto decode_success_vfp;
          case BITS4(1,1,0,0): /* VFMA: d + n * m (fused) */
             /* XXXROUNDINGFIXME look up ARM reference for fused
                multiply-add rounding */
@@ -14013,6 +14035,28 @@ static Bool decode_CP10_CP11_instruction (
             putFReg(fD, triop(Iop_DivF32, rm, getFReg(fN), getFReg(fM)),
                         condT);
             DIP("fdivs%s s%u, s%u, s%u\n", nCC(conq), fD, fN, fM);
+            goto decode_success_vfp;
+         case BITS4(1,0,1,0): /* VNFMS: -(d - n * m) (fused) */
+            /* XXXROUNDINGFIXME look up ARM reference for fused
+               multiply-add rounding */
+            putFReg(fD, triop(Iop_AddF32, rm,
+                              unop(Iop_NegF32, getFReg(fD)),
+                              triop(Iop_MulF32, rm,
+                                                getFReg(fN),
+                                                getFReg(fM))),
+                        condT);
+            DIP("vfnmss%s s%u, s%u, s%u\n", nCC(conq), fD, fN, fM);
+            goto decode_success_vfp;
+         case BITS4(1,0,1,1): /* VNFMA: -(d + n * m) (fused) */
+            /* XXXROUNDINGFIXME look up ARM reference for fused
+               multiply-add rounding */
+            putFReg(fD, triop(Iop_AddF32, rm,
+                              unop(Iop_NegF32, getFReg(fD)),
+                              triop(Iop_MulF32, rm,
+                                                unop(Iop_NegF32, getFReg(fN)),
+                                                getFReg(fM))),
+                        condT);
+            DIP("vfnmas%s s%u, s%u, s%u\n", nCC(conq), fD, fN, fM);
             goto decode_success_vfp;
          case BITS4(1,1,0,0): /* VFMA: d + n * m (fused) */
             /* XXXROUNDINGFIXME look up ARM reference for fused
@@ -19808,11 +19852,8 @@ DisResult disInstr_THUMB_WRK (
        && INSN1(15,15) == 0) {
       UInt rD = INSN1(11,8);
       UInt rN = INSN1(3,0);
-      UInt bS = INSN0(4,4);
-      int badRegs = bS ? (isBadRegT(rD) || isBadRegT(rN))
-                       : (rD == 15 || rN == 15 || (rD == 13 && rN == 13));
-
-      if (!badRegs) {
+      if (!isBadRegT(rD) && !isBadRegT(rN)) {
+         UInt bS    = INSN0(4,4);
          UInt isMVN = INSN0(5,5);
          UInt imm5  = (INSN1(14,12) << 2) | INSN1(7,6);
          UInt how   = INSN1(5,4);
