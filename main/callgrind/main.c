@@ -1478,11 +1478,11 @@ void CLG_(set_instrument_state)(const HChar* reason, Bool state)
 /* helper for dump_state_togdb */
 static void dump_state_of_thread_togdb(thread_info* ti)
 {
-    static HChar buf[512];
     static FullCost sum = 0, tmp = 0;
-    Int t, p, i;
+    Int t, i;
     BBCC *from, *to;
     call_entry* ce;
+    HChar *mcost;
 
     t = CLG_(current_tid);
     CLG_(init_cost_lz)( CLG_(sets).full, &sum );
@@ -1490,8 +1490,9 @@ static void dump_state_of_thread_togdb(thread_info* ti)
     CLG_(add_diff_cost)( CLG_(sets).full, sum, ti->lastdump_cost,
 			 ti->states.entry[0]->cost);
     CLG_(copy_cost)( CLG_(sets).full, ti->lastdump_cost, tmp );
-    CLG_(sprint_mappingcost)(buf, CLG_(dumpmap), sum);
-    VG_(gdb_printf)("events-%d: %s\n", t, buf);
+    mcost = CLG_(mappingcost_as_string)(CLG_(dumpmap), sum);
+    VG_(gdb_printf)("events-%d: %s\n", t, mcost);
+    VG_(free)(mcost);
     VG_(gdb_printf)("frames-%d: %d\n", t, CLG_(current_call_stack).sp);
 
     ce = 0;
@@ -1511,9 +1512,9 @@ static void dump_state_of_thread_togdb(thread_info* ti)
 			  ce->enter_cost, CLG_(current_state).cost );
       CLG_(copy_cost)( CLG_(sets).full, ce->enter_cost, tmp );
       
-      p = VG_(sprintf)(buf, "events-%d-%d: ",t, i);
-      CLG_(sprint_mappingcost)(buf + p, CLG_(dumpmap), sum );
-      VG_(gdb_printf)("%s\n", buf);
+      mcost = CLG_(mappingcost_as_string)(CLG_(dumpmap), sum);
+      VG_(gdb_printf)("events-%d-%d: %s\n",t, i, mcost);
+      VG_(free)(mcost);
     }
     if (ce && ce->jcc) {
       to = ce->jcc->to;
@@ -1524,9 +1525,8 @@ static void dump_state_of_thread_togdb(thread_info* ti)
 /* Dump current state */
 static void dump_state_togdb(void)
 {
-    static HChar buf[512];
     thread_info** th;
-    int t, p;
+    int t;
     Int orig_tid = CLG_(current_tid);
 
     VG_(gdb_printf)("instrumentation: %s\n",
@@ -1541,20 +1541,20 @@ static void dump_state_togdb(void)
     VG_(gdb_printf)("distinct-contexts: %d\n", CLG_(stat).distinct_contexts);
 
     /* "events:" line. Given here because it will be dynamic in the future */
-    p = VG_(sprintf)(buf, "events: ");
-    CLG_(sprint_eventmapping)(buf+p, CLG_(dumpmap));
-    VG_(gdb_printf)("%s\n", buf);
+    HChar *evmap = CLG_(eventmapping_as_string)(CLG_(dumpmap));
+    VG_(gdb_printf)("events: %s\n", evmap);
+    VG_(free)(evmap);
     /* "part:" line (number of last part. Is 0 at start */
     VG_(gdb_printf)("part: %d\n", CLG_(get_dump_counter)());
 		
     /* threads */
     th = CLG_(get_threads)();
-    p = VG_(sprintf)(buf, "threads:");
+    VG_(gdb_printf)("threads:");
     for(t=1;t<VG_N_THREADS;t++) {
 	if (!th[t]) continue;
-	p += VG_(sprintf)(buf+p, " %d", t);
+	VG_(gdb_printf)(" %d", t);
     }
-    VG_(gdb_printf)("%s\n", buf);
+    VG_(gdb_printf)("\n");
     VG_(gdb_printf)("current-tid: %d\n", orig_tid);
     CLG_(forall_threads)(dump_state_of_thread_togdb);
 }
@@ -1776,7 +1776,7 @@ static
 void branchsim_printstat(int l1, int l2, int l3)
 {
     static HChar buf1[128], buf2[128], buf3[128];
-    static HChar fmt[128];
+    static HChar fmt[128];    // large enough
     FullCost total;
     ULong Bc_total_b, Bc_total_mp, Bi_total_b, Bi_total_mp;
     ULong B_total_b, B_total_mp;
@@ -1860,7 +1860,6 @@ void clg_print_stats(void)
 		CLG_(stat).bb_retranslations);
    VG_(message)(Vg_DebugMsg, "Distinct instrs:   %d\n",
 		CLG_(stat).distinct_instrs);
-   VG_(message)(Vg_DebugMsg, "");
 
    VG_(message)(Vg_DebugMsg, "LRU Contxt Misses: %d\n",
 		CLG_(stat).cxt_lru_misses);
@@ -1886,8 +1885,7 @@ void clg_print_stats(void)
 static
 void finish(void)
 {
-  HChar buf[32+COSTS_LEN];
-  HChar fmt[128];
+  HChar fmt[128];    // large enough
   Int l1, l2, l3;
   FullCost total;
 
@@ -1909,10 +1907,12 @@ void finish(void)
     VG_(message)(Vg_DebugMsg, "\n");
   }
 
-  CLG_(sprint_eventmapping)(buf, CLG_(dumpmap));
-  VG_(message)(Vg_UserMsg, "Events    : %s\n", buf);
-  CLG_(sprint_mappingcost)(buf, CLG_(dumpmap), CLG_(total_cost));
-  VG_(message)(Vg_UserMsg, "Collected : %s\n", buf);
+  HChar *evmap = CLG_(eventmapping_as_string)(CLG_(dumpmap));
+  VG_(message)(Vg_UserMsg, "Events    : %s\n", evmap);
+  VG_(free)(evmap);
+  HChar *mcost = CLG_(mappingcost_as_string)(CLG_(dumpmap), CLG_(total_cost));
+  VG_(message)(Vg_UserMsg, "Collected : %s\n", mcost);
+  VG_(free)(mcost);
   VG_(message)(Vg_UserMsg, "\n");
 
   /* determine value widths for statistics */

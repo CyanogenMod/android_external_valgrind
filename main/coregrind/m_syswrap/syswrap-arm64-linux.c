@@ -601,13 +601,12 @@ PRE(sys_clone)
 
    default:
       /* should we just ENOSYS? */
-      VG_(message)(Vg_UserMsg, "");
-      VG_(message)(Vg_UserMsg, "Unsupported clone() flags: 0x%lx", ARG1);
-      VG_(message)(Vg_UserMsg, "");
-      VG_(message)(Vg_UserMsg, "The only supported clone() uses are:");
-      VG_(message)(Vg_UserMsg, " - via a threads library (LinuxThreads or NPTL)");
-      VG_(message)(Vg_UserMsg, " - via the implementation of fork or vfork");
-      VG_(message)(Vg_UserMsg, " - for the Quadrics Elan3 user-space driver");
+      VG_(message)(Vg_UserMsg, "Unsupported clone() flags: 0x%lx\n", ARG1);
+      VG_(message)(Vg_UserMsg, "\n");
+      VG_(message)(Vg_UserMsg, "The only supported clone() uses are:\n");
+      VG_(message)(Vg_UserMsg, " - via a threads library (LinuxThreads or NPTL)\n");
+      VG_(message)(Vg_UserMsg, " - via the implementation of fork or vfork\n");
+      VG_(message)(Vg_UserMsg, " - for the Quadrics Elan3 user-space driver\n");
       VG_(unimplemented)
          ("Valgrind does not support general clone().");
    }
@@ -900,8 +899,10 @@ static SyscallTableEntry syscall_main_table[] = {
    GENX_(__NR_chdir,             sys_chdir),             // 49
    GENX_(__NR_fchdir,            sys_fchdir),            // 50
    GENX_(__NR_chroot,            sys_chroot),            // 51
+   GENX_(__NR_fchmod,            sys_fchmod),            // 52
    LINX_(__NR_fchmodat,          sys_fchmodat),          // 53
    LINX_(__NR_fchownat,          sys_fchownat),          // 54
+   GENX_(__NR_fchown,            sys_fchown),            // 55
    LINXY(__NR_openat,            sys_openat),            // 56
    GENXY(__NR_close,             sys_close),             // 57
    LINXY(__NR_pipe2,             sys_pipe2),             // 59
@@ -967,6 +968,8 @@ static SyscallTableEntry syscall_main_table[] = {
    GENX_(__NR_getpgid,           sys_getpgid),           // 155
    GENX_(__NR_getsid,            sys_getsid),            // 156
    GENX_(__NR_setsid,            sys_setsid),            // 157
+   GENXY(__NR_getgroups,         sys_getgroups),         // 158
+   GENX_(__NR_setgroups,         sys_setgroups),         // 159
    GENXY(__NR_uname,             sys_newuname),          // 160
    GENXY(__NR_getrlimit,         sys_old_getrlimit),     // 163
    GENX_(__NR_setrlimit,         sys_setrlimit),         // 164
@@ -1033,6 +1036,7 @@ static SyscallTableEntry syscall_main_table[] = {
 
    LINXY(__NR_process_vm_readv,  sys_process_vm_readv),  // 270
    LINX_(__NR_process_vm_writev, sys_process_vm_writev), // 271
+   LINXY(__NR_getrandom,         sys_getrandom),         // 278
 
 // The numbers below are bogus.  (See comment further down.)
 // When pulling entries above this line, change the numbers
@@ -1130,7 +1134,6 @@ static SyscallTableEntry syscall_main_table[] = {
 //ZZ    GENXY(__NR_munmap,            sys_munmap),         // 91
 //ZZ    GENX_(__NR_truncate,          sys_truncate),       // 92
 //ZZ    GENX_(__NR_ftruncate,         sys_ftruncate),      // 93
-//ZZ    GENX_(__NR_fchmod,            sys_fchmod),         // 94
 //ZZ 
 //ZZ    LINX_(__NR_fchown,            sys_fchown16),       // 95
 //ZZ //   GENX_(__NR_profil,            sys_ni_syscall),     // 98
@@ -1235,9 +1238,6 @@ static SyscallTableEntry syscall_main_table[] = {
 //ZZ    GENX_(__NR_setreuid32,        sys_setreuid),       // 203
 //ZZ    GENX_(__NR_setregid32,        sys_setregid),       // 204
 //ZZ 
-//ZZ    GENXY(__NR_getgroups32,       sys_getgroups),      // 205
-//ZZ    GENX_(__NR_setgroups32,       sys_setgroups),      // 206
-//ZZ    GENX_(__NR_fchown32,          sys_fchown),         // 207
 //ZZ    LINX_(__NR_setresuid32,       sys_setresuid),      // 208
 //ZZ    LINXY(__NR_getresuid32,       sys_getresuid),      // 209
 //ZZ 

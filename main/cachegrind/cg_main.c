@@ -30,14 +30,12 @@
 */
 
 #include "pub_tool_basics.h"
-#include "pub_tool_vki.h"
 #include "pub_tool_debuginfo.h"
 #include "pub_tool_libcbase.h"
 #include "pub_tool_libcassert.h"
 #include "pub_tool_libcfile.h"
 #include "pub_tool_libcprint.h"
 #include "pub_tool_libcproc.h"
-#include "pub_tool_machine.h"
 #include "pub_tool_mallocfree.h"
 #include "pub_tool_options.h"
 #include "pub_tool_oset.h"
@@ -56,9 +54,6 @@
 
 /* Set to 1 for very verbose debugging */
 #define DEBUG_CG 0
-
-#define FILE_LEN              VKI_PATH_MAX
-#define FN_LEN                256
 
 /*------------------------------------------------------------*/
 /*--- Options                                              ---*/
@@ -102,7 +97,7 @@ typedef
 
 typedef struct {
    HChar* file;
-   HChar* fn;
+   const HChar* fn;
    Int    line;
 }
 CodeLoc;
@@ -195,7 +190,7 @@ static Word stringCmp( const void* key, const void* elem )
 
 // Get a permanent string;  either pull it out of the string table if it's
 // been encountered before, or dup it and put it into the string table.
-static HChar* get_perm_string(HChar* s)
+static HChar* get_perm_string(const HChar* s)
 {
    HChar** s_ptr = VG_(OSetGen_Lookup)(stringTable, &s);
    if (s_ptr) {
@@ -212,35 +207,25 @@ static HChar* get_perm_string(HChar* s)
 /*--- CC table operations                                  ---*/
 /*------------------------------------------------------------*/
 
-static void get_debug_info(Addr instr_addr, HChar file[FILE_LEN],
-                           HChar fn[FN_LEN], UInt* line)
+static void get_debug_info(Addr instr_addr, const HChar **dir,
+                           const HChar **file, const HChar **fn, UInt* line)
 {
-   HChar dir[FILE_LEN];
    Bool found_dirname;
    Bool found_file_line = VG_(get_filename_linenum)(
                              instr_addr, 
-                             file, FILE_LEN,
-                             dir,  FILE_LEN, &found_dirname,
+                             file, dir, &found_dirname,
                              line
                           );
-   Bool found_fn        = VG_(get_fnname)(instr_addr, fn, FN_LEN);
+   Bool found_fn        = VG_(get_fnname)(instr_addr, fn);
 
    if (!found_file_line) {
-      VG_(strcpy)(file, "???");
+      *file = "???";
       *line = 0;
    }
    if (!found_fn) {
-      VG_(strcpy)(fn,  "???");
+      *fn = "???";
    }
 
-   if (found_dirname) {
-      // +1 for the '/'.
-      tl_assert(VG_(strlen)(dir) + VG_(strlen)(file) + 1 < FILE_LEN);
-      VG_(strcat)(dir, "/");     // Append '/'
-      VG_(strcat)(dir, file);    // Append file to dir
-      VG_(strcpy)(file, dir);    // Move dir+file to file
-   }
-   
    if (found_file_line) {
       if (found_fn) full_debugs++;
       else          file_line_debugs++;
@@ -254,14 +239,23 @@ static void get_debug_info(Addr instr_addr, HChar file[FILE_LEN],
 // Returns a pointer to the line CC, creates a new one if necessary.
 static LineCC* get_lineCC(Addr origAddr)
 {
-   HChar   file[FILE_LEN], fn[FN_LEN];
+   const HChar *fn, *file, *dir;
    UInt    line;
    CodeLoc loc;
    LineCC* lineCC;
 
-   get_debug_info(origAddr, file, fn, &line);
+   get_debug_info(origAddr, &dir, &file, &fn, &line);
 
-   loc.file = file;
+   // Form an absolute pathname if a directory is available
+   HChar absfile[VG_(strlen)(dir) + 1 + VG_(strlen)(file) + 1];
+
+   if (dir[0]) {
+      VG_(sprintf)(absfile, "%s/%s", dir, file);
+   } else {
+      VG_(sprintf)(absfile, "%s", file);
+   }
+
+   loc.file = absfile;
    loc.fn   = fn;
    loc.line = line;
 
@@ -1380,10 +1374,10 @@ static BranchCC Bi_total;
 
 static void fprint_CC_table_and_calc_totals(void)
 {
-   Int     i, fd;
-   SysRes  sres;
-   HChar    buf[512];
-   HChar   *currFile = NULL, *currFn = NULL;
+   Int     i;
+   VgFile  *fp;
+   HChar   *currFile = NULL;
+   const HChar *currFn = NULL;
    LineCC* lineCC;
 
    // Setup output filename.  Nb: it's important to do this now, ie. as late
@@ -1394,9 +1388,9 @@ static void fprint_CC_table_and_calc_totals(void)
    HChar* cachegrind_out_file =
       VG_(expand_file_name)("--cachegrind-out-file", clo_cachegrind_out_file);
 
-   sres = VG_(open)(cachegrind_out_file, VKI_O_CREAT|VKI_O_TRUNC|VKI_O_WRONLY,
-                                         VKI_S_IRUSR|VKI_S_IWUSR);
-   if (sr_isError(sres)) {
+   fp = VG_(fopen)(cachegrind_out_file, VKI_O_CREAT|VKI_O_TRUNC|VKI_O_WRONLY,
+                                        VKI_S_IRUSR|VKI_S_IWUSR);
+   if (fp == NULL) {
       // If the file can't be opened for whatever reason (conflict
       // between multiple cachegrinded processes?), give up now.
       VG_(umsg)("error: can't open cache simulation output file '%s'\n",
@@ -1405,49 +1399,37 @@ static void fprint_CC_table_and_calc_totals(void)
       VG_(free)(cachegrind_out_file);
       return;
    } else {
-      fd = sr_Res(sres);
       VG_(free)(cachegrind_out_file);
    }
 
    // "desc:" lines (giving I1/D1/LL cache configuration).  The spaces after
    // the 2nd colon makes cg_annotate's output look nicer.
-   VG_(sprintf)(buf, "desc: I1 cache:         %s\n"
+   VG_(fprintf)(fp,  "desc: I1 cache:         %s\n"
                      "desc: D1 cache:         %s\n"
                      "desc: LL cache:         %s\n",
                      I1.desc_line, D1.desc_line, LL.desc_line);
-   VG_(write)(fd, (void*)buf, VG_(strlen)(buf));
 
    // "cmd:" line
-   VG_(strcpy)(buf, "cmd:");
-   VG_(write)(fd, (void*)buf, VG_(strlen)(buf));
-   VG_(write)(fd, " ", 1);
-   VG_(write)(fd, VG_(args_the_exename), 
-              VG_(strlen)( VG_(args_the_exename) ));
+   VG_(fprintf)(fp, "cmd: %s", VG_(args_the_exename));
    for (i = 0; i < VG_(sizeXA)( VG_(args_for_client) ); i++) {
       HChar* arg = * (HChar**) VG_(indexXA)( VG_(args_for_client), i );
-      if (arg) {
-         VG_(write)(fd, " ", 1);
-         VG_(write)(fd, arg, VG_(strlen)( arg ));
-      }
+      VG_(fprintf)(fp, " %s", arg);
    }
    // "events:" line
    if (clo_cache_sim && clo_branch_sim) {
-      VG_(sprintf)(buf, "\nevents: Ir I1mr ILmr Dr D1mr DLmr Dw D1mw DLmw "
+      VG_(fprintf)(fp, "\nevents: Ir I1mr ILmr Dr D1mr DLmr Dw D1mw DLmw "
                                   "Bc Bcm Bi Bim\n");
    }
    else if (clo_cache_sim && !clo_branch_sim) {
-      VG_(sprintf)(buf, "\nevents: Ir I1mr ILmr Dr D1mr DLmr Dw D1mw DLmw "
+      VG_(fprintf)(fp, "\nevents: Ir I1mr ILmr Dr D1mr DLmr Dw D1mw DLmw "
                                   "\n");
    }
    else if (!clo_cache_sim && clo_branch_sim) {
-      VG_(sprintf)(buf, "\nevents: Ir "
-                                  "Bc Bcm Bi Bim\n");
+      VG_(fprintf)(fp, "\nevents: Ir Bc Bcm Bi Bim\n");
    }
    else {
-      VG_(sprintf)(buf, "\nevents: Ir\n");
+      VG_(fprintf)(fp, "\nevents: Ir\n");
    }
-
-   VG_(write)(fd, (void*)buf, VG_(strlen)(buf));
 
    // Traverse every lineCC
    VG_(OSetGen_ResetIter)(CC_table);
@@ -1460,8 +1442,7 @@ static void fprint_CC_table_and_calc_totals(void)
       // the whole strings would have to be checked.
       if ( lineCC->loc.file != currFile ) {
          currFile = lineCC->loc.file;
-         VG_(sprintf)(buf, "fl=%s\n", currFile);
-         VG_(write)(fd, (void*)buf, VG_(strlen)(buf));
+         VG_(fprintf)(fp, "fl=%s\n", currFile);
          distinct_files++;
          just_hit_a_new_file = True;
       }
@@ -1471,14 +1452,13 @@ static void fprint_CC_table_and_calc_totals(void)
       // in the old file, hence the just_hit_a_new_file test).
       if ( just_hit_a_new_file || lineCC->loc.fn != currFn ) {
          currFn = lineCC->loc.fn;
-         VG_(sprintf)(buf, "fn=%s\n", currFn);
-         VG_(write)(fd, (void*)buf, VG_(strlen)(buf));
+         VG_(fprintf)(fp, "fn=%s\n", currFn);
          distinct_fns++;
       }
 
       // Print the LineCC
       if (clo_cache_sim && clo_branch_sim) {
-         VG_(sprintf)(buf, "%u %llu %llu %llu"
+         VG_(fprintf)(fp,  "%u %llu %llu %llu"
                              " %llu %llu %llu"
                              " %llu %llu %llu"
                              " %llu %llu %llu %llu\n",
@@ -1490,7 +1470,7 @@ static void fprint_CC_table_and_calc_totals(void)
                             lineCC->Bi.b, lineCC->Bi.mp);
       }
       else if (clo_cache_sim && !clo_branch_sim) {
-         VG_(sprintf)(buf, "%u %llu %llu %llu"
+         VG_(fprintf)(fp,  "%u %llu %llu %llu"
                              " %llu %llu %llu"
                              " %llu %llu %llu\n",
                             lineCC->loc.line,
@@ -1499,7 +1479,7 @@ static void fprint_CC_table_and_calc_totals(void)
                             lineCC->Dw.a, lineCC->Dw.m1, lineCC->Dw.mL);
       }
       else if (!clo_cache_sim && clo_branch_sim) {
-         VG_(sprintf)(buf, "%u %llu"
+         VG_(fprintf)(fp,  "%u %llu"
                              " %llu %llu %llu %llu\n",
                             lineCC->loc.line,
                             lineCC->Ir.a, 
@@ -1507,12 +1487,10 @@ static void fprint_CC_table_and_calc_totals(void)
                             lineCC->Bi.b, lineCC->Bi.mp);
       }
       else {
-         VG_(sprintf)(buf, "%u %llu\n",
+         VG_(fprintf)(fp,  "%u %llu\n",
                             lineCC->loc.line,
                             lineCC->Ir.a);
       }
-
-      VG_(write)(fd, (void*)buf, VG_(strlen)(buf));
 
       // Update summary stats
       Ir_total.a  += lineCC->Ir.a;
@@ -1535,7 +1513,7 @@ static void fprint_CC_table_and_calc_totals(void)
    // Summary stats must come after rest of table, since we calculate them
    // during traversal.  */
    if (clo_cache_sim && clo_branch_sim) {
-      VG_(sprintf)(buf, "summary:"
+      VG_(fprintf)(fp,  "summary:"
                         " %llu %llu %llu"
                         " %llu %llu %llu"
                         " %llu %llu %llu"
@@ -1547,7 +1525,7 @@ static void fprint_CC_table_and_calc_totals(void)
                         Bi_total.b, Bi_total.mp);
    }
    else if (clo_cache_sim && !clo_branch_sim) {
-      VG_(sprintf)(buf, "summary:"
+      VG_(fprintf)(fp,  "summary:"
                         " %llu %llu %llu"
                         " %llu %llu %llu"
                         " %llu %llu %llu\n",
@@ -1556,7 +1534,7 @@ static void fprint_CC_table_and_calc_totals(void)
                         Dw_total.a, Dw_total.m1, Dw_total.mL);
    }
    else if (!clo_cache_sim && clo_branch_sim) {
-      VG_(sprintf)(buf, "summary:"
+      VG_(fprintf)(fp,  "summary:"
                         " %llu"
                         " %llu %llu %llu %llu\n", 
                         Ir_total.a,
@@ -1564,13 +1542,12 @@ static void fprint_CC_table_and_calc_totals(void)
                         Bi_total.b, Bi_total.mp);
    }
    else {
-      VG_(sprintf)(buf, "summary:"
+      VG_(fprintf)(fp, "summary:"
                         " %llu\n", 
                         Ir_total.a);
    }
 
-   VG_(write)(fd, (void*)buf, VG_(strlen)(buf));
-   VG_(close)(fd);
+   VG_(fclose)(fp);
 }
 
 static UInt ULong_width(ULong n)
@@ -1586,8 +1563,8 @@ static UInt ULong_width(ULong n)
 
 static void cg_fini(Int exitcode)
 {
-   static HChar buf1[128], buf2[128], buf3[128], buf4[123];
-   static HChar fmt[128];
+   static HChar buf1[128], buf2[128], buf3[128], buf4[123];  // FIXME
+   static HChar fmt[128];   // OK; large enough
 
    CacheCC  D_total;
    BranchCC B_total;

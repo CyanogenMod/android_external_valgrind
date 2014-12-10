@@ -256,7 +256,7 @@ typedef
 typedef
    struct _TopSpec {
       struct _TopSpec* next; /* linked list */
-      DebugInfo* seginfo;    /* symbols etc */
+      const DebugInfo* seginfo;    /* symbols etc */
       Spec*      specs;      /* specs pulled out of seginfo */
       Bool       mark; /* transient temporary used during deletion */
    }
@@ -308,12 +308,12 @@ static HChar* dinfo_strdup(const HChar* ec, const HChar*);
 static Bool   is_plausible_guest_addr(Addr);
 
 static void   show_redir_state ( const HChar* who );
-static void   show_active ( const HChar* left, Active* act );
+static void   show_active ( const HChar* left, const Active* act );
 
 static void   handle_maybe_load_notifier( const HChar* soname, 
-                                                HChar* symbol, Addr addr );
+                                          const HChar* symbol, Addr addr );
 
-static void   handle_require_text_symbols ( DebugInfo* );
+static void   handle_require_text_symbols ( const DebugInfo* );
 
 /*------------------------------------------------------------*/
 /*--- NOTIFICATIONS                                        ---*/
@@ -325,7 +325,7 @@ void generate_and_add_actives (
         Spec*    specs, 
         TopSpec* parent_spec,
 	/* debuginfo and the owning TopSpec */
-        DebugInfo* di,
+        const DebugInfo* di,
         TopSpec* parent_sym 
      );
 
@@ -334,8 +334,9 @@ void generate_and_add_actives (
    NULL terminated array, for easy iteration.  Caller must pass also
    the address of a 2-entry array which can be used in the common case
    to avoid dynamic allocation. */
-static HChar** alloc_symname_array ( HChar* pri_name, HChar** sec_names,
-                                     HChar** twoslots )
+static const HChar** alloc_symname_array ( const HChar* pri_name,
+                                           const HChar** sec_names,
+                                           const HChar** twoslots )
 {
    /* Special-case the common case: only one name.  We expect the
       caller to supply a stack-allocated 2-entry array for this. */
@@ -346,10 +347,10 @@ static HChar** alloc_symname_array ( HChar* pri_name, HChar** sec_names,
    }
    /* Else must use dynamic allocation.  Figure out size .. */
    Word    n_req = 1;
-   HChar** pp    = sec_names;
+   const HChar** pp = sec_names;
    while (*pp) { n_req++; pp++; }
    /* .. allocate and copy in. */
-   HChar** arr = dinfo_zalloc( "redir.asa.1", (n_req+1) * sizeof(HChar*) );
+   const HChar** arr = dinfo_zalloc("redir.asa.1", (n_req+1) * sizeof(HChar*));
    Word    i   = 0;
    arr[i++] = pri_name;
    pp = sec_names;
@@ -361,7 +362,7 @@ static HChar** alloc_symname_array ( HChar* pri_name, HChar** sec_names,
 
 
 /* Free the array allocated by alloc_symname_array, if any. */
-static void free_symname_array ( HChar** names, HChar** twoslots )
+static void free_symname_array ( const HChar** names, const HChar** twoslots )
 {
    if (names != twoslots)
       dinfo_free(names);
@@ -385,9 +386,7 @@ static HChar const* advance_to_comma ( HChar const* c ) {
    topspecs list, and (2) figure out what new binding are now active,
    and, as a result, add them to the actives mapping. */
 
-#define N_DEMANGLED 256
-
-void VG_(redir_notify_new_DebugInfo)( DebugInfo* newdi )
+void VG_(redir_notify_new_DebugInfo)( const DebugInfo* newdi )
 {
    Bool         ok, isWrap;
    Int          i, nsyms, becTag, becPrio;
@@ -395,11 +394,11 @@ void VG_(redir_notify_new_DebugInfo)( DebugInfo* newdi )
    Spec*        spec;
    TopSpec*     ts;
    TopSpec*     newts;
-   HChar*       sym_name_pri;
-   HChar**      sym_names_sec;
+   const HChar*  sym_name_pri;
+   const HChar** sym_names_sec;
    SymAVMAs     sym_avmas;
-   HChar        demangled_sopatt[N_DEMANGLED];
-   HChar        demangled_fnpatt[N_DEMANGLED];
+   const HChar* demangled_sopatt;
+   const HChar* demangled_fnpatt;
    Bool         check_ppcTOCs = False;
    Bool         isText;
    const HChar* newdi_soname;
@@ -511,14 +510,14 @@ void VG_(redir_notify_new_DebugInfo)( DebugInfo* newdi )
                                   NULL, &sym_name_pri, &sym_names_sec,
                                   &isText, NULL );
       /* Set up to conveniently iterate over all names for this symbol. */
-      HChar*  twoslots[2];
-      HChar** names_init = alloc_symname_array(sym_name_pri, sym_names_sec,
-                                               &twoslots[0]);
-      HChar** names;
+      const HChar*  twoslots[2];
+      const HChar** names_init =
+         alloc_symname_array(sym_name_pri, sym_names_sec, &twoslots[0]);
+      const HChar** names;
       for (names = names_init; *names; names++) {
          ok = VG_(maybe_Z_demangle)( *names,
-                                     demangled_sopatt, N_DEMANGLED,
-                                     demangled_fnpatt, N_DEMANGLED,
+                                     &demangled_sopatt,
+                                     &demangled_fnpatt,
                                      &isWrap, &becTag, &becPrio );
          /* ignore data symbols */
          if (!isText) {
@@ -551,6 +550,7 @@ void VG_(redir_notify_new_DebugInfo)( DebugInfo* newdi )
             continue;
          }
 
+         HChar *replaced_sopatt = NULL;
          if (0 == VG_(strncmp) (demangled_sopatt, 
                                 VG_SO_SYN_PREFIX, VG_SO_SYN_PREFIX_LEN)) {
             /* This is a redirection for handling lib so synonyms. If we
@@ -576,8 +576,11 @@ void VG_(redir_notify_new_DebugInfo)( DebugInfo* newdi )
                   // Found the demangle_sopatt synonym => replace it
                   first = last + 1;
                   last = advance_to_comma(first);
-                  VG_(strncpy)(demangled_sopatt, first, last - first);
-                  demangled_sopatt[last - first] = '\0';
+                  replaced_sopatt = dinfo_zalloc("redir.rnnD.5",
+                                                 last - first + 1);
+                  VG_(strncpy)(replaced_sopatt, first, last - first);
+                  replaced_sopatt[last - first] = '\0';
+                  demangled_sopatt = replaced_sopatt;
                   break;
                }
 
@@ -587,8 +590,7 @@ void VG_(redir_notify_new_DebugInfo)( DebugInfo* newdi )
             }
             
             // If we have not replaced the sopatt, then skip the redir.
-            if (0 == VG_(strncmp) (demangled_sopatt, 
-                                   VG_SO_SYN_PREFIX, VG_SO_SYN_PREFIX_LEN))
+            if (replaced_sopatt == NULL)
                continue;
          }
 
@@ -621,15 +623,15 @@ void VG_(redir_notify_new_DebugInfo)( DebugInfo* newdi )
          VG_(DebugInfo_syms_getidx)( newdi, i, &sym_avmas,
                                      NULL, &sym_name_pri, &sym_names_sec,
                                      &isText, NULL );
-         HChar*  twoslots[2];
-         HChar** names_init = alloc_symname_array(sym_name_pri, sym_names_sec,
-                                                  &twoslots[0]);
-         HChar** names;
+         const HChar*  twoslots[2];
+         const HChar** names_init =
+            alloc_symname_array(sym_name_pri, sym_names_sec, &twoslots[0]);
+         const HChar** names;
          for (names = names_init; *names; names++) {
             ok = isText
                  && VG_(maybe_Z_demangle)( 
-                       *names, demangled_sopatt, N_DEMANGLED,
-                       demangled_fnpatt, N_DEMANGLED, &isWrap, NULL, NULL );
+                       *names, &demangled_sopatt,
+                       &demangled_fnpatt, &isWrap, NULL, NULL );
             if (!ok)
                /* not a redirect.  Ignore. */
                continue;
@@ -710,8 +712,6 @@ void VG_(redir_notify_new_DebugInfo)( DebugInfo* newdi )
    handle_require_text_symbols(newdi);
 }
 
-#undef N_DEMANGLED
-
 /* Add a new target for an indirect function. Adds a new redirection
    for the indirection function with address old_from that redirects
    the ordinary function with address new_from to the target address
@@ -749,7 +749,7 @@ void generate_and_add_actives (
         Spec*    specs, 
         TopSpec* parent_spec,
 	/* seginfo and the owning TopSpec */
-        DebugInfo* di,
+        const DebugInfo* di,
         TopSpec* parent_sym 
      )
 {
@@ -758,8 +758,8 @@ void generate_and_add_actives (
    Active  act;
    Int     nsyms, i;
    SymAVMAs  sym_avmas;
-   HChar*  sym_name_pri;
-   HChar** sym_names_sec;
+   const HChar*  sym_name_pri;
+   const HChar** sym_names_sec;
 
    /* First figure out which of the specs match the seginfo's soname.
       Also clear the 'done' bits, so that after the main loop below
@@ -783,10 +783,10 @@ void generate_and_add_actives (
       VG_(DebugInfo_syms_getidx)( di, i, &sym_avmas,
                                   NULL, &sym_name_pri, &sym_names_sec,
                                   &isText, &isIFunc );
-      HChar*  twoslots[2];
-      HChar** names_init = alloc_symname_array(sym_name_pri, sym_names_sec,
-                                               &twoslots[0]);
-      HChar** names;
+      const HChar*  twoslots[2];
+      const HChar** names_init =
+         alloc_symname_array(sym_name_pri, sym_names_sec, &twoslots[0]);
+      const HChar** names;
       for (names = names_init; *names; names++) {
 
          /* ignore data symbols */
@@ -1016,7 +1016,7 @@ static void maybe_add_active ( Active act )
    simple -- just get rid of all actives derived from it, and free up
    the associated list elements. */
 
-void VG_(redir_notify_delete_DebugInfo)( DebugInfo* delsi )
+void VG_(redir_notify_delete_DebugInfo)( const DebugInfo* delsi )
 {
    TopSpec* ts;
    TopSpec* tsPrev;
@@ -1181,8 +1181,8 @@ static void add_hardwired_spec (const  HChar* sopatt, const HChar* fnpatt,
    vg_assert(topSpecs->next == NULL);
    vg_assert(topSpecs->seginfo == NULL);
    /* FIXED PARTS */
-   spec->from_sopatt = (HChar *)sopatt;
-   spec->from_fnpatt = (HChar *)fnpatt;
+   spec->from_sopatt = CONST_CAST(HChar *,sopatt);
+   spec->from_fnpatt = CONST_CAST(HChar *,fnpatt);
    spec->to_addr     = to_addr;
    spec->isWrap      = False;
    spec->mandatory   = mandatory;
@@ -1409,11 +1409,13 @@ void VG_(redir_initialise) ( void )
          (Addr)&VG_(arm64_linux_REDIR_FOR_strcmp),
          NULL 
       );
-      //add_hardwired_spec(
-      //   "ld-linux.so.3", "memcpy",
-      //   (Addr)&VG_(arm_linux_REDIR_FOR_memcpy),
-      //   complain_about_stripped_glibc_ldso
-      //);
+#     if defined(VGPV_arm64_linux_android)
+      add_hardwired_spec(
+         "NONE", "__dl_strlen", // in /system/bin/linker64
+         (Addr)&VG_(arm64_linux_REDIR_FOR_strlen),
+         NULL
+      );
+#     endif
    }
 
 #  elif defined(VGP_x86_darwin)
@@ -1533,7 +1535,7 @@ static Bool is_plausible_guest_addr(Addr a)
 
 static 
 void handle_maybe_load_notifier( const HChar* soname, 
-                                       HChar* symbol, Addr addr )
+                                 const HChar* symbol, Addr addr )
 {
 #  if defined(VGP_x86_linux)
    /* x86-linux only: if we see _dl_sysinfo_int80, note its address.
@@ -1574,7 +1576,7 @@ void handle_maybe_load_notifier( const HChar* soname,
    symbols that satisfy any --require-text-symbol= specifications that
    apply to it, and abort the run with an error message if not.
 */
-static void handle_require_text_symbols ( DebugInfo* di )
+static void handle_require_text_symbols ( const DebugInfo* di )
 {
    /* First thing to do is figure out which, if any,
       --require-text-symbol specification strings apply to this
@@ -1634,15 +1636,15 @@ static void handle_require_text_symbols ( DebugInfo* di )
       Int    nsyms  = VG_(DebugInfo_syms_howmany)(di);
       for (j = 0; j < nsyms; j++) {
          Bool    isText        = False;
-         HChar*  sym_name_pri  = NULL;
-         HChar** sym_names_sec = NULL;
+         const HChar*  sym_name_pri  = NULL;
+         const HChar** sym_names_sec = NULL;
          VG_(DebugInfo_syms_getidx)( di, j, NULL,
                                      NULL, &sym_name_pri, &sym_names_sec,
                                      &isText, NULL );
-         HChar*  twoslots[2];
-         HChar** names_init = alloc_symname_array(sym_name_pri, sym_names_sec,
-                                                  &twoslots[0]);
-         HChar** names;
+         const HChar*  twoslots[2];
+         const HChar** names_init =
+            alloc_symname_array(sym_name_pri, sym_names_sec, &twoslots[0]);
+         const HChar** names;
          for (names = names_init; *names; names++) {
             /* ignore data symbols */
             if (0) VG_(printf)("QQQ %s\n", *names);
@@ -1689,7 +1691,7 @@ static void handle_require_text_symbols ( DebugInfo* di )
 /*--- SANITY/DEBUG                                         ---*/
 /*------------------------------------------------------------*/
 
-static void show_spec ( const HChar* left, Spec* spec )
+static void show_spec ( const HChar* left, const Spec* spec )
 {
    VG_(message)( Vg_DebugMsg, 
                  "%s%25s %30s %s-> (%04d.%d) 0x%08llx\n",
@@ -1700,16 +1702,20 @@ static void show_spec ( const HChar* left, Spec* spec )
                  (ULong)spec->to_addr );
 }
 
-static void show_active ( const HChar* left, Active* act )
+static void show_active ( const HChar* left, const Active* act )
 {
    Bool ok;
-   HChar name1[64] = "";
-   HChar name2[64] = "";
-   name1[0] = name2[0] = 0;
-   ok = VG_(get_fnname_w_offset)(act->from_addr, name1, 64);
-   if (!ok) VG_(strcpy)(name1, "???");
-   ok = VG_(get_fnname_w_offset)(act->to_addr, name2, 64);
-   if (!ok) VG_(strcpy)(name2, "???");
+   const HChar *buf;
+ 
+   ok = VG_(get_fnname_w_offset)(act->from_addr, &buf);
+   if (!ok) buf = "???";
+   // Stash away name1
+   HChar name1[VG_(strlen)(buf) + 1];
+   VG_(strcpy)(name1, buf);
+
+   const HChar *name2;
+   ok = VG_(get_fnname_w_offset)(act->to_addr, &name2);
+   if (!ok) name2 = "???";
 
    VG_(message)(Vg_DebugMsg, "%s0x%08llx (%20s) %s-> (%04d.%d) 0x%08llx %s\n", 
                              left, 
