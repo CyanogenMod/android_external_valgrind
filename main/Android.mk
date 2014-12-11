@@ -592,6 +592,7 @@ LOCAL_SRC_FILES := \
 
 LOCAL_C_INCLUDES := $(common_includes)
 LOCAL_CFLAGS := $(common_cflags) $(host_arch_cflags)
+LOCAL_MULTILIB := 64
 
 include $(BUILD_HOST_EXECUTABLE)
 
