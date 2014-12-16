@@ -332,7 +332,6 @@ vg_local_src_files := \
 
 #LOCAL_STRIP_MODULE := false
 #vg_local_no_crt := true
-#LOCAL_PRELINK_MODULE := false
 
 vg_local_ldflags := $(preload_ldflags)
 vg_local_cflags := $(common_cflags)
@@ -459,7 +458,6 @@ vg_local_module_class := SHARED_LIBRARIES
 vg_local_target := SHARED_LIBRARY
 #LOCAL_STRIP_MODULE := false
 vg_local_no_crt := true
-#LOCAL_PRELINK_MODULE := false
 
 vg_local_src_files := \
 	helgrind/hg_intercepts.c
