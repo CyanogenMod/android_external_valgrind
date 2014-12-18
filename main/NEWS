@@ -40,6 +40,7 @@ To see details of a given bug, visit
 where XXXXXX is the bug number as listed below.
 
 155125  avoid cutting away file:lineno after long function name
+197259  Unsupported arch_prtctl PR_SET_GS option
 211926  Avoid compilation warnings in valgrind.h with -pedantic
 269360  s390x: Fix addressing mode selection for compare-and-swap
 333051  mmap of huge pages fails due to incorrect alignment
