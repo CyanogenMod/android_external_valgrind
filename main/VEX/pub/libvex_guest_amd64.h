@@ -91,7 +91,8 @@ typedef
          segment registers */
 
       /* HACK to e.g. make tls on amd64-linux work.  %fs only ever seems to
-         hold a constant value (zero on linux), and so guest_FS_CONST holds
+         hold a constant value (zero on linux main thread, 0x63 in other
+         threads), and so guest_FS_CONST holds
          the 64-bit offset associated with this constant %fs value. */
       /* 200 */ ULong guest_FS_CONST;
 
@@ -152,9 +153,9 @@ typedef
       /* Used for Darwin syscall dispatching. */
       ULong guest_SC_CLASS;
 
-      /* HACK to make e.g. tls on darwin work, wine one linux work.
-         %gs only ever seems to hold a constant value (0x60 on darwin),
-         and so guest_GS_CONST holds the 64-bit offset
+      /* HACK to make e.g. tls on darwin work, wine on linux work, ...
+         %gs only ever seems to hold a constant value (e.g. 0x60 on darwin,
+         0x6b on linux), and so guest_GS_CONST holds the 64-bit offset
          associated with this constant %gs value.  (A direct analogue
          of the %fs-const hack for amd64-linux). */
       ULong guest_GS_CONST;
