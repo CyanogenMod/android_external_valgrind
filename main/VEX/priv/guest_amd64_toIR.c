@@ -2325,8 +2325,8 @@ IRExpr* handleAddrOverrides ( VexAbiInfo* vbi,
 {
    /* Note that the below are hacks that relies on the assumption
       that %fs or %gs are constant.
-      Typically, %fs is always zero on linux, %gs always 0x60
-      on Darwin, ... */
+      Typically, %fs is always 0x63 on linux (in the main thread, it
+      stays at value 0), %gs always 0x60 on Darwin, ... */
    /* --- segment overrides --- */
    if (pfx & PFX_FS) {
       if (vbi->guest_amd64_assume_fs_is_const) {
