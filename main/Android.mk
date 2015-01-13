@@ -601,6 +601,8 @@ ifeq ($(vg_build_tests),true)
 ifeq ($(TARGET_ARCH),arm)
 test := v6intThumb
 include $(LOCAL_PATH)/Android.test.mk
+test := vfp
+include $(LOCAL_PATH)/Android.test.mk
 endif
 
 ifeq ($(TARGET_ARCH),arm64)
