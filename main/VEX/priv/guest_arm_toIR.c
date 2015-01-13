@@ -16532,7 +16532,7 @@ DisResult disInstr_ARM_WRK (
      Bool writeback_already_done = False;
      if (bS == 1 /*store*/ && summary == (2 | 16)
          && rN == 13 && rN != rD && rN != rD+1
-         && bU == 0/*minus*/ && imm8 == 8) {
+         && bU == 0/*minus*/) {
         putIRegA( rN, mkexpr(eaT), condT, Ijk_Boring );
         writeback_already_done = True;
      }
