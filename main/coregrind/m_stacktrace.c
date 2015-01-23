@@ -932,6 +932,12 @@ UInt VG_(get_StackTrace_wrk) ( ThreadId tid_if_known,
    if (fp_max >= sizeof(Addr))
       fp_max -= sizeof(Addr);
 
+   // Check if frame is addressable by valgrind or client
+   if (!VG_(am_is_valid_for_valgrind)(fp_min, fp_max - fp_min, VKI_PROT_READ)
+       && !VG_(am_is_valid_for_client)(fp_min, fp_max - fp_min, VKI_PROT_READ)) {
+      return 1;
+   }
+
    if (debug)
       VG_(printf)("\nmax_n_ips=%d fp_min=0x%lx fp_max_orig=0x%lx, "
                   "fp_max=0x%lx r15=0x%lx r13=0x%lx\n",
