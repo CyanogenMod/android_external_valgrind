@@ -581,7 +581,8 @@ LOCAL_CFLAGS_$(TARGET_ARCH) = $(target_arch_cflags)
 
 include $(BUILD_EXECUTABLE)
 
-# Build valgrind for host
+# Build valgrind for linux host
+ifeq ($(HOST_OS), linux)
 include $(CLEAR_VARS)
 LOCAL_MODULE := valgrind
 LOCAL_SRC_FILES := \
@@ -593,6 +594,7 @@ LOCAL_CFLAGS := $(common_cflags) $(host_arch_cflags)
 LOCAL_MULTILIB := 64
 
 include $(BUILD_HOST_EXECUTABLE)
+endif
 
 #vg_build_tests := true
 # Build tests (some of them)...
@@ -625,6 +627,7 @@ LOCAL_SRC_FILES := bionic.supp
 
 include $(BUILD_PREBUILT)
 
+ifeq ($(HOST_OS), linux)
 include $(CLEAR_VARS)
 LOCAL_IS_HOST_MODULE := true
 LOCAL_MODULE := default.supp
@@ -634,5 +637,6 @@ LOCAL_STRIP_MODULE := false
 LOCAL_SRC_FILES := bionic.supp
 
 include $(BUILD_PREBUILT)
+endif
 
 endif
