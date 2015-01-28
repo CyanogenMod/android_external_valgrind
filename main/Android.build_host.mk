@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+ifeq ($(HOST_OS), linux)
 include $(CLEAR_VARS)
 
 ifeq ($(vg_build_second_arch),true)
@@ -69,3 +70,5 @@ LOCAL_CXX_STL := none
 LOCAL_ADDRESS_SANITIZER := false
 
 include $(BUILD_HOST_$(vg_local_target))
+
+endif
