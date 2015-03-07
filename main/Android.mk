@@ -78,7 +78,6 @@ vex_ldflags := -nodefaultlibs
 
 ifeq (,$(filter $(TARGET_ARCH),arm arm64))
 tool_ldflags := -static -Wl,--build-id=none,-Ttext=0x38000000 -nodefaultlibs -nostartfiles -Wl,-e,_start
-# ioctl/syscall wrappers are device dependent
 else
 tool_ldflags := -static -Wl,-Ttext=0x38000000 -nodefaultlibs -nostartfiles -Wl,-e,_start
 endif
