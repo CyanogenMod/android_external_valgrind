@@ -79,14 +79,6 @@ vex_ldflags := -nodefaultlibs
 ifeq (,$(filter $(TARGET_ARCH),arm arm64))
 tool_ldflags := -static -Wl,--build-id=none,-Ttext=0x38000000 -nodefaultlibs -nostartfiles -Wl,-e,_start
 # ioctl/syscall wrappers are device dependent
-ifeq ($(TARGET_BOOTLOADER_BOARD_NAME),manta)
-ANDROID_HARDWARE := ANDROID_HARDWARE_nexus_10
-else ifeq ($(TARGET_BOOTLOADER_BOARD_NAME),grouper)
-ANDROID_HARDWARE := ANDROID_HARDWARE_nexus_7
-else ifeq ($(TARGET_BOOTLOADER_BOARD_NAME),MAKO)
-ANDROID_HARDWARE := ANDROID_HARDWARE_nexus_4
-endif
-
 else
 tool_ldflags := -static -Wl,-Ttext=0x38000000 -nodefaultlibs -nostartfiles -Wl,-e,_start
 endif
