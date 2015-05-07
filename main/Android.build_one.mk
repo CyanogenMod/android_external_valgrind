@@ -36,6 +36,8 @@ LOCAL_SRC_FILES := $(vg_local_src_files)
 
 LOCAL_C_INCLUDES := $(common_includes) $(vg_local_c_includes)
 
+LOCAL_PACK_MODULE_RELOCATIONS := false
+
 LOCAL_CFLAGS := $(vg_local_cflags)
 LOCAL_CFLAGS_$(TARGET_ARCH) := $(vg_local_target_arch_cflags)
 LOCAL_CFLAGS_$(TARGET_2ND_ARCH) := $(vg_local_target_2nd_arch_cflags)
