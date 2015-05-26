@@ -1,1 +1,0 @@
-../x86/x87trigOOR.c
