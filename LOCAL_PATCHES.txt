@@ -1,0 +1,10 @@
+This table contains list of local patches to valgrind.
+Please add following information for every local patch:
+1. commit sha
+2. upstream bug
+3. local bug (optional)
+
+ upsteam bug #               | local bug # | commit
+-----------------------------+-------------+-----------------------------------------
+ https://bugs.kde.org/339861 | n/a         | c3be269612b500f1f590482165d2ba5d5966f23f
+
